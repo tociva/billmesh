@@ -1,4 +1,8 @@
-.PHONY: build run-api run-worker migrate test test-unit test-e2e test-clean fmt sqlc
+.PHONY: build run-api run-worker migrate test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
+
+INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.dev.yml -p billmesh-integration
+INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable
+E2E_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-test
 
 build:
 	go build -o billmesh ./cmd/billmesh
@@ -15,13 +19,32 @@ migrate:
 test: test-unit
 
 test-unit:
-	go test -race -coverprofile=coverage.out ./internal/...
+	@TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./internal/... ./tests/unit/...
+
+test-integration:
+	@set -eu; \
+	cleanup() { $(INTEGRATION_COMPOSE) down -v --remove-orphans; }; \
+	trap cleanup EXIT INT TERM; \
+	$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
+	$(INTEGRATION_COMPOSE) up -d --wait postgres; \
+	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' go run ./cmd/billmesh migrate up; \
+	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' TEST_SUITE_NAME='Integration tests' ./scripts/test-output.sh go test -v -race -count=1 -tags=integration ./tests/integration/...
+
+test-integration-clean:
+	$(INTEGRATION_COMPOSE) down -v --remove-orphans
 
 test-e2e:
-	docker compose -f deploy/compose.test.yml -p billmesh-test up --build --exit-code-from e2e e2e
+	@set -eu; \
+	cleanup() { $(E2E_COMPOSE) down -v --remove-orphans; }; \
+	trap cleanup EXIT INT TERM; \
+	$(E2E_COMPOSE) down -v --remove-orphans; \
+	$(E2E_COMPOSE) up --build --abort-on-container-exit --exit-code-from e2e e2e
+
+test-performance:
+	@TEST_SUITE_NAME='Performance tests' ./scripts/test-output.sh go test -v -tags=performance -run '^$$' -bench=. ./tests/performance/...
 
 test-clean:
-	docker compose -f deploy/compose.test.yml -p billmesh-test down -v --remove-orphans
+	$(E2E_COMPOSE) down -v --remove-orphans
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')

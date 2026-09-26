@@ -37,12 +37,20 @@ curl -s http://localhost:8090/test/token -X POST -H 'content-type: application/j
 ## Test
 
 ```sh
-make test             # fast unit suite with race detector
-make test-e2e         # migrations + real PostgreSQL integration tests + running API/worker E2E
-make test-clean       # remove test containers and volumes
+make test-unit         # pure domain and internal unit tests
+make test-integration  # provisions, migrates, tests, and removes isolated PostgreSQL
+make test-e2e          # migrations + PostgreSQL + running API/worker E2E
+make test-performance  # opt-in benchmarks against a running environment
+make test-clean        # remove test containers and volumes
 ```
 
 Integration and E2E databases are separate. Never point their `DATABASE_URL` at development or production data.
+
+`make test-integration` is self-contained and uses the `billmesh-integration` Compose project with the database exposed only on local port `5433`. It always removes its containers and volume through a shell exit trap, including after failures or interruption. Override `INTEGRATION_DATABASE_URL` only when intentionally testing against another disposable PostgreSQL instance.
+
+Tests are grouped under `tests/unit`, `tests/integration`, `tests/e2e`, and `tests/performance`, then by business category. Every checklist ID in `test-plan.md` is exposed as an individually named test or benchmark. The four cross-module business journeys live under `tests/e2e/journeys`.
+
+Test commands run in verbose mode. Failed tests, panics, and final `FAIL` markers are highlighted in red, while assertion locations are highlighted in yellow. A focused diagnostic summary containing the failed test names, source locations, command, and exit status is printed after a failed run. Set `NO_COLOR=1` to disable ANSI colors.
 
 ## API transaction guarantees
 

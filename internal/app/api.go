@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tociva/billmesh/internal/auth"
@@ -20,17 +22,20 @@ import (
 )
 
 type API struct {
-	pool    *pgxpool.Pool
-	wallets *wallets.Service
-	auth    auth.TokenVerifier
-	log     *slog.Logger
+	pool            *pgxpool.Pool
+	wallets         *wallets.Service
+	auth            auth.TokenVerifier
+	log             *slog.Logger
+	client          *http.Client
+	providerBaseURL string
+	webhookSecret   string
 }
 
 func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *API {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log}
+	return &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"), webhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET")}
 }
 
 func (a *API) Handler() http.Handler {
@@ -39,14 +44,48 @@ func (a *API) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /readyz", a.ready)
+	mux.HandleFunc("POST /v1/payments/webhook", a.paymentWebhook)
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/accounts", auth.Require("billing:write", a.createAccount))
+	protected.HandleFunc("GET /v1/accounts/{id}", auth.Require("billing:read", a.getAccount))
+	protected.HandleFunc("PATCH /v1/accounts/{id}", auth.Require("billing:write", a.updateAccount))
+	protected.HandleFunc("POST /v1/accounts/{id}/links", auth.Require("billing:write", a.linkAccount))
+	protected.HandleFunc("POST /v1/account-links", auth.Require("billing:write", a.linkCurrentAccount))
 	protected.HandleFunc("POST /v1/products", auth.Require("billing:admin", a.createProduct))
+	protected.HandleFunc("GET /v1/products", a.listProducts)
+	protected.HandleFunc("POST /v1/plans", auth.Require("billing:admin", a.createPlan))
+	protected.HandleFunc("GET /v1/plans", a.listPlans)
+	protected.HandleFunc("PATCH /v1/plans/{id}", auth.Require("billing:admin", a.updatePlan))
+	protected.HandleFunc("POST /v1/credit-packs", auth.Require("billing:admin", a.createCreditPack))
+	protected.HandleFunc("POST /v1/subscriptions", auth.Require("billing:write", a.createSubscription))
+	protected.HandleFunc("GET /v1/subscriptions/current", auth.Require("billing:read", a.currentSubscription))
+	protected.HandleFunc("POST /v1/subscriptions/{id}/change-plan", auth.Require("billing:write", a.changeSubscriptionPlan))
+	protected.HandleFunc("POST /v1/subscriptions/{id}/cancel", auth.Require("billing:write", a.cancelSubscription))
+	protected.HandleFunc("POST /v1/subscriptions/current/cancel", auth.Require("billing:write", a.cancelCurrentSubscription))
+	protected.HandleFunc("POST /v1/subscriptions/{id}/reactivate", auth.Require("billing:write", a.reactivateSubscription))
+	protected.HandleFunc("POST /v1/subscriptions/{id}/renew", auth.Require("billing:write", a.renewSubscription))
+	protected.HandleFunc("GET /v1/entitlements", auth.Require("billing:read", a.getEntitlements))
+	protected.HandleFunc("GET /v1/entitlements/check", auth.Require("billing:read", a.checkEntitlement))
 	protected.HandleFunc("POST /v1/wallets", auth.Require("billing:write", a.createWallet))
 	protected.HandleFunc("GET /v1/wallets/{id}", auth.Require("billing:read", a.getWallet))
+	protected.HandleFunc("GET /v1/wallets/{id}/ledger", auth.Require("billing:read", a.walletLedger))
 	protected.HandleFunc("POST /v1/wallets/{id}/grants", auth.Require("credits:grant", a.grant))
 	protected.HandleFunc("POST /v1/wallets/{id}/reservations", auth.Require("credits:reserve", a.reserve))
 	protected.HandleFunc("POST /v1/reservations/{id}/settle", auth.Require("credits:settle", a.settle))
+	protected.HandleFunc("POST /v1/reservations/{id}/release", auth.Require("credits:settle", a.releaseReservation))
+	protected.HandleFunc("POST /v1/reservations/{id}/extend", auth.Require("credits:reserve", a.extendReservation))
+	protected.HandleFunc("POST /v1/executions/authorize", auth.Require("credits:reserve", a.authorizeExecution))
+	protected.HandleFunc("POST /v1/usage-events", auth.Require("credits:settle", a.recordUsage))
+	protected.HandleFunc("GET /v1/usage-events", auth.Require("billing:read", a.listUsage))
+	protected.HandleFunc("POST /v1/payments/orders", auth.Require("billing:write", a.createPaymentOrder))
+	protected.HandleFunc("GET /v1/payments", auth.Require("billing:read", a.listPayments))
+	protected.HandleFunc("GET /v1/invoices", auth.Require("billing:read", a.listInvoices))
+	protected.HandleFunc("POST /v1/webhooks", auth.Require("billing:write", a.registerWebhook))
+	protected.HandleFunc("GET /v1/webhooks", auth.Require("billing:read", a.listWebhooks))
+	protected.HandleFunc("GET /v1/limits", auth.Require("billing:read", a.getLimits))
+	protected.HandleFunc("POST /v1/admin/adjustments", auth.Require("billing:admin", a.adminAdjustment))
+	protected.HandleFunc("GET /v1/admin/audit", auth.Require("billing:admin", a.listAudit))
+	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", auth.Require("billing:admin", a.replayWebhook))
 	protected.HandleFunc("GET /v1/events", auth.Require("billing:read", a.events))
 	if a.auth != nil {
 		mux.Handle("/v1/", auth.Middleware(a.auth)(protected))
@@ -95,7 +134,11 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id) VALUES($1,$2,$3)`, id, in.Application, in.OrganizationID); err != nil {
+	environment := claims.Environment
+	if environment == "" {
+		environment = "production"
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id,environment) VALUES($1,$2,$3,$4)`, id, in.Application, in.OrganizationID, environment); err != nil {
 		writeDBError(w, err)
 		return
 	}
@@ -112,6 +155,10 @@ func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Slug) == "" || strings.TrimSpace(in.Name) == "" {
+		writeError(w, http.StatusBadRequest, "slug and name are required")
 		return
 	}
 	var id uuid.UUID
@@ -264,8 +311,12 @@ func (a *API) canAccessAccount(r *http.Request, accountID uuid.UUID) bool {
 	if !ok {
 		return false
 	}
+	environment := claims.Environment
+	if environment == "" {
+		environment = "production"
+	}
 	var found bool
-	err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM account_links WHERE account_id=$1 AND application=$2 AND organization_id=$3)`, accountID, claims.App, claims.OrgID).Scan(&found)
+	err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM account_links WHERE account_id=$1 AND application=$2 AND organization_id=$3 AND environment=$4)`, accountID, claims.App, claims.OrgID, environment).Scan(&found)
 	return err == nil && found
 }
 func (a *API) canAccessWallet(r *http.Request, walletID uuid.UUID) bool {
@@ -273,12 +324,21 @@ func (a *API) canAccessWallet(r *http.Request, walletID uuid.UUID) bool {
 	if !ok {
 		return false
 	}
+	environment := claims.Environment
+	if environment == "" {
+		environment = "production"
+	}
 	var found bool
-	err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id JOIN account_links l ON l.account_id=w.account_id WHERE w.id=$1 AND l.application=$2 AND l.organization_id=$3 AND p.slug=$2)`, walletID, claims.App, claims.OrgID).Scan(&found)
+	err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id JOIN account_links l ON l.account_id=w.account_id WHERE w.id=$1 AND l.application=$2 AND l.organization_id=$3 AND l.environment=$4 AND p.slug=$2)`, walletID, claims.App, claims.OrgID, environment).Scan(&found)
 	return err == nil && found
 }
 
 func (a *API) events(w http.ResponseWriter, r *http.Request) {
+	accountID, err := a.accountIDForClaims(r.Context())
+	if err != nil {
+		writeError(w, http.StatusForbidden, "billing account not accessible")
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, 500, "streaming unsupported")
@@ -293,7 +353,7 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		rows, err := a.pool.Query(r.Context(), `SELECT sequence,event_type,payload FROM outbox_events WHERE sequence>$1 ORDER BY sequence LIMIT 100`, after)
+		rows, err := a.pool.Query(r.Context(), `SELECT e.sequence,e.event_type,e.payload FROM outbox_events e WHERE e.sequence>$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w WHERE w.id=e.aggregate_id AND w.account_id=$2)) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.id=e.aggregate_id AND s.account_id=$2))) ORDER BY e.sequence LIMIT 100`, after, accountID)
 		if err != nil {
 			return
 		}
@@ -339,6 +399,17 @@ func writeDBError(w http.ResponseWriter, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "not found")
 		return
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505":
+			writeError(w, 409, "resource already exists")
+			return
+		case "23502", "23503", "23514", "22P02":
+			writeError(w, 400, "request violates a data constraint")
+			return
+		}
 	}
 	writeError(w, 500, "database operation failed")
 }

@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration
+package reservations_test
 
 import (
 	"context"
@@ -21,11 +21,10 @@ func TestConcurrentReservationsCannotOverspend(t *testing.T) {
 		t.Skip("DATABASE_URL not configured")
 	}
 	ctx := context.Background()
-	require.NoError(t, database.Migrate(ctx, url, "up"))
 	pool, err := database.Open(ctx, url)
 	require.NoError(t, err)
 	defer pool.Close()
-	_, _ = pool.Exec(ctx, `TRUNCATE webhook_deliveries,outbox_events,credit_ledger,reservation_allocations,reservations,credit_grants,wallets,subscriptions,plans,products,account_links,billing_accounts CASCADE`)
+	_, _ = pool.Exec(ctx, `TRUNCATE audit_log,invoice_lines,invoices,webhook_deliveries,outbox_events,credit_ledger,reservation_allocations,reservations,credit_grants,wallets,subscriptions,plans,products,account_links,billing_accounts CASCADE`)
 	var accountID, productID uuid.UUID
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO billing_accounts(name) VALUES('test') RETURNING id`).Scan(&accountID))
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products(slug,name) VALUES('daybook','Daybook') RETURNING id`).Scan(&productID))

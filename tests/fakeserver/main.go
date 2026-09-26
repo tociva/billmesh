@@ -32,6 +32,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/jwks.json", s.jwks)
 	mux.HandleFunc("POST /test/token", s.token)
+	mux.HandleFunc("POST /test/rotate-key", s.rotateKey)
 	mux.HandleFunc("POST /v1/orders", s.order)
 	mux.HandleFunc("GET /v1/payments/{id}", s.payment)
 	mux.HandleFunc("POST /receivers/{app}", s.receiver)
@@ -45,32 +46,81 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 func (s *server) jwks(w http.ResponseWriter, _ *http.Request) {
-	write(w, map[string]any{"keys": []any{map[string]any{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": s.kid, "n": base64.RawURLEncoding.EncodeToString(s.key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(s.key.E)).Bytes())}}})
+	s.mu.Lock()
+	key := s.key
+	kid := s.kid
+	s.mu.Unlock()
+	write(w, map[string]any{"keys": []any{map[string]any{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": kid, "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}}})
 }
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Subject     string   `json:"sub"`
-		OrgID       string   `json:"org_id"`
-		App         string   `json:"app"`
-		Permissions []string `json:"permissions"`
+		Subject          string   `json:"sub"`
+		OrgID            string   `json:"org_id"`
+		App              string   `json:"app"`
+		Permissions      []string `json:"permissions"`
+		Issuer           string   `json:"issuer"`
+		Audience         string   `json:"audience"`
+		ExpiresInSeconds *int64   `json:"expires_in_seconds"`
+		UnknownKey       bool     `json:"unknown_key"`
+		Environment      string   `json:"environment"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if in.Subject == "" {
 		in.Subject = "test-user"
 	}
-	issuer := "http://mock-external:8090"
-	claims := jwt.MapClaims{"iss": issuer, "aud": "billmesh-test", "sub": in.Subject, "exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "permissions": in.Permissions}
+	issuer := in.Issuer
+	if issuer == "" {
+		issuer = "http://mock-external:8090"
+	}
+	audience := in.Audience
+	if audience == "" {
+		audience = "billmesh-test"
+	}
+	expires := int64(3600)
+	if in.ExpiresInSeconds != nil {
+		expires = *in.ExpiresInSeconds
+	}
+	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "permissions": in.Permissions}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = s.kid
-	raw, err := token.SignedString(s.key)
+	s.mu.Lock()
+	key := s.key
+	kid := s.kid
+	s.mu.Unlock()
+	if in.UnknownKey {
+		key, _ = rsa.GenerateKey(rand.Reader, 2048)
+		kid = "unknown-key"
+	}
+	token.Header["kid"] = kid
+	raw, err := token.SignedString(key)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	write(w, map[string]string{"access_token": raw, "token_type": "Bearer"})
 }
+func (s *server) rotateKey(w http.ResponseWriter, _ *http.Request) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.mu.Lock()
+	s.key = key
+	s.kid = "billmesh-test-key-" + time.Now().UTC().Format("150405.000000")
+	kid := s.kid
+	s.mu.Unlock()
+	write(w, map[string]string{"kid": kid})
+}
 func (s *server) order(w http.ResponseWriter, r *http.Request) {
-	write(w, map[string]any{"id": "order_test_001", "status": "created", "currency": "INR", "amount": 50000})
+	var request struct {
+		Amount   int64  `json:"amount"`
+		Currency string `json:"currency"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&request)
+	if request.Currency == "" {
+		request.Currency = "INR"
+	}
+	write(w, map[string]any{"id": "order_" + time.Now().UTC().Format("20060102150405.000000000"), "status": "created", "currency": request.Currency, "amount": request.Amount})
 }
 func (s *server) payment(w http.ResponseWriter, r *http.Request) {
 	write(w, map[string]any{"id": r.PathValue("id"), "order_id": "order_test_001", "status": "captured", "currency": "INR", "amount": 50000})

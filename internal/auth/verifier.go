@@ -20,6 +20,7 @@ type Claims struct {
 	Permissions []string `json:"permissions"`
 	OrgID       string   `json:"org_id"`
 	App         string   `json:"app"`
+	Environment string   `json:"environment"`
 	jwt.RegisteredClaims
 }
 

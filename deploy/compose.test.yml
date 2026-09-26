@@ -46,6 +46,8 @@ services:
       OIDC_ISSUER: http://mock-external:8090
       OIDC_AUDIENCE: billmesh-test
       JWKS_URL: http://mock-external:8090/.well-known/jwks.json
+      RAZORPAY_BASE_URL: http://mock-external:8090
+      RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -73,7 +75,7 @@ services:
       BILLMESH_BASE_URL: http://api:8080
       MOCK_SERVER_URL: http://mock-external:8090
       DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_integration?sslmode=disable
-    command: ["sh", "-ec", "go test -race -tags=integration ./tests/integration/... && go test -tags=e2e -v -count=1 ./tests/e2e/..."]
+    command: ["sh", "-ec", "go run ./cmd/billmesh migrate up && TEST_SUITE_NAME='Container integration tests' ./scripts/test-output.sh go test -v -race -count=1 -tags=integration ./tests/integration/... && TEST_SUITE_NAME='End-to-end tests' ./scripts/test-output.sh go test -v -count=1 -tags=e2e ./tests/e2e/..."]
     depends_on:
       api:
         condition: service_healthy
