@@ -40,11 +40,13 @@ curl -s http://localhost:8090/test/token -X POST -H 'content-type: application/j
 make test-unit         # pure domain and internal unit tests
 make test-integration  # provisions, migrates, tests, and removes isolated PostgreSQL
 make test-e2e          # migrations + PostgreSQL + running API/worker E2E
-make test-performance  # opt-in benchmarks against a running environment
+make test-performance  # provisions the isolated API/worker stack and runs benchmarks
 make test-clean        # remove test containers and volumes
 ```
 
 Integration and E2E databases are separate. Never point their `DATABASE_URL` at development or production data.
+
+`make test-performance` is also self-contained. It starts an isolated Compose project, waits for the API health check, runs the benchmark container with the required service URLs, and removes its containers and volumes afterward.
 
 `make test-integration` is self-contained and uses the `billmesh-integration` Compose project with the database exposed only on local port `5433`. It always removes its containers and volume through a shell exit trap, including after failures or interruption. Override `INTEGRATION_DATABASE_URL` only when intentionally testing against another disposable PostgreSQL instance.
 

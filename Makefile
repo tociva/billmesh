@@ -3,6 +3,7 @@
 INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.dev.yml -p billmesh-integration
 INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable
 E2E_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-test
+PERFORMANCE_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-performance
 
 build:
 	go build -o billmesh ./cmd/billmesh
@@ -41,10 +42,15 @@ test-e2e:
 	$(E2E_COMPOSE) up --build --abort-on-container-exit --exit-code-from e2e e2e
 
 test-performance:
-	@TEST_SUITE_NAME='Performance tests' ./scripts/test-output.sh go test -v -tags=performance -run '^$$' -bench=. ./tests/performance/...
+	@set -eu; \
+	cleanup() { $(PERFORMANCE_COMPOSE) down -v --remove-orphans; }; \
+	trap cleanup EXIT INT TERM; \
+	$(PERFORMANCE_COMPOSE) down -v --remove-orphans; \
+	$(PERFORMANCE_COMPOSE) up --build --abort-on-container-exit --exit-code-from performance performance
 
 test-clean:
 	$(E2E_COMPOSE) down -v --remove-orphans
+	$(PERFORMANCE_COMPOSE) down -v --remove-orphans
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')
