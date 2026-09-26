@@ -1,0 +1,81 @@
+x-runtime-build: &runtime-build
+  context: ..
+  dockerfile: deploy/Dockerfile
+  target: runtime
+x-test-build: &test-build
+  context: ..
+  dockerfile: deploy/Dockerfile
+  target: tester
+
+services:
+  postgres:
+    image: postgres:17.6-alpine3.22
+    environment:
+      POSTGRES_USER: billmesh
+      POSTGRES_PASSWORD: testpassword
+      POSTGRES_DB: billmesh_e2e
+    volumes:
+      - ./test-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billmesh -d billmesh_e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  mock-external:
+    build: *test-build
+    command: ["go", "run", "./tests/fakeserver"]
+    environment:
+      HTTP_ADDR: ":8090"
+
+  migrate:
+    build: *runtime-build
+    command: ["migrate", "up"]
+    environment:
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: *runtime-build
+    command: ["api"]
+    environment:
+      HTTP_ADDR: ":8080"
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
+      OIDC_ISSUER: http://mock-external:8090
+      OIDC_AUDIENCE: billmesh-test
+      JWKS_URL: http://mock-external:8090/.well-known/jwks.json
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      mock-external:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/app/billmesh", "healthcheck", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  worker:
+    build: *runtime-build
+    command: ["worker"]
+    environment:
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
+      WORKER_INTERVAL: 1s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  e2e:
+    build: *test-build
+    environment:
+      BILLMESH_BASE_URL: http://api:8080
+      MOCK_SERVER_URL: http://mock-external:8090
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_integration?sslmode=disable
+    command: ["sh", "-ec", "go test -race -tags=integration ./tests/integration/... && go test -tags=e2e -v -count=1 ./tests/e2e/..."]
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started

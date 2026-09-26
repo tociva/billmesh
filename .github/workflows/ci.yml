@@ -1,0 +1,28 @@
+name: Billmesh CI
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Static validation
+        run: |
+          go vet ./...
+          test -z "$(gofmt -l .)"
+      - name: Unit tests
+        run: go test -race -coverprofile=coverage.out ./internal/...
+      - name: Integration and E2E
+        run: docker compose -f deploy/compose.test.yml -p billmesh-ci up --build --exit-code-from e2e e2e
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose.test.yml -p billmesh-ci logs --no-color
+      - name: Cleanup
+        if: always()
+        run: docker compose -f deploy/compose.test.yml -p billmesh-ci down -v --remove-orphans
