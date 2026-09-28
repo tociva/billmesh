@@ -108,17 +108,51 @@ func (a *API) extendReservation(w http.ResponseWriter, r *http.Request) {
 }
 func (a *API) authorizeExecution(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Context      string `json:"context"`
-		ExecutionID  string `json:"execution_id"`
-		Credits      int64  `json:"credits"`
-		OperationSeq int    `json:"operation_seq"`
-		TTLSeconds   int    `json:"ttl_seconds"`
+		Context        string `json:"context"`
+		InstallationID string `json:"installation_id"`
+		WalletID       string `json:"wallet_id"`
+		ExecutionID    string `json:"execution_id"`
+		Credits        int64  `json:"credits"`
+		OperationSeq   int    `json:"operation_seq"`
+		TTLSeconds     int    `json:"ttl_seconds"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
 	if in.Credits <= 0 {
 		writeError(w, 400, "credits must be positive")
+		return
+	}
+	if in.InstallationID != "" {
+		if in.WalletID != "" {
+			writeError(w, 400, "wallet_id is controlled by the installation")
+			return
+		}
+		installationID, parseErr := uuid.Parse(in.InstallationID)
+		if parseErr != nil {
+			writeError(w, 403, "installation not accessible")
+			return
+		}
+		claims, _ := auth.FromContext(r.Context())
+		environment := claims.Environment
+		if environment == "" {
+			environment = "production"
+		}
+		var active bool
+		err := a.pool.QueryRow(r.Context(), `SELECT i.active FROM application_installations i
+			WHERE i.id=$1 AND EXISTS (SELECT 1 FROM account_links l WHERE l.account_id=i.account_id AND l.application=$2 AND l.organization_id=$3 AND l.environment=$4)`, installationID, claims.App, claims.OrgID, environment).Scan(&active)
+		if err != nil || !active {
+			writeError(w, 403, "installation not accessible")
+			return
+		}
+		if in.ExecutionID == "" {
+			in.ExecutionID = uuid.NewString()
+		}
+		if _, err := a.pool.Exec(r.Context(), `UPDATE application_installations SET active_execution_id=$2,updated_at=now() WHERE id=$1`, installationID, in.ExecutionID); err != nil {
+			writeDBError(w, err)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"authorized": true, "installation_id": installationID, "execution_id": in.ExecutionID})
 		return
 	}
 	accountID, err := a.accountIDForClaims(r.Context())
@@ -218,20 +252,26 @@ func (a *API) recordUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	duplicates := 0
-	for _, in := range inputs {
-		duplicate, err := a.persistUsage(r, in)
-		if err != nil {
-			var apiErr usageError
-			if errors.As(err, &apiErr) {
-				writeError(w, apiErr.status, apiErr.Error())
-			} else {
-				writeDBError(w, err)
+	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
+		for _, in := range inputs {
+			duplicate, persistErr := a.persistUsage(r, tx, in)
+			if persistErr != nil {
+				return persistErr
 			}
-			return
+			if duplicate {
+				duplicates++
+			}
 		}
-		if duplicate {
-			duplicates++
+		return nil
+	})
+	if err != nil {
+		var apiErr usageError
+		if errors.As(err, &apiErr) {
+			writeError(w, apiErr.status, apiErr.Error())
+		} else {
+			writeDBError(w, err)
 		}
+		return
 	}
 	writeJSON(w, 202, map[string]any{"accepted": len(inputs), "duplicates": duplicates})
 }
@@ -243,7 +283,7 @@ type usageError struct {
 
 func (e usageError) Error() string { return e.message }
 
-func (a *API) persistUsage(r *http.Request, in usageInput) (bool, error) {
+func (a *API) persistUsage(r *http.Request, tx pgx.Tx, in usageInput) (bool, error) {
 	if in.EventID == "" || in.ReservationID == uuid.Nil {
 		return false, usageError{400, "event_id and reservation_id are required"}
 	}
@@ -258,8 +298,12 @@ func (a *API) persistUsage(r *http.Request, in usageInput) (bool, error) {
 		return false, usageError{400, "unsupported meter"}
 	}
 	var walletID uuid.UUID
-	if err := a.pool.QueryRow(r.Context(), `SELECT wallet_id FROM reservations WHERE id=$1`, in.ReservationID).Scan(&walletID); err != nil {
+	var reservationStatus string
+	if err := tx.QueryRow(r.Context(), `SELECT wallet_id,status FROM reservations WHERE id=$1 FOR UPDATE`, in.ReservationID).Scan(&walletID, &reservationStatus); err != nil {
 		return false, err
+	}
+	if reservationStatus != "reserved" {
+		return false, usageError{409, "usage cannot be recorded for a finalized reservation"}
 	}
 	if !a.canAccessWallet(r, walletID) {
 		return false, usageError{403, "usage customer not accessible"}
@@ -268,8 +312,12 @@ func (a *API) persistUsage(r *http.Request, in usageInput) (bool, error) {
 	if in.OccurredAt != nil {
 		when = *in.OccurredAt
 	}
+	now := time.Now().UTC()
+	if when.After(now.Add(5*time.Minute)) || when.Before(now.AddDate(0, 0, -90)) {
+		return false, usageError{400, "occurred_at is outside the accepted window"}
+	}
 	meta, _ := json.Marshal(in.Metadata)
-	tag, err := a.pool.Exec(r.Context(), `INSERT INTO usage_events(wallet_id,reservation_id,external_id,units,quantity,meter,application,occurred_at,metadata) VALUES($1,$2,$3,$4,$4,$5,$6,$7,$8) ON CONFLICT(external_id) DO NOTHING`, walletID, in.ReservationID, in.EventID, in.Quantity, in.Meter, in.Application, when, meta)
+	tag, err := tx.Exec(r.Context(), `INSERT INTO usage_events(wallet_id,reservation_id,external_id,units,quantity,meter,application,occurred_at,metadata) VALUES($1,$2,$3,$4,$4,$5,$6,$7,$8) ON CONFLICT(wallet_id,external_id) DO NOTHING`, walletID, in.ReservationID, in.EventID, in.Quantity, in.Meter, in.Application, when, meta)
 	if err != nil {
 		return false, err
 	}

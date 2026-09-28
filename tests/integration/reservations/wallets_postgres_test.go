@@ -18,7 +18,7 @@ import (
 func TestConcurrentReservationsCannotOverspend(t *testing.T) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		t.Skip("DATABASE_URL not configured")
+		t.Fatal("DATABASE_URL is required for reservation integration tests")
 	}
 	ctx := context.Background()
 	pool, err := database.Open(ctx, url)
@@ -60,7 +60,7 @@ func TestConcurrentReservationsCannotOverspend(t *testing.T) {
 func TestSettlementIsIdempotent(t *testing.T) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		t.Skip("DATABASE_URL not configured")
+		t.Fatal("DATABASE_URL is required for reservation integration tests")
 	}
 	ctx := context.Background()
 	pool, err := database.Open(ctx, url)

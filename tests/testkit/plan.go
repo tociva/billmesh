@@ -35,6 +35,22 @@ func Cases(t testing.TB, prefix, kind string) []PlanCase {
 	for scanner.Scan() {
 		line := strings.TrimSpace(strings.Trim(scanner.Text(), "|"))
 		line = strings.TrimSpace(line)
+		parts := strings.Split(line, "|")
+		if len(parts) >= 3 {
+			id := strings.TrimSpace(parts[0])
+			caseKind := strings.TrimSpace(parts[1])
+			description := strings.TrimSpace(parts[2])
+			if strings.HasPrefix(id, prefix+"-") && description != "" {
+				if current != nil && current.Description != "" && (kind == "" || current.Kind == kind) {
+					cases = append(cases, *current)
+				}
+				current = nil
+				if kind == "" || caseKind == kind {
+					cases = append(cases, PlanCase{ID: id, Kind: caseKind, Description: description})
+				}
+				continue
+			}
+		}
 		if strings.HasPrefix(line, prefix+"-") {
 			if current != nil && current.Description != "" && (kind == "" || current.Kind == kind) {
 				cases = append(cases, *current)

@@ -2,6 +2,7 @@
 
 INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.dev.yml -p billmesh-integration
 INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable
+INTEGRATION_RESTORE_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_restore?sslmode=disable
 E2E_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-test
 PERFORMANCE_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-performance
 
@@ -29,7 +30,8 @@ test-integration:
 	$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
 	$(INTEGRATION_COMPOSE) up -d --wait postgres; \
 	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' go run ./cmd/billmesh migrate up; \
-	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' TEST_SUITE_NAME='Integration tests' ./scripts/test-output.sh go test -v -race -count=1 -tags=integration ./tests/integration/...
+	$(INTEGRATION_COMPOSE) exec -T postgres psql -U billmesh -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE billmesh_restore TEMPLATE billmesh_integration'; \
+	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' BILLMESH_RESTORE_DATABASE_URL='$(INTEGRATION_RESTORE_DATABASE_URL)' TEST_SUITE_NAME='Integration tests' ./scripts/test-output.sh go test -p=1 -v -race -count=1 -tags=integration ./tests/integration/...
 
 test-integration-clean:
 	$(INTEGRATION_COMPOSE) down -v --remove-orphans

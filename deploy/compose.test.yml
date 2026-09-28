@@ -75,7 +75,8 @@ services:
       BILLMESH_BASE_URL: http://api:8080
       MOCK_SERVER_URL: http://mock-external:8090
       DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_integration?sslmode=disable
-    command: ["sh", "-ec", "go run ./cmd/billmesh migrate up && TEST_SUITE_NAME='Container integration tests' ./scripts/test-output.sh go test -v -race -count=1 -tags=integration ./tests/integration/... && TEST_SUITE_NAME='End-to-end tests' ./scripts/test-output.sh go test -v -count=1 -tags=e2e ./tests/e2e/..."]
+      BILLMESH_RESTORE_DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_restore?sslmode=disable
+    command: ["sh", "-ec", "go run ./cmd/billmesh migrate up && DATABASE_URL=$$BILLMESH_RESTORE_DATABASE_URL go run ./cmd/billmesh migrate up && TEST_SUITE_NAME='Container integration tests' ./scripts/test-output.sh go test -p=1 -v -race -count=1 -tags=integration ./tests/integration/... && TEST_SUITE_NAME='End-to-end tests' ./scripts/test-output.sh go test -v -count=1 -tags=e2e ./tests/e2e/..."]
     depends_on:
       api:
         condition: service_healthy
@@ -89,7 +90,7 @@ services:
       MOCK_SERVER_URL: http://mock-external:8090
       DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
       TEST_SUITE_NAME: Performance tests
-    command: ["./scripts/test-output.sh", "go", "test", "-v", "-tags=performance", "-run", "^$$", "-bench=.", "./tests/performance/..."]
+    command: ["./scripts/test-output.sh", "go", "test", "-v", "-tags=performance", "-run", "^$$", "-bench=.", "-benchtime=10x", "./tests/performance/..."]
     depends_on:
       api:
         condition: service_healthy

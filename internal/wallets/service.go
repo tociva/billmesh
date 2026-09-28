@@ -302,7 +302,7 @@ func (s *Service) Release(ctx context.Context, reservationID uuid.UUID, reason s
 			return err
 		}
 		r.Status = status
-		kind := status
+		kind := "release"
 		if status == "expired" {
 			kind = "expire"
 		}
@@ -363,6 +363,9 @@ func insertThresholdEvents(ctx context.Context, tx pgx.Tx, walletID uuid.UUID, n
 		return nil
 	}
 	percent := int(used * 100 / total)
+	if _, err := tx.Exec(ctx, `DELETE FROM threshold_notifications WHERE wallet_id=$1 AND period_key=$2 AND threshold>$3`, walletID, period, percent); err != nil {
+		return err
+	}
 	for _, threshold := range []int{50, 80, 90, 100} {
 		if percent < threshold {
 			continue

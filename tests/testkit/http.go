@@ -136,6 +136,9 @@ type Endpoint struct{ Method, Path string }
 
 func ExerciseEndpointContract(t *testing.T, tc PlanCase, endpoint Endpoint) {
 	t.Helper()
+	if ExerciseReviewE2ECase(t, tc) {
+		return
+	}
 	h := NewHTTP(t)
 	description := strings.ToLower(tc.Description)
 	org := strings.ToLower(tc.ID) + "-" + Unique("org")
@@ -208,6 +211,33 @@ func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token st
 
 func allPermissions() []string {
 	return []string{"billing:read", "billing:write", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"}
+}
+
+func AllPermissions() []string { return allPermissions() }
+
+func CreateFixtureAccount(t *testing.T, h *HTTP, org, token string) string {
+	t.Helper()
+	return createFixtureAccount(t, h, org, token)
+}
+
+func FixtureProduct(t *testing.T, h *HTTP, slug, token string) string {
+	t.Helper()
+	return fixtureProduct(t, h, slug, token)
+}
+
+func CreateFixtureSubscription(t *testing.T, h *HTTP, account, token string) string {
+	t.Helper()
+	return createFixtureSubscription(t, h, account, token)
+}
+
+func CreateFundedWallet(t *testing.T, h *HTTP, account, token string) string {
+	t.Helper()
+	return createFundedWallet(t, h, account, token)
+}
+
+func ReserveFixture(t *testing.T, h *HTTP, wallet, token string) string {
+	t.Helper()
+	return reserveFixture(t, h, wallet, token)
 }
 func preparePositiveCase(t *testing.T, h *HTTP, prefix string, endpoint Endpoint, org, token string) (Endpoint, any) {
 	t.Helper()
@@ -376,6 +406,22 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	overrides := map[string]any{}
 	token := ""
 	switch tc.ID {
+	case "AUTH-017":
+		token = h.IssueToken(t, org, "daybook", permissions, map[string]any{"token_use": "id"})
+	case "AUTH-018":
+		token = h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
+		status, raw, _ := h.JSON(t, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack": "credits-500"}, token)
+		if status != http.StatusForbidden {
+			t.Fatalf("%s: want 403, got %d: %s", tc.ID, status, raw)
+		}
+		return
+	case "AUTH-019":
+		owner := h.IssueToken(t, org, "daybook", permissions, nil)
+		account := createFixtureAccount(t, h, org, owner)
+		wallet := createFundedWallet(t, h, account, owner)
+		other := h.IssueToken(t, Unique("other-org"), "daybook", permissions, nil)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/wallets/"+wallet+"/reservations", map[string]any{"execution_id": Unique("nested"), "operation_seq": 0, "amount": 1}, other)
+		return
 	case "AUTH-002":
 	case "AUTH-003":
 		overrides["expires_in_seconds"] = -60
@@ -428,7 +474,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	}
 	status, raw, _ := h.JSON(t, http.MethodGet, path, nil, token)
 	want := 200
-	if tc.ID == "AUTH-002" || tc.ID == "AUTH-003" || tc.ID == "AUTH-004" || tc.ID == "AUTH-005" || tc.ID == "AUTH-006" {
+	if tc.ID == "AUTH-002" || tc.ID == "AUTH-003" || tc.ID == "AUTH-004" || tc.ID == "AUTH-005" || tc.ID == "AUTH-006" || tc.ID == "AUTH-017" {
 		want = 401
 	}
 	if tc.ID == "AUTH-010" || tc.ID == "AUTH-013" || tc.ID == "AUTH-015" {
@@ -486,6 +532,9 @@ func ExerciseAdminContract(t *testing.T, tc PlanCase) {
 
 func ExerciseSSEContract(t *testing.T, tc PlanCase) {
 	t.Helper()
+	if ExerciseReviewE2ECase(t, tc) {
+		return
+	}
 	h := NewHTTP(t)
 	description := strings.ToLower(tc.Description)
 	unauthenticated := strings.Contains(description, "unauthenticated")
@@ -505,7 +554,7 @@ func ExerciseSSEContract(t *testing.T, tc PlanCase) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if strings.Contains(description, "resume") || strings.Contains(description, "reconnect") || strings.Contains(description, "missed") {
-		req.Header.Set("Last-Event-ID", "1")
+		req.Header.Set("Last-Event-ID", "9223372036854775807")
 	}
 	resp, err := h.Client.Do(req)
 	if err != nil {

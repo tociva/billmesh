@@ -415,11 +415,23 @@ func (a *API) changeSubscriptionPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		PlanID    uuid.UUID `json:"plan_id"`
-		Effective string
+		PlanID        uuid.UUID `json:"plan_id"`
+		Plan          string    `json:"plan"`
+		Effective     string    `json:"effective"`
+		PaymentStatus string    `json:"payment_status"`
 	}
 	if !decode(w, r, &in) {
 		return
+	}
+	if in.PaymentStatus == "failed" {
+		writeError(w, http.StatusPaymentRequired, "plan change payment failed")
+		return
+	}
+	if in.PlanID == uuid.Nil && in.Plan != "" {
+		if err := a.pool.QueryRow(r.Context(), `SELECT p.id FROM plans p JOIN subscriptions s ON s.product_id=p.product_id WHERE s.id=$1 AND p.slug=$2 AND p.active`, id, in.Plan).Scan(&in.PlanID); err != nil {
+			writeError(w, 400, "unknown plan")
+			return
+		}
 	}
 	if in.PlanID == uuid.Nil {
 		writeError(w, 400, "plan_id is required")
@@ -498,7 +510,7 @@ func (a *API) setSubscriptionStatus(w http.ResponseWriter, r *http.Request, stat
 			if _, err := tx.Exec(r.Context(), `UPDATE subscriptions SET cancel_at_period_end=true,updated_at=now(),version=version+1 WHERE id=$1`, id); err != nil {
 				return err
 			}
-		} else if _, err := tx.Exec(r.Context(), `UPDATE subscriptions SET status=$2,cancelled_at=CASE WHEN $2='cancelled' THEN now() ELSE NULL END,cancel_at_period_end=false,updated_at=now(),version=version+1 WHERE id=$1`, id, status); err != nil {
+		} else if _, err := tx.Exec(r.Context(), `UPDATE subscriptions SET status=$2::subscription_status,cancelled_at=CASE WHEN $2::text='cancelled' THEN now() ELSE NULL END,cancel_at_period_end=false,updated_at=now(),version=version+1 WHERE id=$1`, id, status); err != nil {
 			return err
 		}
 		historyStatus := status
@@ -538,11 +550,16 @@ func (a *API) renewSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var accountID, planID, productID uuid.UUID
+	var currentStatus string
 	var credits, price int64
 	var interval string
 	var end *time.Time
-	if err = a.pool.QueryRow(r.Context(), `SELECT s.account_id,s.plan_id,p.product_id,p.included_credits,s.price_minor,s.billing_interval,s.current_period_end FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.id=$1`, id).Scan(&accountID, &planID, &productID, &credits, &price, &interval, &end); err != nil {
+	if err = a.pool.QueryRow(r.Context(), `SELECT s.account_id,s.plan_id,p.product_id,p.included_credits,s.price_minor,s.billing_interval,s.current_period_end,s.status FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.id=$1`, id).Scan(&accountID, &planID, &productID, &credits, &price, &interval, &end, &currentStatus); err != nil {
 		writeDBError(w, err)
+		return
+	}
+	if currentStatus == "cancelled" || currentStatus == "expired" {
+		writeError(w, 409, "subscription cannot be renewed from its current state")
 		return
 	}
 	if price > 0 && (in.PaymentStatus != "verified" || in.OperationRef == "") {

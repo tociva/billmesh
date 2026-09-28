@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -21,9 +22,10 @@ import (
 
 func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AccountID  uuid.UUID `json:"account_id"`
-		CreditPack string    `json:"credit_pack"`
-		PriceMinor *int64    `json:"price_minor"`
+		AccountID      uuid.UUID `json:"account_id"`
+		CreditPack     string    `json:"credit_pack"`
+		PriceMinor     *int64    `json:"price_minor"`
+		IdempotencyKey string    `json:"idempotency_key"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -38,6 +40,22 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if !a.canAccessAccount(r, in.AccountID) {
 		writeError(w, 403, "account not accessible")
+		return
+	}
+	if in.IdempotencyKey != "" {
+		paymentID, parseErr := uuid.Parse(in.IdempotencyKey)
+		if parseErr != nil {
+			writeError(w, 400, "invalid idempotency_key")
+			return
+		}
+		var orderID, status, currency string
+		var amount, credits int64
+		err := a.pool.QueryRow(r.Context(), `SELECT provider_order_id,status,amount_minor,currency,credits FROM payments WHERE id=$1 AND account_id=$2`, paymentID, in.AccountID).Scan(&orderID, &status, &amount, &currency, &credits)
+		if err != nil {
+			writeDBError(w, err)
+			return
+		}
+		writeJSON(w, 201, map[string]any{"payment_id": paymentID, "provider": "razorpay", "order": map[string]any{"id": orderID, "status": status, "amount": amount, "currency": currency}, "credit_pack": in.CreditPack, "credits": credits})
 		return
 	}
 	var packID, productID uuid.UUID
@@ -62,6 +80,10 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			writeError(w, 503, "payment provider temporarily unavailable")
+			return
+		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			writeError(w, 502, "payment provider rejected order")
 			return
@@ -107,6 +129,7 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		Status    string `json:"status"`
 		RefundID  string `json:"refund_id"`
 		Amount    int64  `json:"amount_minor"`
+		Currency  string `json:"currency"`
 		Payload   struct {
 			Payment struct {
 				Entity struct {
@@ -146,6 +169,24 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if event.Amount == 0 {
 			event.Amount = event.Payload.Refund.Entity.Amount
+		}
+	}
+	switch event.Type {
+	case "payment.captured", "order.paid", "payment.failed", "refund.processed":
+	default:
+		writeError(w, 400, "unsupported webhook event type")
+		return
+	}
+	if event.Type == "payment.captured" || event.Type == "order.paid" {
+		var expectedAmount int64
+		var expectedCurrency string
+		if err := a.pool.QueryRow(r.Context(), `SELECT amount_minor,currency FROM payments WHERE provider='razorpay' AND provider_order_id=$1`, event.OrderID).Scan(&expectedAmount, &expectedCurrency); err != nil {
+			writeError(w, 400, "unknown payment order")
+			return
+		}
+		if (event.Amount != 0 && event.Amount != expectedAmount) || (event.Currency != "" && event.Currency != expectedCurrency) {
+			writeError(w, 400, "captured amount or currency does not match the order")
+			return
 		}
 	}
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
@@ -369,6 +410,10 @@ func (a *API) registerWebhook(w http.ResponseWriter, r *http.Request) {
 	target, parseErr := url.ParseRequestURI(in.TargetURL)
 	if parseErr != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
 		writeError(w, 400, "target_url must be an absolute HTTP(S) URL")
+		return
+	}
+	if host := net.ParseIP(target.Hostname()); host != nil && (host.IsLoopback() || host.IsPrivate() || host.IsLinkLocalUnicast() || host.IsLinkLocalMulticast() || host.IsUnspecified()) {
+		writeError(w, 400, "target_url must not address a private or local network")
 		return
 	}
 	var id uuid.UUID

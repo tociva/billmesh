@@ -16,11 +16,12 @@ import (
 )
 
 type server struct {
-	key         *rsa.PrivateKey
-	kid         string
-	mu          sync.Mutex
-	webhooks    []map[string]any
-	failureCode int
+	key           *rsa.PrivateKey
+	kid           string
+	mu            sync.Mutex
+	webhooks      []map[string]any
+	failureCode   int
+	receiverDelay time.Duration
 }
 
 func main() {
@@ -38,6 +39,7 @@ func main() {
 	mux.HandleFunc("POST /receivers/{app}", s.receiver)
 	mux.HandleFunc("GET /test/webhooks", s.listWebhooks)
 	mux.HandleFunc("POST /test/failure", s.setFailure)
+	mux.HandleFunc("POST /test/receiver-delay", s.setReceiverDelay)
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
 		addr = ":8090"
@@ -63,6 +65,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		ExpiresInSeconds *int64   `json:"expires_in_seconds"`
 		UnknownKey       bool     `json:"unknown_key"`
 		Environment      string   `json:"environment"`
+		TokenUse         string   `json:"token_use"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if in.Subject == "" {
@@ -81,6 +84,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		expires = *in.ExpiresInSeconds
 	}
 	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "permissions": in.Permissions}
+	if in.TokenUse != "" {
+		claims["token_use"] = in.TokenUse
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	s.mu.Lock()
 	key := s.key
@@ -112,6 +118,13 @@ func (s *server) rotateKey(w http.ResponseWriter, _ *http.Request) {
 	write(w, map[string]string{"kid": kid})
 }
 func (s *server) order(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	failureCode := s.failureCode
+	s.mu.Unlock()
+	if failureCode != 0 {
+		http.Error(w, "configured failure", failureCode)
+		return
+	}
 	var request struct {
 		Amount   int64  `json:"amount"`
 		Currency string `json:"currency"`
@@ -131,8 +144,12 @@ func (s *server) receiver(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&payload)
 	s.mu.Lock()
 	code := s.failureCode
+	delay := s.receiverDelay
 	s.webhooks = append(s.webhooks, map[string]any{"app": r.PathValue("app"), "event_id": r.Header.Get("X-Billmesh-Event-ID"), "payload": payload})
 	s.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	if code != 0 {
 		http.Error(w, "configured failure", code)
 		return
@@ -151,6 +168,20 @@ func (s *server) setFailure(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	s.mu.Lock()
 	s.failureCode = in.Status
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+func (s *server) setReceiverDelay(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Milliseconds int `json:"milliseconds"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if in.Milliseconds < 0 || in.Milliseconds > 10_000 {
+		http.Error(w, "milliseconds must be between 0 and 10000", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.receiverDelay = time.Duration(in.Milliseconds) * time.Millisecond
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }

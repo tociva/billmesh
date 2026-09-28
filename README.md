@@ -52,7 +52,7 @@ Integration and E2E databases are separate. Never point their `DATABASE_URL` at 
 
 Tests are grouped under `tests/unit`, `tests/integration`, `tests/e2e`, and `tests/performance`, then by business category. Every checklist ID in `test-plan.md` is exposed as an individually named test or benchmark. The four cross-module business journeys live under `tests/e2e/journeys`.
 
-Test commands run in verbose mode. Failed tests, panics, and final `FAIL` markers are highlighted in red, while assertion locations are highlighted in yellow. A focused diagnostic summary containing the failed test names, source locations, command, and exit status is printed after a failed run. Set `NO_COLOR=1` to disable ANSI colors.
+Test commands use a grouped, Mocha-style reporter. Packages are rendered as suites, nested Go subtests are indented, passing, failing, and skipped cases have distinct colors, and every run ends with a compact test/package summary. Failure logs and assertion details remain visible, followed by a focused diagnostic summary. Set `NO_COLOR=1` to disable ANSI colors or `TEST_OUTPUT_STYLE=raw` to print unformatted `go test` output.
 
 ## API transaction guarantees
 

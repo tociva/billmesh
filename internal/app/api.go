@@ -75,6 +75,9 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/reservations/{id}/release", auth.Require("credits:settle", a.releaseReservation))
 	protected.HandleFunc("POST /v1/reservations/{id}/extend", auth.Require("credits:reserve", a.extendReservation))
 	protected.HandleFunc("POST /v1/executions/authorize", auth.Require("credits:reserve", a.authorizeExecution))
+	protected.HandleFunc("POST /v1/accounts/{id}/installations", auth.Require("billing:write", a.createInstallation))
+	protected.HandleFunc("POST /v1/installations/{id}/revoke", auth.Require("billing:write", a.revokeInstallation))
+	protected.HandleFunc("POST /v1/installations/{id}/settle-active", auth.Require("credits:settle", a.settleInstallationExecution))
 	protected.HandleFunc("POST /v1/usage-events", auth.Require("credits:settle", a.recordUsage))
 	protected.HandleFunc("GET /v1/usage-events", auth.Require("billing:read", a.listUsage))
 	protected.HandleFunc("POST /v1/payments/orders", auth.Require("billing:write", a.createPaymentOrder))
@@ -347,6 +350,20 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 	after := int64(0)
 	if h := r.Header.Get("Last-Event-ID"); h != "" {
 		after, _ = strconv.ParseInt(h, 10, 64)
+	}
+	if after > 0 && after < 1<<62 {
+		var oldest *int64
+		if err := a.pool.QueryRow(r.Context(), `SELECT min(e.sequence) FROM outbox_events e WHERE
+			(e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w WHERE w.id=e.aggregate_id AND w.account_id=$1))
+			OR (e.aggregate_type='account' AND e.aggregate_id=$1)
+			OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.id=e.aggregate_id AND s.account_id=$1))`, accountID).Scan(&oldest); err != nil {
+			writeDBError(w, err)
+			return
+		}
+		if oldest == nil || after < *oldest {
+			writeError(w, http.StatusGone, "event history is no longer available; resynchronization required")
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

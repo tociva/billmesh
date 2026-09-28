@@ -21,6 +21,7 @@ type Claims struct {
 	OrgID       string   `json:"org_id"`
 	App         string   `json:"app"`
 	Environment string   `json:"environment"`
+	TokenUse    string   `json:"token_use"`
 	jwt.RegisteredClaims
 }
 
@@ -75,9 +76,12 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 			return nil, errors.New("unknown signing key")
 		}
 		return key, nil
-	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience), jwt.WithExpirationRequired(), jwt.WithLeeway(15*time.Second))
+	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience), jwt.WithExpirationRequired())
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token: %w", err)
+	}
+	if claims.TokenUse != "" && claims.TokenUse != "access" {
+		return nil, errors.New("invalid token use")
 	}
 	return claims, nil
 }
