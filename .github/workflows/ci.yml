@@ -1,8 +1,6 @@
 name: Billmesh CI
 on:
-  push:
-    branches: [main, development]
-  pull_request:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
