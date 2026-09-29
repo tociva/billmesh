@@ -42,14 +42,22 @@ type JWKSVerifier struct {
 	issuer, audience, url string
 	client                *http.Client
 	mu                    sync.RWMutex
+	refreshMu             sync.Mutex
 	keys                  map[string]*rsa.PublicKey
+	lastRefresh           time.Time
+	lastAttempt           time.Time
+	now                   func() time.Time
 }
+
+const keyCacheLifetime = time.Minute
+const keyCacheOutageGrace = 5 * time.Minute
+const unknownKeyRefreshInterval = time.Second
 
 func NewJWKSVerifier(issuer, audience, url string, client *http.Client) *JWKSVerifier {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &JWKSVerifier{issuer: issuer, audience: audience, url: url, client: client, keys: map[string]*rsa.PublicKey{}}
+	return &JWKSVerifier{issuer: issuer, audience: audience, url: url, client: client, keys: map[string]*rsa.PublicKey{}, now: time.Now}
 }
 
 func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) {
@@ -65,23 +73,23 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 		if kid == "" {
 			return nil, errors.New("missing key id")
 		}
-		key := v.key(kid)
-		if key == nil {
-			if err := v.refresh(ctx); err != nil {
-				return nil, err
-			}
-			key = v.key(kid)
+		key, err := v.lookupKey(ctx, kid)
+		if err != nil {
+			return nil, err
 		}
 		if key == nil {
 			return nil, errors.New("unknown signing key")
 		}
 		return key, nil
-	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience), jwt.WithExpirationRequired())
+	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(v.now))
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	if claims.TokenUse != "" && claims.TokenUse != "access" {
+	if claims.TokenUse != "access" {
 		return nil, errors.New("invalid token use")
+	}
+	if claims.Subject == "" || claims.OrgID == "" || claims.App == "" {
+		return nil, errors.New("missing identity context")
 	}
 	return claims, nil
 }
@@ -90,6 +98,33 @@ func (v *JWKSVerifier) key(kid string) *rsa.PublicKey {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	return v.keys[kid]
+}
+
+func (v *JWKSVerifier) lookupKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	v.refreshMu.Lock()
+	defer v.refreshMu.Unlock()
+
+	now := v.now()
+	key := v.key(kid)
+	v.mu.RLock()
+	lastRefresh, lastAttempt := v.lastRefresh, v.lastAttempt
+	v.mu.RUnlock()
+	if key != nil && now.Sub(lastRefresh) < keyCacheLifetime {
+		return key, nil
+	}
+	if key == nil && !lastAttempt.IsZero() && now.Sub(lastAttempt) < unknownKeyRefreshInterval {
+		return nil, errors.New("unknown signing key")
+	}
+	v.mu.Lock()
+	v.lastAttempt = now
+	v.mu.Unlock()
+	if err := v.refresh(ctx); err != nil {
+		if key != nil && now.Sub(lastRefresh) < keyCacheOutageGrace {
+			return key, nil
+		}
+		return nil, err
+	}
+	return v.key(kid), nil
 }
 
 func (v *JWKSVerifier) refresh(ctx context.Context) error {
@@ -132,6 +167,7 @@ func (v *JWKSVerifier) refresh(ctx context.Context) error {
 	}
 	v.mu.Lock()
 	v.keys = keys
+	v.lastRefresh = v.now()
 	v.mu.Unlock()
 	return nil
 }
@@ -139,19 +175,44 @@ func (v *JWKSVerifier) refresh(ctx context.Context) error {
 type contextKey struct{}
 
 func Middleware(verifier TokenVerifier) func(http.Handler) http.Handler {
+	return MiddlewareWithHooks(verifier, MiddlewareHooks{})
+}
+
+type MiddlewareHooks struct {
+	Rejected      func(*http.Request) bool
+	Authenticated func(http.ResponseWriter, *http.Request, *Claims) bool
+}
+
+func MiddlewareWithHooks(verifier TokenVerifier, hooks MiddlewareHooks) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reject := func(message string) {
+				if hooks.Rejected != nil && hooks.Rejected(r) {
+					w.Header().Set("Retry-After", "60")
+					http.Error(w, "too many authentication failures", http.StatusTooManyRequests)
+					return
+				}
+				http.Error(w, message, http.StatusUnauthorized)
+			}
+			if len(r.Header.Values("Authorization")) != 1 {
+				reject("missing or ambiguous bearer token")
+				return
+			}
 			header := r.Header.Get("Authorization")
 			if !strings.HasPrefix(header, "Bearer ") {
-				http.Error(w, "missing bearer token", http.StatusUnauthorized)
+				reject("missing bearer token")
 				return
 			}
 			claims, err := verifier.Verify(r.Context(), strings.TrimPrefix(header, "Bearer "))
 			if err != nil {
-				http.Error(w, "invalid bearer token", http.StatusUnauthorized)
+				reject("invalid bearer token")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), contextKey{}, claims)))
+			r = r.WithContext(context.WithValue(r.Context(), contextKey{}, claims))
+			if hooks.Authenticated != nil && !hooks.Authenticated(w, r, claims) {
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

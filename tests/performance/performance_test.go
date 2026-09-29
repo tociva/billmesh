@@ -30,7 +30,7 @@ type fixture struct {
 
 func BenchmarkPerformancePlan(b *testing.B) {
 	f := newFixture(b)
-	cases := append(testkit.Cases(b, "PERF", "P"), testkit.Cases(b, "LIVE", "P")...)
+	cases := append(testkit.Cases(b, "PERF", "P"), testkit.OptionalCases(b, "LIVE", "P")...)
 	for _, tc := range cases {
 		tc := tc
 		b.Run(tc.ID, func(b *testing.B) {

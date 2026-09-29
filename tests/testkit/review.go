@@ -1,12 +1,17 @@
 package testkit
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var reviewE2EIDs = map[string]struct{}{
@@ -134,7 +139,18 @@ func ExerciseReviewE2ECase(t *testing.T, tc PlanCase) bool {
 		exerciseReviewSubscription(t, h, tc.ID, org, token)
 	case "WH-020":
 		CreateFixtureAccount(t, h, org, token)
-		for _, target := range []string{"http://127.0.0.1/hook", "http://[::1]/hook", "http://169.254.169.254/latest/meta-data"} {
+		for _, target := range []string{
+			"http://127.0.0.1/hook",
+			"http://[::1]/hook",
+			"http://10.0.0.10/hook",
+			"http://172.16.0.10/hook",
+			"http://192.168.1.10/hook",
+			"http://169.254.169.254/latest/meta-data",
+			"http://0.0.0.0/hook",
+			"http://[fe80::1]/hook",
+			"http://localhost/hook",
+			"http://postgres:5432/hook",
+		} {
 			t.Run(url.QueryEscape(target), func(t *testing.T) {
 				requireReviewStatus(t, h, tc.ID, http.StatusBadRequest, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "secret"}, token)
 			})
@@ -190,7 +206,7 @@ func exerciseReviewPayment(t *testing.T, h *HTTP, id, org, token string) {
 			Currency string `json:"currency"`
 		} `json:"order"`
 	}](t, orderRaw)
-	event := map[string]any{"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount}
+	event := map[string]any{"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}
 	switch id {
 	case "PAY-021":
 		event["amount_minor"] = order.Order.Amount + 1
@@ -306,6 +322,12 @@ func exerciseReviewWebhook(t *testing.T, h *HTTP, id, org, token string) {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
+		t.Cleanup(func() {
+			reset, err := h.Client.Post(h.MockURL+"/test/failure", "application/json", strings.NewReader(`{"status":0}`))
+			if err == nil {
+				reset.Body.Close()
+			}
+		})
 		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "retry-secret"}, token)
 	}
 }
@@ -320,24 +342,44 @@ func exerciseReviewSSE(t *testing.T, h *HTTP, id, org, token string) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	switch id {
 	case "LIVE-013":
-		req.Header.Set("Last-Event-ID", "9223372036854775807")
+		otherOrg := Unique("foreign-sse")
+		other := h.IssueToken(t, otherOrg, "daybook", AllPermissions(), nil)
+		otherAccount := CreateFixtureAccount(t, h, otherOrg, other)
+		foreignSubscription := CreateFixtureSubscription(t, h, otherAccount, other)
+		pool, err := pgxpool.New(context.Background(), os.Getenv("BILLMESH_E2E_DATABASE_URL"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		var foreignSequence int64
+		if err := pool.QueryRow(context.Background(), `SELECT sequence FROM outbox_events WHERE aggregate_type='subscription' AND aggregate_id=$1 ORDER BY sequence DESC LIMIT 1`, foreignSubscription).Scan(&foreignSequence); err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Last-Event-ID", fmt.Sprint(foreignSequence))
 	case "LIVE-014":
-		expired := h.IssueToken(t, org, "daybook", AllPermissions(), map[string]any{"expires_in_seconds": -1})
-		req.Header.Set("Authorization", "Bearer "+expired)
+		shortLived := h.IssueToken(t, org, "daybook", AllPermissions(), map[string]any{"expires_in_seconds": 3})
+		req.Header.Set("Authorization", "Bearer "+shortLived)
 	case "LIVE-015":
-		req.Header.Set("Last-Event-ID", "1")
+		req.Header.Set("Last-Event-ID", "9223372036854775807")
 	case "LIVE-016":
 		req.Header.Set("X-Forwarded-Proto", "https")
 	}
 	client := *h.Client
 	client.Timeout = 1500 * time.Millisecond
+	if id == "LIVE-014" {
+		client.Timeout = 6 * time.Second
+	}
 	resp, err := client.Do(req)
 	if id == "LIVE-014" {
-		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusUnauthorized {
-				t.Fatalf("%s: want 401, got %d", id, resp.StatusCode)
-			}
+		if err != nil {
+			t.Fatalf("%s: valid SSE connection failed: %v", id, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: want initial 200, got %d", id, resp.StatusCode)
+		}
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Fatalf("%s: stream did not close after token expiry: %v", id, err)
 		}
 		return
 	}
@@ -348,7 +390,10 @@ func exerciseReviewSSE(t *testing.T, h *HTTP, id, org, token string) {
 	if id == "LIVE-015" && resp.StatusCode != http.StatusGone {
 		t.Fatalf("%s: want 410 resynchronization response, got %d", id, resp.StatusCode)
 	}
-	if id != "LIVE-015" && resp.StatusCode != http.StatusOK {
+	if id == "LIVE-013" && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("%s: want 403 for foreign event cursor, got %d", id, resp.StatusCode)
+	}
+	if id != "LIVE-013" && id != "LIVE-015" && resp.StatusCode != http.StatusOK {
 		t.Fatalf("%s: want 200, got %d", id, resp.StatusCode)
 	}
 }

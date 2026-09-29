@@ -332,6 +332,7 @@ func (a *API) listUsage(w http.ResponseWriter, r *http.Request) {
 	meter := r.URL.Query().Get("meter")
 	product := r.URL.Query().Get("product")
 	application := r.URL.Query().Get("application")
+	claims, _ := auth.FromContext(r.Context())
 	var from, to *time.Time
 	if value := r.URL.Query().Get("from"); value != "" {
 		parsed, parseErr := time.Parse(time.RFC3339, value)
@@ -351,8 +352,9 @@ func (a *API) listUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := a.pool.Query(r.Context(), `SELECT u.external_id,u.meter,u.quantity,u.application,u.occurred_at,p.slug FROM usage_events u JOIN wallets w ON w.id=u.wallet_id JOIN products p ON p.id=w.product_id
 		WHERE w.account_id=$1 AND ($2='' OR u.meter=$2) AND ($3='' OR p.slug=$3) AND ($4='' OR u.application=$4)
+		AND (p.slug=$8 OR $9)
 		AND ($5::timestamptz IS NULL OR u.occurred_at >= $5) AND ($6::timestamptz IS NULL OR u.occurred_at < $6)
-		ORDER BY u.occurred_at DESC LIMIT $7`, accountID, meter, product, application, from, to, parseLimit(r))
+		ORDER BY u.occurred_at DESC LIMIT $7`, accountID, meter, product, application, from, to, parseLimit(r), claims.App, claims.Has("billing:link"))
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -376,7 +378,8 @@ func (a *API) getLimits(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "account not found")
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT w.id,p.slug,w.available,w.reserved,COALESCE(sum(g.amount),0) FROM wallets w JOIN products p ON p.id=w.product_id LEFT JOIN credit_grants g ON g.wallet_id=w.id WHERE w.account_id=$1 GROUP BY w.id,p.slug ORDER BY p.slug`, accountID)
+	claims, _ := auth.FromContext(r.Context())
+	rows, err := a.pool.Query(r.Context(), `SELECT w.id,p.slug,w.available,w.reserved,COALESCE(sum(g.amount),0) FROM wallets w JOIN products p ON p.id=w.product_id LEFT JOIN credit_grants g ON g.wallet_id=w.id WHERE w.account_id=$1 AND (p.slug=$2 OR $3) GROUP BY w.id,p.slug ORDER BY p.slug`, accountID, claims.App, claims.Has("billing:link"))
 	if err != nil {
 		writeDBError(w, err)
 		return

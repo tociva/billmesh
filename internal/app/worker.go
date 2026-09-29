@@ -28,7 +28,7 @@ type Worker struct {
 
 func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, log *slog.Logger) *Worker {
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+		client = newWebhookClient(nil, nil)
 	}
 	if log == nil {
 		log = slog.Default()
@@ -77,7 +77,7 @@ func (w *Worker) process(ctx context.Context) error {
 		}
 	}
 	return pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,d.target_url,e.event_type,e.payload,d.attempts,COALESCE((SELECT secret FROM webhook_endpoints WHERE target_url=d.target_url AND active LIMIT 1),'') FROM webhook_deliveries d JOIN outbox_events e ON e.id=d.event_id WHERE d.status IN ('pending','failed') AND d.next_attempt_at<=now() AND d.attempts<8 ORDER BY d.next_attempt_at FOR UPDATE OF d SKIP LOCKED LIMIT 20`)
+		rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,d.target_url,e.event_type,e.payload,d.attempts,COALESCE(ep.secret,'') FROM webhook_deliveries d JOIN outbox_events e ON e.id=d.event_id LEFT JOIN webhook_endpoints ep ON ep.id=d.endpoint_id AND ep.active WHERE d.status IN ('pending','failed') AND d.next_attempt_at<=now() AND d.attempts<8 ORDER BY d.next_attempt_at FOR UPDATE OF d SKIP LOCKED LIMIT 20`)
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,14 @@ func (w *Worker) process(ctx context.Context) error {
 		}
 		rows.Close()
 		for _, j := range jobs {
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, j.url, bytes.NewReader(j.payload))
+			var err error
+			if j.secret == "" {
+				err = errors.New("webhook signing endpoint is unavailable")
+			}
+			var req *http.Request
+			if err == nil {
+				req, err = http.NewRequestWithContext(ctx, http.MethodPost, j.url, bytes.NewReader(j.payload))
+			}
 			if err == nil {
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("X-Billmesh-Event-ID", j.eventID.String())
@@ -112,7 +119,7 @@ func (w *Worker) process(ctx context.Context) error {
 				resp, err = w.client.Do(req)
 				if resp != nil {
 					resp.Body.Close()
-					if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					if err == nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 						err = fmt.Errorf("status %d", resp.StatusCode)
 					}
 				}

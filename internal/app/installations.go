@@ -28,6 +28,11 @@ func (a *API) createInstallation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "application and organization_id are required")
 		return
 	}
+	claims, _ := auth.FromContext(r.Context())
+	if (in.Application != claims.App || in.OrganizationID != claims.OrgID) && !claims.Has("billing:link") {
+		writeError(w, 403, "installation identity not accessible")
+		return
+	}
 	var id uuid.UUID
 	err = a.pool.QueryRow(r.Context(), `INSERT INTO application_installations(account_id,application,organization_id)
 		VALUES($1,$2,$3) ON CONFLICT(account_id,application,organization_id) DO UPDATE SET active=true,updated_at=now() RETURNING id`, accountID, in.Application, in.OrganizationID).Scan(&id)
@@ -94,6 +99,7 @@ func (a *API) accessibleInstallation(r *http.Request) (uuid.UUID, bool) {
 	}
 	var found bool
 	err = a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM application_installations i JOIN account_links l ON l.account_id=i.account_id
-		WHERE i.id=$1 AND l.application=$2 AND l.organization_id=$3 AND l.environment=$4)`, id, claims.App, claims.OrgID, environment).Scan(&found)
+		WHERE i.id=$1 AND l.application=$2 AND l.organization_id=$3 AND l.environment=$4
+		AND ((i.application=$2 AND i.organization_id=$3) OR $5))`, id, claims.App, claims.OrgID, environment, claims.Has("billing:link")).Scan(&found)
 	return id, err == nil && found
 }

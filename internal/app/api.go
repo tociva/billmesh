@@ -1,15 +1,19 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,13 +33,21 @@ type API struct {
 	client          *http.Client
 	providerBaseURL string
 	webhookSecret   string
+	sseMu           sync.Mutex
+	sseActive       map[uuid.UUID]int
+	authFailures    *failureWindow
+	mutations       *keyedBuckets
 }
+
+const maxSSEConnectionsPerAccount = 8
 
 func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *API {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"), webhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET")}
+	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"), webhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET"), sseActive: make(map[uuid.UUID]int)}
+	a.ConfigureRequestLimits(30, 10, 50)
+	return a
 }
 
 func (a *API) Handler() http.Handler {
@@ -51,12 +63,12 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("PATCH /v1/accounts/{id}", auth.Require("billing:write", a.updateAccount))
 	protected.HandleFunc("POST /v1/accounts/{id}/links", auth.Require("billing:write", a.linkAccount))
 	protected.HandleFunc("POST /v1/account-links", auth.Require("billing:write", a.linkCurrentAccount))
-	protected.HandleFunc("POST /v1/products", auth.Require("billing:admin", a.createProduct))
+	protected.HandleFunc("POST /v1/products", a.requireAdmin("product.create", "product", a.createProduct))
 	protected.HandleFunc("GET /v1/products", a.listProducts)
-	protected.HandleFunc("POST /v1/plans", auth.Require("billing:admin", a.createPlan))
+	protected.HandleFunc("POST /v1/plans", a.requireAdmin("plan.create", "plan", a.createPlan))
 	protected.HandleFunc("GET /v1/plans", a.listPlans)
-	protected.HandleFunc("PATCH /v1/plans/{id}", auth.Require("billing:admin", a.updatePlan))
-	protected.HandleFunc("POST /v1/credit-packs", auth.Require("billing:admin", a.createCreditPack))
+	protected.HandleFunc("PATCH /v1/plans/{id}", a.requireAdmin("plan.update", "plan", a.updatePlan))
+	protected.HandleFunc("POST /v1/credit-packs", a.requireAdmin("credit_pack.create", "credit_pack", a.createCreditPack))
 	protected.HandleFunc("POST /v1/subscriptions", auth.Require("billing:write", a.createSubscription))
 	protected.HandleFunc("GET /v1/subscriptions/current", auth.Require("billing:read", a.currentSubscription))
 	protected.HandleFunc("POST /v1/subscriptions/{id}/change-plan", auth.Require("billing:write", a.changeSubscriptionPlan))
@@ -86,12 +98,12 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/webhooks", auth.Require("billing:write", a.registerWebhook))
 	protected.HandleFunc("GET /v1/webhooks", auth.Require("billing:read", a.listWebhooks))
 	protected.HandleFunc("GET /v1/limits", auth.Require("billing:read", a.getLimits))
-	protected.HandleFunc("POST /v1/admin/adjustments", auth.Require("billing:admin", a.adminAdjustment))
-	protected.HandleFunc("GET /v1/admin/audit", auth.Require("billing:admin", a.listAudit))
-	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", auth.Require("billing:admin", a.replayWebhook))
+	protected.HandleFunc("POST /v1/admin/adjustments", a.requireAdmin("credit.adjust", "wallet", a.adminAdjustment))
+	protected.HandleFunc("GET /v1/admin/audit", a.requireAdmin("audit.read", "audit_log", a.listAudit))
+	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", a.requireAdmin("webhook.replay", "webhook_delivery", a.replayWebhook))
 	protected.HandleFunc("GET /v1/events", auth.Require("billing:read", a.events))
 	if a.auth != nil {
-		mux.Handle("/v1/", auth.Middleware(a.auth)(protected))
+		mux.Handle("/v1/", auth.MiddlewareWithHooks(a.auth, a.requestLimitHooks())(protected))
 	}
 	return requestLog(a.log, recoverer(mux))
 }
@@ -121,8 +133,8 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	if claims.OrgID != "" && claims.OrgID != in.OrganizationID {
-		writeError(w, 403, "organization mismatch")
+	if (claims.OrgID != in.OrganizationID || claims.App != in.Application) && !claims.Has("billing:link") {
+		writeError(w, 403, "identity mismatch")
 		return
 	}
 	tx, err := a.pool.Begin(r.Context())
@@ -184,6 +196,10 @@ func (a *API) createWallet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "account not accessible")
 		return
 	}
+	if !a.canAccessProduct(r, in.ProductID) {
+		writeError(w, 403, "product not accessible")
+		return
+	}
 	v, err := a.wallets.CreateWallet(r.Context(), in.AccountID, in.ProductID)
 	if err != nil {
 		writeDBError(w, err)
@@ -207,7 +223,7 @@ func (a *API) getWallet(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	if !a.canAccessAccount(r, v.AccountID) {
+	if !a.canAccessWallet(r, id) {
 		writeError(w, 403, "wallet not accessible")
 		return
 	}
@@ -336,7 +352,25 @@ func (a *API) canAccessWallet(r *http.Request, walletID uuid.UUID) bool {
 	return err == nil && found
 }
 
+func (a *API) canAccessProduct(r *http.Request, productID uuid.UUID) bool {
+	_, ok := auth.FromContext(r.Context())
+	if !ok {
+		return false
+	}
+	var slug string
+	if err := a.pool.QueryRow(r.Context(), `SELECT slug FROM products WHERE id=$1`, productID).Scan(&slug); err != nil {
+		return false
+	}
+	return canReadProductSlug(r, slug)
+}
+
+func canReadProductSlug(r *http.Request, slug string) bool {
+	claims, ok := auth.FromContext(r.Context())
+	return ok && (slug == claims.App || claims.Has("billing:link"))
+}
+
 func (a *API) events(w http.ResponseWriter, r *http.Request) {
+	claims, _ := auth.FromContext(r.Context())
 	accountID, err := a.accountIDForClaims(r.Context())
 	if err != nil {
 		writeError(w, http.StatusForbidden, "billing account not accessible")
@@ -349,28 +383,40 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 	}
 	after := int64(0)
 	if h := r.Header.Get("Last-Event-ID"); h != "" {
-		after, _ = strconv.ParseInt(h, 10, 64)
-	}
-	if after > 0 && after < 1<<62 {
-		var oldest *int64
-		if err := a.pool.QueryRow(r.Context(), `SELECT min(e.sequence) FROM outbox_events e WHERE
-			(e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w WHERE w.id=e.aggregate_id AND w.account_id=$1))
-			OR (e.aggregate_type='account' AND e.aggregate_id=$1)
-			OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.id=e.aggregate_id AND s.account_id=$1))`, accountID).Scan(&oldest); err != nil {
+		var parseErr error
+		after, parseErr = strconv.ParseInt(h, 10, 64)
+		if parseErr != nil || after <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid event cursor")
+			return
+		}
+		var exists, owned bool
+		if err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM outbox_events WHERE sequence=$1), EXISTS(SELECT 1 FROM outbox_events e WHERE e.sequence=$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id WHERE w.id=e.aggregate_id AND w.account_id=$2 AND (p.slug=$3 OR $4))) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=e.aggregate_id AND s.account_id=$2 AND (p.slug=$3 OR $4)))))`, after, accountID, claims.App, claims.Has("billing:link")).Scan(&exists, &owned); err != nil {
 			writeDBError(w, err)
 			return
 		}
-		if oldest == nil || after < *oldest {
+		if exists && !owned {
+			writeError(w, http.StatusForbidden, "event cursor not accessible")
+			return
+		}
+		if !exists {
 			writeError(w, http.StatusGone, "event history is no longer available; resynchronization required")
 			return
 		}
 	}
+	if !a.acquireSSE(accountID) {
+		writeError(w, http.StatusTooManyRequests, "too many event streams for billing account")
+		return
+	}
+	defer a.releaseSSE(accountID)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		rows, err := a.pool.Query(r.Context(), `SELECT e.sequence,e.event_type,e.payload FROM outbox_events e WHERE e.sequence>$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w WHERE w.id=e.aggregate_id AND w.account_id=$2)) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s WHERE s.id=e.aggregate_id AND s.account_id=$2))) ORDER BY e.sequence LIMIT 100`, after, accountID)
+		if claims.ExpiresAt != nil && !time.Now().Before(claims.ExpiresAt.Time) {
+			return
+		}
+		rows, err := a.pool.Query(r.Context(), `SELECT e.sequence,e.event_type,e.payload FROM outbox_events e WHERE e.sequence>$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id WHERE w.id=e.aggregate_id AND w.account_id=$2 AND (p.slug=$3 OR $4))) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=e.aggregate_id AND s.account_id=$2 AND (p.slug=$3 OR $4)))) ORDER BY e.sequence LIMIT 100`, after, accountID, claims.App, claims.Has("billing:link"))
 		if err != nil {
 			return
 		}
@@ -394,15 +440,94 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *API) acquireSSE(accountID uuid.UUID) bool {
+	a.sseMu.Lock()
+	defer a.sseMu.Unlock()
+	if a.sseActive[accountID] >= maxSSEConnectionsPerAccount {
+		return false
+	}
+	a.sseActive[accountID]++
+	return true
+}
+
+func (a *API) releaseSSE(accountID uuid.UUID) {
+	a.sseMu.Lock()
+	defer a.sseMu.Unlock()
+	a.sseActive[accountID]--
+	if a.sseActive[accountID] == 0 {
+		delete(a.sseActive, accountID)
+	}
+}
+
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	d := json.NewDecoder(r.Body)
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, 415, "Content-Type must be application/json")
+		return false
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, 400, "invalid JSON body")
+		return false
+	}
+	check := json.NewDecoder(bytes.NewReader(raw))
+	if err := rejectDuplicateJSONKeys(check, 0); err != nil {
+		writeError(w, 400, "invalid JSON body")
+		return false
+	}
+	if _, err := check.Token(); err != io.EOF {
+		writeError(w, 400, "invalid JSON body")
+		return false
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
-		writeError(w, 400, "invalid JSON: "+err.Error())
+		writeError(w, 400, "invalid JSON body")
 		return false
 	}
 	return true
+}
+
+func rejectDuplicateJSONKeys(d *json.Decoder, depth int) error {
+	if depth > 100 {
+		return errors.New("JSON nesting limit exceeded")
+	}
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	start, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch start {
+	case '{':
+		seen := map[string]bool{}
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok || seen[name] {
+				return errors.New("duplicate or invalid JSON key")
+			}
+			seen[name] = true
+			if err := rejectDuplicateJSONKeys(d, depth+1); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for d.More() {
+			if err := rejectDuplicateJSONKeys(d, depth+1); err != nil {
+				return err
+			}
+		}
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
+	_, err = d.Token()
+	return err
 }
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

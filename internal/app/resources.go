@@ -100,6 +100,15 @@ func (a *API) linkAccount(w http.ResponseWriter, r *http.Request) {
 	if in.Environment == "" {
 		in.Environment = "production"
 	}
+	claims, _ := auth.FromContext(r.Context())
+	callerEnvironment := claims.Environment
+	if callerEnvironment == "" {
+		callerEnvironment = "production"
+	}
+	if (in.Application != claims.App || in.OrganizationID != claims.OrgID || in.Environment != callerEnvironment) && !claims.Has("billing:link") {
+		writeError(w, 403, "target identity requires billing:link")
+		return
+	}
 	_, err = a.pool.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id,environment) VALUES($1,$2,$3,$4)`, id, in.Application, in.OrganizationID, in.Environment)
 	if err != nil {
 		writeDBError(w, err)
@@ -313,6 +322,10 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "plan is inactive")
 		return
 	}
+	if !a.canAccessProduct(r, productID) {
+		writeError(w, 403, "product not accessible")
+		return
+	}
 	var duplicate bool
 	if err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(
 		SELECT 1 FROM subscriptions s JOIN plans existing ON existing.id=s.plan_id
@@ -394,6 +407,10 @@ func (a *API) currentSubscription(w http.ResponseWriter, r *http.Request) {
 	if product == "" {
 		claims, _ := auth.FromContext(r.Context())
 		product = claims.App
+	}
+	if !canReadProductSlug(r, product) {
+		writeError(w, 403, "product not accessible")
+		return
 	}
 	err = a.pool.QueryRow(r.Context(), `SELECT s.id,s.plan_id,s.status,s.current_period_start,s.current_period_end,s.cancel_at_period_end
 		FROM subscriptions s JOIN plans p ON p.id=s.plan_id JOIN products pr ON pr.id=p.product_id
@@ -618,6 +635,10 @@ func (a *API) getEntitlements(w http.ResponseWriter, r *http.Request) {
 		claims, _ := auth.FromContext(r.Context())
 		product = claims.App
 	}
+	if !canReadProductSlug(r, product) {
+		writeError(w, 403, "product not accessible")
+		return
+	}
 	err = a.pool.QueryRow(r.Context(), `SELECT p.entitlements,s.status FROM subscriptions s JOIN plans p ON p.id=s.plan_id JOIN products pr ON pr.id=p.product_id WHERE s.account_id=$1 AND pr.slug=$2 ORDER BY s.created_at DESC LIMIT 1`, accountID, product).Scan(&raw, &status)
 	if err != nil {
 		writeDBError(w, err)
@@ -654,8 +675,12 @@ func (a *API) canAccessSubscription(r *http.Request, id uuid.UUID) bool {
 	if err != nil {
 		return false
 	}
+	claims, ok := auth.FromContext(r.Context())
+	if !ok {
+		return false
+	}
 	var found bool
-	err = a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM subscriptions WHERE id=$1 AND account_id=$2)`, id, account).Scan(&found)
+	err = a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=$1 AND s.account_id=$2 AND (p.slug=$3 OR $4))`, id, account, claims.App, claims.Has("billing:link")).Scan(&found)
 	return err == nil && found
 }
 
@@ -668,8 +693,8 @@ func appEvent(ctx context.Context, tx pgx.Tx, aggregateType string, aggregateID 
 	if err = tx.QueryRow(ctx, `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES($1,$2,$3,$4) RETURNING id`, aggregateType, aggregateID, eventType, raw).Scan(&eventID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url)
-		SELECT $1,e.target_url FROM webhook_endpoints e JOIN wallets w ON w.account_id=e.account_id JOIN products p ON p.id=w.product_id
+	_, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url,endpoint_id)
+		SELECT $1,e.target_url,e.id FROM webhook_endpoints e JOIN wallets w ON w.account_id=e.account_id JOIN products p ON p.id=w.product_id
 		WHERE w.id=$2 AND e.application=p.slug AND e.active ON CONFLICT DO NOTHING`, eventID, aggregateID)
 	return err
 }
@@ -683,7 +708,7 @@ func accountEvent(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, aggregate
 	if err = tx.QueryRow(ctx, `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES($1,$2,$3,$4) RETURNING id`, aggregateType, aggregateID, eventType, raw).Scan(&eventID); err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url) SELECT $1,target_url FROM webhook_endpoints WHERE account_id=$2 AND active ON CONFLICT DO NOTHING`, eventID, accountID)
+	_, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url,endpoint_id) SELECT $1,target_url,id FROM webhook_endpoints WHERE account_id=$2 AND active ON CONFLICT DO NOTHING`, eventID, accountID)
 	return err
 }
 

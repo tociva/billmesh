@@ -71,26 +71,35 @@ func (s *Service) Grant(ctx context.Context, walletID uuid.UUID, source, operati
 		return errors.New("grant amount must be positive")
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var grantID uuid.UUID
-		err := tx.QueryRow(ctx, `INSERT INTO credit_grants(wallet_id,source,operation_ref,amount,remaining,expires_at)
-			VALUES($1,$2,$3,$4,$4,$5) ON CONFLICT(operation_ref) DO NOTHING RETURNING id`, walletID, source, operationRef, amount, expiresAt).Scan(&grantID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, `UPDATE wallets SET available=available+$2 WHERE id=$1`, walletID, amount); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO credit_ledger(wallet_id,grant_id,operation_ref,kind,available_delta,reserved_delta) VALUES($1,$2,$3,'grant',$4,0)`, walletID, grantID, "grant:"+operationRef, amount); err != nil {
-			return err
-		}
-		if err = insertEvent(ctx, tx, "wallet", walletID, "credits.granted", map[string]any{"amount": amount, "operation_ref": operationRef}); err != nil {
-			return err
-		}
-		return insertThresholdEvents(ctx, tx, walletID, s.clock.Now())
+		return s.GrantInTx(ctx, tx, walletID, source, operationRef, amount, expiresAt)
 	})
+}
+
+// GrantInTx applies a grant inside the caller's transaction so an associated
+// audit entry can commit or roll back with the financial changes.
+func (s *Service) GrantInTx(ctx context.Context, tx pgx.Tx, walletID uuid.UUID, source, operationRef string, amount int64, expiresAt *time.Time) error {
+	if amount <= 0 {
+		return errors.New("grant amount must be positive")
+	}
+	var grantID uuid.UUID
+	err := tx.QueryRow(ctx, `INSERT INTO credit_grants(wallet_id,source,operation_ref,amount,remaining,expires_at)
+			VALUES($1,$2,$3,$4,$4,$5) ON CONFLICT(operation_ref) DO NOTHING RETURNING id`, walletID, source, operationRef, amount, expiresAt).Scan(&grantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE wallets SET available=available+$2 WHERE id=$1`, walletID, amount); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO credit_ledger(wallet_id,grant_id,operation_ref,kind,available_delta,reserved_delta) VALUES($1,$2,$3,'grant',$4,0)`, walletID, grantID, "grant:"+operationRef, amount); err != nil {
+		return err
+	}
+	if err = insertEvent(ctx, tx, "wallet", walletID, "credits.granted", map[string]any{"amount": amount, "operation_ref": operationRef}); err != nil {
+		return err
+	}
+	return insertThresholdEvents(ctx, tx, walletID, s.clock.Now())
 }
 
 func (s *Service) Reserve(ctx context.Context, walletID uuid.UUID, executionID string, seq int, amount int64, ttl time.Duration) (Reservation, error) {
@@ -343,8 +352,8 @@ func insertEvent(ctx context.Context, tx pgx.Tx, aggregateType string, aggregate
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url)
-		SELECT $1,e.target_url FROM webhook_endpoints e JOIN wallets w ON w.account_id=e.account_id JOIN products p ON p.id=w.product_id
+	_, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url,endpoint_id)
+		SELECT $1,e.target_url,e.id FROM webhook_endpoints e JOIN wallets w ON w.account_id=e.account_id JOIN products p ON p.id=w.product_id
 		WHERE w.id=$2 AND e.application=p.slug AND e.active ON CONFLICT DO NOTHING`, eventID, aggregateID)
 	return err
 }
@@ -386,8 +395,8 @@ func insertThresholdEvents(ctx context.Context, tx pgx.Tx, walletID uuid.UUID, n
 		if err := tx.QueryRow(ctx, `INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload) VALUES('wallet',$1,$2,$3) RETURNING id`, walletID, eventType, payload).Scan(&eventID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url)
-			SELECT $1,e.target_url FROM webhook_endpoints e JOIN wallets w ON w.account_id=e.account_id JOIN products p ON p.id=w.product_id
+		if _, err := tx.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,target_url,endpoint_id)
+			SELECT $1,e.target_url,e.id FROM webhook_endpoints e JOIN wallets w ON w.account_id=e.account_id JOIN products p ON p.id=w.product_id
 			WHERE w.id=$2 AND e.application=p.slug AND e.active ON CONFLICT DO NOTHING`, eventID, walletID); err != nil {
 			return err
 		}

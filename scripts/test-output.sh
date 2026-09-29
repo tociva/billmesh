@@ -133,8 +133,12 @@ else
 				continue
 			}
 			if (line == "PASS" || line == "FAIL" || line ~ /^coverage:/) continue
-			if (line ~ /^Benchmark[^[:space:]]*[[:space:]]+/) {
+			# A completed Go benchmark is reported as a result row rather than a
+			# "--- PASS:" record. Count that row as a successful case so benchmark-
+			# only suites do not misleadingly report zero passes.
+			if (line ~ /^Benchmark[^[:space:]]+[[:space:]]+[0-9]+[[:space:]]+/) {
 				print "  " cyan line reset
+				passed++; local_passed++
 				continue
 			}
 			if (line ~ /^[[:space:]]*$/) continue

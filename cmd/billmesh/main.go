@@ -46,6 +46,11 @@ func run() error {
 		}
 		return database.Migrate(ctx, cfg.DatabaseURL, command)
 	}
+	if os.Args[1] == "api" {
+		if err := validateAPIAuthConfig(cfg); err != nil {
+			return err
+		}
+	}
 	pool, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -53,11 +58,10 @@ func run() error {
 	defer pool.Close()
 	switch os.Args[1] {
 	case "api":
-		if cfg.OIDCIssuer == "" || cfg.OIDCAudience == "" || cfg.JWKSURL == "" {
-			return errors.New("OIDC_ISSUER, OIDC_AUDIENCE and JWKS_URL are required for api")
-		}
 		verifier := auth.NewJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.JWKSURL, nil)
-		server := &http.Server{Addr: cfg.HTTPAddr, Handler: app.NewAPI(pool, verifier, nil).Handler(), ReadHeaderTimeout: 5 * time.Second}
+		api := app.NewAPI(pool, verifier, nil)
+		api.ConfigureRequestLimits(cfg.AuthFailuresPerMinute, cfg.MutationRatePerSecond, cfg.MutationBurst)
+		server := newAPIServer(cfg.HTTPAddr, api.Handler())
 		go func() {
 			<-ctx.Done()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -76,6 +80,25 @@ func run() error {
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
 }
+
+func validateAPIAuthConfig(cfg config.Config) error {
+	if cfg.OIDCIssuer == "" || cfg.OIDCAudience == "" || cfg.JWKSURL == "" {
+		return errors.New("OIDC_ISSUER, OIDC_AUDIENCE and JWKS_URL are required for api")
+	}
+	return nil
+}
+
+func newAPIServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+}
+
 func healthcheck(url string) error {
 	client := http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(url)

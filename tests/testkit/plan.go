@@ -18,14 +18,34 @@ type PlanCase struct {
 
 func Cases(t testing.TB, prefix, kind string) []PlanCase {
 	t.Helper()
+	cases, err := cases(prefix, kind)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatalf("no %s/%s cases found in test-plan.md", prefix, kind)
+	}
+	return cases
+}
+
+func OptionalCases(t testing.TB, prefix, kind string) []PlanCase {
+	t.Helper()
+	cases, err := cases(prefix, kind)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return cases
+}
+
+func cases(prefix, kind string) ([]PlanCase, error) {
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
-		t.Fatal("resolve testkit source path")
+		return nil, fmt.Errorf("resolve testkit source path")
 	}
 	path := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "test-plan.md"))
 	file, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("open test plan: %v", err)
+		return nil, fmt.Errorf("open test plan: %w", err)
 	}
 	defer file.Close()
 
@@ -70,15 +90,12 @@ func Cases(t testing.TB, prefix, kind string) []PlanCase {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		t.Fatalf("read test plan: %v", err)
+		return nil, fmt.Errorf("read test plan: %w", err)
 	}
 	if current != nil && current.Description != "" && (kind == "" || current.Kind == kind) {
 		cases = append(cases, *current)
 	}
-	if len(cases) == 0 {
-		t.Fatalf("no %s/%s cases found in test-plan.md", prefix, kind)
-	}
-	return cases
+	return cases, nil
 }
 
 func RunCases(t *testing.T, prefix, kind string, run func(*testing.T, PlanCase)) {

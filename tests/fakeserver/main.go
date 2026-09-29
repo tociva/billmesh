@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -22,6 +25,8 @@ type server struct {
 	webhooks      []map[string]any
 	failureCode   int
 	receiverDelay time.Duration
+	ssrfHits      int
+	orderCalls    int
 }
 
 func main() {
@@ -35,11 +40,14 @@ func main() {
 	mux.HandleFunc("POST /test/token", s.token)
 	mux.HandleFunc("POST /test/rotate-key", s.rotateKey)
 	mux.HandleFunc("POST /v1/orders", s.order)
+	mux.HandleFunc("GET /test/order-count", s.orderCount)
 	mux.HandleFunc("GET /v1/payments/{id}", s.payment)
 	mux.HandleFunc("POST /receivers/{app}", s.receiver)
 	mux.HandleFunc("GET /test/webhooks", s.listWebhooks)
 	mux.HandleFunc("POST /test/failure", s.setFailure)
 	mux.HandleFunc("POST /test/receiver-delay", s.setReceiverDelay)
+	mux.HandleFunc("POST /test/ssrf-hit", s.ssrfHit)
+	mux.HandleFunc("GET /test/ssrf-hits", s.listSSRFHits)
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
 		addr = ":8090"
@@ -56,16 +64,19 @@ func (s *server) jwks(w http.ResponseWriter, _ *http.Request) {
 }
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Subject          string   `json:"sub"`
-		OrgID            string   `json:"org_id"`
-		App              string   `json:"app"`
-		Permissions      []string `json:"permissions"`
-		Issuer           string   `json:"issuer"`
-		Audience         string   `json:"audience"`
-		ExpiresInSeconds *int64   `json:"expires_in_seconds"`
-		UnknownKey       bool     `json:"unknown_key"`
-		Environment      string   `json:"environment"`
-		TokenUse         string   `json:"token_use"`
+		Subject          string         `json:"sub"`
+		OrgID            string         `json:"org_id"`
+		App              string         `json:"app"`
+		Permissions      []string       `json:"permissions"`
+		Issuer           string         `json:"issuer"`
+		Audience         string         `json:"audience"`
+		ExpiresInSeconds *int64         `json:"expires_in_seconds"`
+		UnknownKey       bool           `json:"unknown_key"`
+		Environment      string         `json:"environment"`
+		TokenUse         string         `json:"token_use"`
+		OmitTokenUse     bool           `json:"omit_token_use"`
+		OmitClaims       []string       `json:"omit_claims"`
+		ClaimOverrides   map[string]any `json:"claim_overrides"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if in.Subject == "" {
@@ -83,9 +94,19 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if in.ExpiresInSeconds != nil {
 		expires = *in.ExpiresInSeconds
 	}
+	tokenUse := in.TokenUse
+	if tokenUse == "" {
+		tokenUse = "access"
+	}
 	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "permissions": in.Permissions}
-	if in.TokenUse != "" {
-		claims["token_use"] = in.TokenUse
+	if !in.OmitTokenUse {
+		claims["token_use"] = tokenUse
+	}
+	for _, name := range in.OmitClaims {
+		delete(claims, name)
+	}
+	for name, value := range in.ClaimOverrides {
+		claims[name] = value
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	s.mu.Lock()
@@ -119,6 +140,7 @@ func (s *server) rotateKey(w http.ResponseWriter, _ *http.Request) {
 }
 func (s *server) order(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	s.orderCalls++
 	failureCode := s.failureCode
 	s.mu.Unlock()
 	if failureCode != 0 {
@@ -135,18 +157,34 @@ func (s *server) order(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, map[string]any{"id": "order_" + time.Now().UTC().Format("20060102150405.000000000"), "status": "created", "currency": request.Currency, "amount": request.Amount})
 }
+func (s *server) orderCount(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	count := s.orderCalls
+	s.mu.Unlock()
+	write(w, map[string]any{"count": count})
+}
 func (s *server) payment(w http.ResponseWriter, r *http.Request) {
 	write(w, map[string]any{"id": r.PathValue("id"), "order_id": "order_test_001", "status": "captured", "currency": "INR", "amount": 50000})
 }
 func (s *server) receiver(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+	raw, _ := io.ReadAll(r.Body)
 	var payload any
-	_ = json.NewDecoder(r.Body).Decode(&payload)
+	_ = json.NewDecoder(bytes.NewReader(raw)).Decode(&payload)
 	s.mu.Lock()
 	code := s.failureCode
 	delay := s.receiverDelay
-	s.webhooks = append(s.webhooks, map[string]any{"app": r.PathValue("app"), "event_id": r.Header.Get("X-Billmesh-Event-ID"), "payload": payload})
+	s.webhooks = append(s.webhooks, map[string]any{"app": r.PathValue("app"), "event_id": r.Header.Get("X-Billmesh-Event-ID"), "event_type": r.Header.Get("X-Billmesh-Event-Type"), "signature": r.Header.Get("X-Billmesh-Signature"), "raw_body": string(raw), "payload": payload})
 	s.mu.Unlock()
+	if r.PathValue("app") == "redirect-private" {
+		addresses, err := net.LookupIP("mock-external")
+		if err != nil || len(addresses) == 0 {
+			http.Error(w, "resolve redirect", 500)
+			return
+		}
+		http.Redirect(w, r, "http://"+net.JoinHostPort(addresses[0].String(), "8090")+"/test/ssrf-hit", http.StatusTemporaryRedirect)
+		return
+	}
 	if delay > 0 {
 		time.Sleep(delay)
 	}
@@ -155,6 +193,19 @@ func (s *server) receiver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) ssrfHit(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	s.ssrfHits++
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) listSSRFHits(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	write(w, map[string]int{"hits": s.ssrfHits})
 }
 func (s *server) listWebhooks(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()

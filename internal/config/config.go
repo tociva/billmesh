@@ -11,13 +11,16 @@ import (
 )
 
 type Config struct {
-	HTTPAddr       string
-	DatabaseURL    string
-	OIDCIssuer     string
-	OIDCAudience   string
-	JWKSURL        string
-	WebhookTimeout time.Duration
-	WorkerInterval time.Duration
+	HTTPAddr              string
+	DatabaseURL           string
+	OIDCIssuer            string
+	OIDCAudience          string
+	JWKSURL               string
+	WebhookTimeout        time.Duration
+	WorkerInterval        time.Duration
+	AuthFailuresPerMinute int
+	MutationRatePerSecond int
+	MutationBurst         int
 }
 
 func Load() (Config, error) {
@@ -49,7 +52,28 @@ func Load() (Config, error) {
 	if c.WorkerInterval, err = duration("WORKER_INTERVAL", time.Second); err != nil {
 		return Config{}, err
 	}
+	if c.AuthFailuresPerMinute, err = positiveInt("AUTH_FAILURES_PER_MINUTE", 30); err != nil {
+		return Config{}, err
+	}
+	if c.MutationRatePerSecond, err = positiveInt("MUTATION_RATE_PER_SECOND", 10); err != nil {
+		return Config{}, err
+	}
+	if c.MutationBurst, err = positiveInt("MUTATION_BURST", 50); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+func positiveInt(key string, fallback int) (int, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return value, nil
 }
 
 func value(key, fallback string) string {

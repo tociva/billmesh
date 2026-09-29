@@ -13,15 +13,17 @@ import (
 
 func TestJourney1DaybookWithoutTaskmeshPremium(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	token := h.IssueToken(t, "journey-1", "daybook", []string{"billing:read", "billing:write", "credits:reserve"}, nil)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey One", "external_ref": testkit.Unique("j1"), "application": "daybook", "organization_id": "journey-1"}, token)
+	org := testkit.Unique("journey-1")
+	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "billing:link", "credits:reserve"}, nil)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey One", "external_ref": testkit.Unique("j1"), "application": "daybook", "organization_id": org}, token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"product": "daybook", "plan": "daybook-paid", "payment_status": "verified"}, token)
-	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/account-links", map[string]any{"application": "taskmesh", "organization_id": "journey-1-taskmesh"}, token)
+	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/account-links", map[string]any{"application": "taskmesh", "organization_id": testkit.Unique("journey-1-taskmesh")}, token)
 }
 func TestJourney2ExhaustionAndTopUp(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	token := h.IssueToken(t, "journey-2", "daybook", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
-	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Two", "external_ref": testkit.Unique("j2"), "application": "daybook", "organization_id": "journey-2"}, token)
+	org := testkit.Unique("journey-2")
+	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
+	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Two", "external_ref": testkit.Unique("j2"), "application": "daybook", "organization_id": org}, token)
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, accountRaw).ID
@@ -31,21 +33,24 @@ func TestJourney2ExhaustionAndTopUp(t *testing.T) {
 	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack": "credits-500"}, token)
 	order := testkit.Decode[struct {
 		Order struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			Amount   int64  `json:"amount"`
+			Currency string `json:"currency"`
 		} `json:"order"`
 	}](t, orderRaw)
 	require.NotEmpty(t, order.Order.ID)
-	require.Equal(t, http.StatusNoContent, h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured"}, "test-webhook-secret"))
+	require.Equal(t, http.StatusNoContent, h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}, "test-webhook-secret"))
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 1}, token)
 }
 func TestJourney3IndependentTaskmeshSubscription(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	token := h.IssueToken(t, "journey-3", "taskmesh", []string{"billing:read", "billing:write", "credits:reserve"}, nil)
-	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Three", "external_ref": testkit.Unique("j3"), "application": "taskmesh", "organization_id": "journey-3"}, token)
+	org := testkit.Unique("journey-3")
+	token := h.IssueToken(t, org, "taskmesh", []string{"billing:read", "billing:write", "billing:link", "credits:reserve"}, nil)
+	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Three", "external_ref": testkit.Unique("j3"), "application": "taskmesh", "organization_id": org}, token)
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, accountRaw).ID
-	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "daybook", "organization_id": "journey-3-daybook"}, token)
+	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "daybook", "organization_id": testkit.Unique("journey-3-daybook")}, token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "daybook", "plan": "daybook-free"}, token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "taskmesh", "plan": "professional", "payment_status": "verified"}, token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"context": "standalone", "credits": 10}, token)
@@ -54,8 +59,9 @@ func TestJourney3IndependentTaskmeshSubscription(t *testing.T) {
 }
 func TestJourney4ConcurrentExecution(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	token := h.IssueToken(t, "journey-4", "daybook", []string{"billing:read", "billing:write", "credits:grant", "credits:reserve", "credits:settle"}, nil)
-	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Four", "external_ref": testkit.Unique("j4"), "application": "daybook", "organization_id": "journey-4"}, token)
+	org := testkit.Unique("journey-4")
+	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "credits:grant", "credits:reserve", "credits:settle"}, nil)
+	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Four", "external_ref": testkit.Unique("j4"), "application": "daybook", "organization_id": org}, token)
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, accountRaw).ID

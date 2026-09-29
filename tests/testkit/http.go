@@ -2,17 +2,22 @@ package testkit
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type HTTP struct {
@@ -26,7 +31,32 @@ func NewHTTP(t *testing.T) *HTTP {
 	if base == "" {
 		t.Fatal("BILLMESH_BASE_URL is required")
 	}
-	return &HTTP{BaseURL: base, MockURL: strings.TrimRight(os.Getenv("MOCK_SERVER_URL"), "/"), Token: os.Getenv("BILLMESH_TEST_TOKEN"), Client: &http.Client{Timeout: 5 * time.Second}}
+	client := &http.Client{Timeout: 5 * time.Second}
+	if trace := os.Getenv("BILLMESH_ROUTE_TRACE_FILE"); trace != "" {
+		parsed, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.Transport = &routeTraceTransport{baseHost: parsed.Host, traceFile: trace, next: http.DefaultTransport}
+	}
+	return &HTTP{BaseURL: base, MockURL: strings.TrimRight(os.Getenv("MOCK_SERVER_URL"), "/"), Token: os.Getenv("BILLMESH_TEST_TOKEN"), Client: client}
+}
+
+type routeTraceTransport struct {
+	baseHost, traceFile string
+	next                http.RoundTripper
+}
+
+func (t *routeTraceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if err == nil && req.URL.Host == t.baseHost {
+		file, openErr := os.OpenFile(t.traceFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if openErr == nil {
+			_, _ = fmt.Fprintf(file, "%s %d %s\n", req.Method, resp.StatusCode, req.URL.Path)
+			_ = file.Close()
+		}
+	}
+	return resp, err
 }
 
 func (h *HTTP) JSON(t *testing.T, method, path string, body any, token string) (int, []byte, http.Header) {
@@ -75,6 +105,11 @@ func (h *HTTP) SignedWebhook(t *testing.T, path string, body any, secret string)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return h.SignedWebhookRaw(t, path, raw, secret)
+}
+
+func (h *HTTP) SignedWebhookRaw(t *testing.T, path string, raw []byte, secret string) int {
+	t.Helper()
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(raw)
 	req, err := http.NewRequest(http.MethodPost, h.BaseURL+path, bytes.NewReader(raw))
@@ -120,6 +155,31 @@ func (h *HTTP) IssueToken(t *testing.T, org, app string, permissions []string, o
 		t.Fatal("fake issuer returned an empty token")
 	}
 	return result.AccessToken
+}
+
+func tamperJWTPayload(t *testing.T, raw string, patch map[string]any) string {
+	t.Helper()
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		t.Fatalf("test issuer returned malformed token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode token payload: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("unmarshal token payload: %v", err)
+	}
+	for key, value := range patch {
+		claims[key] = value
+	}
+	payload, err = json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal tampered token payload: %v", err)
+	}
+	parts[1] = base64.RawURLEncoding.EncodeToString(payload)
+	return strings.Join(parts, ".")
 }
 
 func Decode[T any](t *testing.T, raw []byte) T {
@@ -183,6 +243,9 @@ func ExerciseEndpointContract(t *testing.T, tc PlanCase, endpoint Endpoint) {
 func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token string) bool {
 	t.Helper()
 	switch tc.ID {
+	case "PAY-005", "PAY-006", "PAY-007":
+		exercisePaymentWebhookSignatureCase(t, h, tc.ID, org, token)
+		return true
 	case "ENT-004":
 		account := createFixtureAccount(t, h, org, token)
 		createFixtureSubscription(t, h, account, token)
@@ -209,8 +272,50 @@ func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token st
 	}
 }
 
+func exercisePaymentWebhookSignatureCase(t *testing.T, h *HTTP, id, org, token string) {
+	t.Helper()
+	account := createFixtureAccount(t, h, org, token)
+	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
+	order := Decode[struct {
+		PaymentID string `json:"payment_id"`
+		Order     struct {
+			ID       string `json:"id"`
+			Amount   int64  `json:"amount"`
+			Currency string `json:"currency"`
+		} `json:"order"`
+	}](t, orderRaw)
+	event := map[string]any{"id": Unique("payment-event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}
+
+	switch id {
+	case "PAY-005":
+		if status := h.SignedWebhook(t, "/v1/payments/webhook", event, "test-webhook-secret"); status != http.StatusNoContent {
+			t.Fatalf("%s: want 204 for a valid signed payment webhook, got %d", id, status)
+		}
+		raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, token)
+		if !strings.Contains(string(raw), order.PaymentID) || !strings.Contains(string(raw), `"status":"captured"`) {
+			t.Fatalf("%s: valid webhook did not capture payment %s: %s", id, order.PaymentID, raw)
+		}
+	case "PAY-006":
+		if status := h.SignedWebhook(t, "/v1/payments/webhook", event, "wrong-secret"); status != http.StatusUnauthorized {
+			t.Fatalf("%s: want 401 for an invalid payment webhook signature, got %d", id, status)
+		}
+		raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, token)
+		if strings.Contains(string(raw), `"status":"captured"`) {
+			t.Fatalf("%s: invalid webhook signature changed payment state: %s", id, raw)
+		}
+	case "PAY-007":
+		if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", []byte(`{"id":`), "test-webhook-secret"); status != http.StatusBadRequest {
+			t.Fatalf("%s: want 400 for a malformed signed payment webhook body, got %d", id, status)
+		}
+		raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, token)
+		if strings.Contains(string(raw), `"status":"captured"`) {
+			t.Fatalf("%s: malformed webhook body changed payment state: %s", id, raw)
+		}
+	}
+}
+
 func allPermissions() []string {
-	return []string{"billing:read", "billing:write", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"}
+	return []string{"billing:read", "billing:write", "billing:link", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"}
 }
 
 func AllPermissions() []string { return allPermissions() }
@@ -419,23 +524,56 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		owner := h.IssueToken(t, org, "daybook", permissions, nil)
 		account := createFixtureAccount(t, h, org, owner)
 		wallet := createFundedWallet(t, h, account, owner)
+		subscription := createFixtureSubscription(t, h, account, owner)
+		reservation := reserveFixture(t, h, wallet, owner)
+		raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts/"+account+"/installations", map[string]any{"application": "taskmesh", "organization_id": org}, owner)
+		installation := Decode[struct {
+			ID string `json:"id"`
+		}](t, raw).ID
 		other := h.IssueToken(t, Unique("other-org"), "daybook", permissions, nil)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/accounts/"+account, nil, other)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/wallets/"+wallet, nil, other)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/wallets/"+wallet+"/reservations", map[string]any{"execution_id": Unique("nested"), "operation_seq": 0, "amount": 1}, other)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/reservations/"+reservation+"/settle", map[string]any{"actual": 1}, other)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, other)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/installations/"+installation+"/revoke", nil, other)
 		return
 	case "AUTH-002":
 	case "AUTH-003":
 		overrides["expires_in_seconds"] = -60
 		token = h.IssueToken(t, org, "daybook", permissions, overrides)
 	case "AUTH-004":
-		overrides["unknown_key"] = true
-		token = h.IssueToken(t, org, "daybook", permissions, overrides)
+		unknown := h.IssueToken(t, org, "daybook", permissions, map[string]any{"unknown_key": true})
+		h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, path, nil, unknown)
+		token = tamperJWTPayload(t, h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil), map[string]any{"permissions": []string{"billing:admin"}})
 	case "AUTH-005":
 		overrides["issuer"] = "https://untrusted.invalid"
 		token = h.IssueToken(t, org, "daybook", permissions, overrides)
 	case "AUTH-006":
 		overrides["audience"] = "wrong-audience"
 		token = h.IssueToken(t, org, "daybook", permissions, overrides)
-	case "AUTH-010", "AUTH-013", "AUTH-015":
+	case "AUTH-009":
+		service := h.IssueToken(t, org, "daybook", []string{"billing:read"}, map[string]any{"sub": "service:metering-worker"})
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, service)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/admin/audit", nil, service)
+		owner := h.IssueToken(t, org, "daybook", allPermissions(), nil)
+		account := createFixtureAccount(t, h, org, owner)
+		wallet := createFundedWallet(t, h, account, owner)
+		runtime := h.IssueToken(t, org, "daybook", []string{"credits:reserve", "credits:settle"}, map[string]any{"sub": "service:runtime"})
+		reservationRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/wallets/"+wallet+"/reservations", map[string]any{"execution_id": Unique("service-execution"), "amount": 1}, runtime)
+		reservation := Decode[struct {
+			ID string `json:"id"`
+		}](t, reservationRaw).ID
+		h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/reservations/"+reservation+"/settle", map[string]any{"actual": 1}, runtime)
+		return
+	case "AUTH-010":
+		service := h.IssueToken(t, org, "daybook", []string{"credits:reserve"}, map[string]any{"sub": "service:runtime"})
+		account := createFixtureAccount(t, h, org, h.IssueToken(t, org, "daybook", permissions, nil))
+		wallet := createFundedWallet(t, h, account, h.IssueToken(t, org, "daybook", permissions, nil))
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, service)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/admin/adjustments", map[string]any{"wallet_id": wallet, "amount": 1, "reason": "forbidden"}, service)
+		return
+	case "AUTH-013":
 		token = h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
 		path = "/v1/admin/audit"
 	case "AUTH-008":
@@ -466,13 +604,59 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	case "AUTH-016":
 		staging := h.IssueToken(t, org, "daybook", permissions, map[string]any{"environment": "staging"})
 		account := createFixtureAccount(t, h, org, staging)
+		wallet := createFundedWallet(t, h, account, staging)
+		subscription := createFixtureSubscription(t, h, account, staging)
 		production := h.IssueToken(t, org, "daybook", permissions, map[string]any{"environment": "production"})
 		h.RequireStatus(t, 403, http.MethodGet, "/v1/accounts/"+account, nil, production)
+		h.RequireStatus(t, 403, http.MethodGet, "/v1/wallets/"+wallet, nil, production)
+		h.RequireStatus(t, 403, http.MethodPost, "/v1/wallets/"+wallet+"/grants", map[string]any{"source": "test", "operation_ref": Unique("cross-env"), "amount": 1}, production)
+		h.RequireStatus(t, 403, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, production)
+		h.RequireStatus(t, 404, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "cross-env"}, production)
+		for _, list := range []string{"/v1/payments", "/v1/invoices", "/v1/webhooks", "/v1/usage-events", "/v1/admin/audit"} {
+			h.RequireStatus(t, http.StatusNotFound, http.MethodGet, list, nil, production)
+		}
+		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/events", nil, production)
+		link := map[string]any{"application": "daybook", "organization_id": org, "environment": "production"}
+		withoutLinkPermission := h.IssueToken(t, org, "daybook", []string{"billing:write", "billing:read"}, map[string]any{"environment": "staging"})
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts/"+account+"/links", link, withoutLinkPermission)
+		raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/"+account, nil, staging)
+		if !strings.Contains(string(raw), account) {
+			t.Fatalf("%s: staging owner could not read its own account: %s", tc.ID, raw)
+		}
+		return
+	case "AUTH-014":
+		writer := h.IssueToken(t, org, "daybook", permissions, nil)
+		account := createFixtureAccount(t, h, org, writer)
+		viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, viewer)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/"+account, nil, viewer)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, viewer)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/invoices", nil, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts", map[string]any{"name": "viewer write", "external_ref": Unique("viewer"), "application": "daybook", "organization_id": org}, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "viewer"}, viewer)
+		return
+	case "AUTH-015":
+		admin := h.IssueToken(t, org, "daybook", permissions, nil)
+		account := createFixtureAccount(t, h, org, admin)
+		product := fixtureProduct(t, h, "daybook", admin)
+		subscription := createFixtureSubscription(t, h, account, admin)
+		runtime := h.IssueToken(t, org, "daybook", []string{"credits:reserve", "credits:settle"}, nil)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/plans", map[string]any{"product_id": product, "slug": Unique("runtime-plan"), "name": "Runtime Plan", "price_minor": 100, "currency": "INR", "included_credits": 10, "billing_interval": "monthly"}, runtime)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{"plan": "daybook-pro"}, runtime)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, runtime)
 		return
 	default:
 		token = h.IssueToken(t, org, "daybook", permissions, nil)
 	}
 	status, raw, _ := h.JSON(t, http.MethodGet, path, nil, token)
+	if tc.ID == "AUTH-008" {
+		deadline := time.Now().Add(2 * time.Second)
+		for status == http.StatusUnauthorized && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			status, raw, _ = h.JSON(t, http.MethodGet, path, nil, token)
+		}
+	}
 	want := 200
 	if tc.ID == "AUTH-002" || tc.ID == "AUTH-003" || tc.ID == "AUTH-004" || tc.ID == "AUTH-005" || tc.ID == "AUTH-006" || tc.ID == "AUTH-017" {
 		want = 401
@@ -539,12 +723,13 @@ func ExerciseSSEContract(t *testing.T, tc PlanCase) {
 	description := strings.ToLower(tc.Description)
 	unauthenticated := strings.Contains(description, "unauthenticated")
 	token := h.Token
+	account := ""
 	if unauthenticated {
 		token = ""
 	} else if token == "" && h.MockURL != "" {
 		org := strings.ToLower(tc.ID) + "-" + Unique("sse-org")
 		token = h.IssueToken(t, org, "daybook", allPermissions(), nil)
-		createFixtureAccount(t, h, org, token)
+		account = createFixtureAccount(t, h, org, token)
 	}
 	req, err := http.NewRequest(http.MethodGet, h.BaseURL+"/v1/events", nil)
 	if err != nil {
@@ -554,7 +739,20 @@ func ExerciseSSEContract(t *testing.T, tc PlanCase) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if strings.Contains(description, "resume") || strings.Contains(description, "reconnect") || strings.Contains(description, "missed") {
-		req.Header.Set("Last-Event-ID", "9223372036854775807")
+		if account == "" {
+			t.Fatal("SSE replay case needs a fixture account")
+		}
+		subscription := createFixtureSubscription(t, h, account, token)
+		pool, err := pgxpool.New(context.Background(), os.Getenv("BILLMESH_E2E_DATABASE_URL"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		var sequence int64
+		if err := pool.QueryRow(context.Background(), `SELECT sequence FROM outbox_events WHERE aggregate_type='subscription' AND aggregate_id=$1 ORDER BY sequence DESC LIMIT 1`, subscription).Scan(&sequence); err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Last-Event-ID", fmt.Sprint(sequence))
 	}
 	resp, err := h.Client.Do(req)
 	if err != nil {

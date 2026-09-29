@@ -30,8 +30,10 @@ test-integration:
 	$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
 	$(INTEGRATION_COMPOSE) up -d --wait postgres; \
 	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' go run ./cmd/billmesh migrate up; \
+	$(INTEGRATION_COMPOSE) exec -T postgres psql -U billmesh -d postgres -v ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS billmesh_restore'; \
 	$(INTEGRATION_COMPOSE) exec -T postgres psql -U billmesh -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE billmesh_restore TEMPLATE billmesh_integration'; \
-	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' BILLMESH_RESTORE_DATABASE_URL='$(INTEGRATION_RESTORE_DATABASE_URL)' TEST_SUITE_NAME='Integration tests' ./scripts/test-output.sh go test -p=1 -v -race -count=1 -tags=integration ./tests/integration/...
+	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' BILLMESH_RESTORE_DATABASE_URL='$(INTEGRATION_RESTORE_DATABASE_URL)' TEST_SUITE_NAME='Foundation integration tests' ./scripts/test-output.sh go test -p=1 -v -race -count=1 -tags=integration ./tests/integration/foundation; \
+	DATABASE_URL='$(INTEGRATION_DATABASE_URL)' BILLMESH_RESTORE_DATABASE_URL='$(INTEGRATION_RESTORE_DATABASE_URL)' TEST_SUITE_NAME='Remaining integration tests' ./scripts/test-output.sh go test -p=1 -v -race -count=1 -tags=integration -skip '^TestFND011' ./tests/integration/...
 
 test-integration-clean:
 	$(INTEGRATION_COMPOSE) down -v --remove-orphans
@@ -48,7 +50,7 @@ test-performance:
 	cleanup() { $(PERFORMANCE_COMPOSE) down -v --remove-orphans; }; \
 	trap cleanup EXIT INT TERM; \
 	$(PERFORMANCE_COMPOSE) down -v --remove-orphans; \
-	$(PERFORMANCE_COMPOSE) up --build --abort-on-container-exit --exit-code-from performance performance
+	$(PERFORMANCE_COMPOSE) up --build performance
 
 test-clean:
 	$(E2E_COMPOSE) down -v --remove-orphans

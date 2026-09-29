@@ -3462,3 +3462,72 @@ Required before scaling or changing deployment topology
 The most important release gate for Billmesh is financial correctness, not simply achieving a high unit-test coverage percentage.
 
 Every P0 scenario should pass against real PostgreSQL, including concurrency, rollback, duplicate webhook, and repeated settlement tests.
+
+## Recovered executable cases
+
+These cases are exercised by the current test suites and were omitted from the checklist above.
+
+| ID | Type | Test case |
+| --- | --- | --- |
+| ACC-010 | I | Keep identical external organization IDs separate across applications. |
+| AUTH-017 | E | Reject an OIDC ID token presented as an API access token. |
+| AUTH-018 | E | Reject a valid service token that lacks permission for the requested billing operation. |
+| AUTH-019 | E | Reject requests that manipulate nested resource IDs to access another billing account. |
+| FND-011 | I | Preserve subscriptions, ledger entries, and pending reservations through backup and restore. |
+| FND-012 | I | Keep schema migrations compatible with the supported deployment sequence. |
+| INST-001 | E | Reject workflow execution using a forged or nonexistent installation ID. |
+| INST-002 | E | Reject new executions after the application installation is revoked. |
+| INST-003 | E | Reject an installation whose Daybook organization does not match the authorized billing account. |
+| INST-004 | E | Prevent the caller from changing the execution billing source to another wallet. |
+| INST-005 | E | Preserve the defined settlement behavior when an installation is revoked during an active workflow. |
+| INV-009 | I | Reconcile invoice totals with subscription, credit purchase, and payment records. |
+| LIM-011 | I | Re-arm a low-balance warning after top-up and emit it once on a new crossing. |
+| LIM-012 | E | Apply policy when a long-running execution exhausts credits mid-process. |
+| LIVE-013 | E | Reject SSE replay using an event ID belonging to another billing account. |
+| LIVE-014 | E | Enforce session expiration for an already connected SSE client. |
+| LIVE-015 | E | Return the resynchronization response when an SSE event is no longer retained. |
+| LIVE-016 | E | Preserve SSE heartbeat and reconnection behavior through the reverse proxy. |
+| MTR-018 | I | Reject an existing event ID submitted again with different usage data. |
+| MTR-019 | E | Prevent charging an execution through both reservation settlement and a usage event. |
+| MTR-020 | I | Attribute delayed usage to the correct period without changing a finalized period. |
+| MTR-021 | E | Enforce batch atomicity when valid and invalid usage events are submitted together. |
+| MTR-022 | I | Scope usage-event deduplication across products, tenants, and environments. |
+| MTR-023 | E | Reject usage whose execution or billing context cannot be authenticated. |
+| MTR-024 | E | Apply policy to future-dated and excessively late usage events. |
+| MTR-025 | I | Handle out-of-order incremental usage updates without lost or duplicate consumption. |
+| MTR-026 | E | Reject oversized or invalid usage metadata without affecting other customers. |
+| PAY-021 | E | Reject a signed payment event whose amount or currency differs from the order. |
+| PAY-022 | E | Prevent a payment for one billing account from crediting another account wallet. |
+| PAY-023 | E | Reconcile a capture received after checkout timed out and was retried. |
+| PAY-024 | I | Prevent concurrent checkout requests from creating duplicate credit grants. |
+| PAY-025 | E | Prevent a delayed capture from reversing an already processed refund. |
+| PAY-026 | E | Handle provider rate limits and outages without duplicating payment orders. |
+| PAY-027 | E | Reject a signed webhook for an unknown payment operation. |
+| RES-022 | I | Return the original reservation for an identical idempotent retry without reserving credits twice. |
+| RES-023 | I | Prevent concurrent settlement and release from producing contradictory ledger movements. |
+| RES-024 | E | Reject settlement above the reserved amount unless an authorized extension succeeds. |
+| RES-025 | I | Avoid a second reservation when a successful commit is retried after a lost response. |
+| RES-026 | I | Preserve spendable balance during simultaneous top-up, expiration, and reservation operations. |
+| RES-027 | I | Apply the configured policy when credits expire while an active reservation uses them. |
+| SUB-021 | I | Resolve simultaneous cancellation and renewal without contradictory subscription states. |
+| SUB-022 | E | Preserve entitlement state when a subscription upgrade payment fails. |
+| SUB-023 | E | Prevent a late renewal notification from reactivating a cancelled subscription. |
+| SUB-024 | I | Allocate included credits exactly once when renewal confirmation is retried. |
+| SUB-026 | I | Prevent duplicate plan changes when a request is retried. |
+| SUB-027 | E | Preserve included and purchased credit treatment after a plan change. |
+| SUB-028 | E | Resolve out-of-order cancellation, payment, and renewal events correctly. |
+| TEST-002 | E | Verify E2E tests use the actual API and worker rather than mocked application logic. |
+| TEST-004 | E | Prevent fixture and database state from leaking between independent scenarios. |
+| WAL-019 | I | Reserve credits across multiple grants when one grant cannot cover the requested amount. |
+| WAL-020 | I | Refund consumed purchased credits without silently creating an invalid negative balance. |
+| WAL-021 | I | Recalculate wallet balances from grants, ledger entries, and reservations and detect inconsistencies. |
+| WAL-023 | I | Preserve purchased credits during a concurrent top-up and allowance reset. |
+| WAL-024 | I | Apply deterministic allocation order when grants expire at the same time. |
+| WRK-011 | I | Prevent multiple workers from allocating the same recurring grant. |
+| WRK-012 | I | Recover after commit when a worker crashes before acknowledging its job. |
+| WH-019 | I | Do not create a deliverable webhook for a rolled-back billing transaction. |
+| WH-020 | E | Reject webhook destinations using private, loopback, or metadata-service addresses. |
+| WH-021 | E | Accept active webhook signing secrets during rotation and reject retired secrets. |
+| WH-022 | E | Prevent a webhook endpoint from receiving another tenant billing events. |
+| WH-023 | E | Honor webhook retry policy when a destination returns HTTP 429. |
+| WH-024 | E | Suspend delivery to a permanently disabled webhook endpoint according to policy. |
