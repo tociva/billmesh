@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,29 @@ type Config struct {
 	AuthFailuresPerMinute int
 	MutationRatePerSecond int
 	MutationBurst         int
+	BFF                   BFFConfig
+}
+
+type BFFConfig struct {
+	Enabled                bool
+	AppOrigin              string
+	Issuer                 string
+	ClientID               string
+	ClientSecret           string
+	Audience               string
+	Scope                  string
+	RedirectURI            string
+	PostLogoutRedirectURI  string
+	StandaloneLogoutURI    string
+	SessionEncryptionKeys  string
+	SessionIdleTTL         time.Duration
+	SessionAbsoluteTTL     time.Duration
+	LoginTTL               time.Duration
+	LogoutTTL              time.Duration
+	RefreshSkew            time.Duration
+	ReturnPathPrefixes     []string
+	LoginAttemptsPerMinute int
+	AllowInsecureHTTP      bool
 }
 
 func Load() (Config, error) {
@@ -60,6 +84,73 @@ func Load() (Config, error) {
 	}
 	if c.MutationBurst, err = positiveInt("MUTATION_BURST", 50); err != nil {
 		return Config{}, err
+	}
+	if c.BFF, err = loadBFF(); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+func loadBFF() (BFFConfig, error) {
+	enabled, err := strconv.ParseBool(value("BFF_ENABLED", "false"))
+	if err != nil {
+		return BFFConfig{}, errors.New("BFF_ENABLED must be true or false")
+	}
+	c := BFFConfig{
+		Enabled:               enabled,
+		AppOrigin:             os.Getenv("BFF_APP_ORIGIN"),
+		Issuer:                os.Getenv("BFF_ISSUER"),
+		ClientID:              os.Getenv("BFF_CLIENT_ID"),
+		ClientSecret:          os.Getenv("BFF_CLIENT_SECRET"),
+		Audience:              os.Getenv("BFF_AUDIENCE"),
+		Scope:                 value("BFF_SCOPE", "openid profile email offline_access"),
+		RedirectURI:           os.Getenv("BFF_REDIRECT_URI"),
+		PostLogoutRedirectURI: os.Getenv("BFF_POST_LOGOUT_REDIRECT_URI"),
+		StandaloneLogoutURI:   os.Getenv("BFF_STANDALONE_LOGOUT_URI"),
+		SessionEncryptionKeys: os.Getenv("BFF_SESSION_ENCRYPTION_KEYS"),
+	}
+	settings := []struct {
+		key      string
+		target   *time.Duration
+		fallback time.Duration
+	}{
+		{"BFF_SESSION_IDLE_TTL", &c.SessionIdleTTL, 12 * time.Hour},
+		{"BFF_SESSION_ABSOLUTE_TTL", &c.SessionAbsoluteTTL, 7 * 24 * time.Hour},
+		{"BFF_LOGIN_TTL", &c.LoginTTL, 5 * time.Minute},
+		{"BFF_LOGOUT_TTL", &c.LogoutTTL, 2 * time.Minute},
+		{"BFF_REFRESH_SKEW", &c.RefreshSkew, time.Minute},
+	}
+	for _, setting := range settings {
+		*setting.target, err = duration(setting.key, setting.fallback)
+		if err != nil {
+			return BFFConfig{}, err
+		}
+	}
+	prefixes := value("BFF_RETURN_PATH_PREFIXES", "/")
+	for _, prefix := range strings.Split(prefixes, ",") {
+		if prefix = strings.TrimSpace(prefix); prefix != "" {
+			c.ReturnPathPrefixes = append(c.ReturnPathPrefixes, prefix)
+		}
+	}
+	if enabled {
+		for name, field := range map[string]string{
+			"BFF_APP_ORIGIN": c.AppOrigin, "BFF_ISSUER": c.Issuer, "BFF_CLIENT_ID": c.ClientID,
+			"BFF_CLIENT_SECRET": c.ClientSecret, "BFF_AUDIENCE": c.Audience, "BFF_REDIRECT_URI": c.RedirectURI,
+			"BFF_POST_LOGOUT_REDIRECT_URI": c.PostLogoutRedirectURI, "BFF_SESSION_ENCRYPTION_KEYS": c.SessionEncryptionKeys,
+		} {
+			if strings.TrimSpace(field) == "" {
+				return BFFConfig{}, fmt.Errorf("%s is required when BFF_ENABLED=true", name)
+			}
+		}
+		if c.SessionAbsoluteTTL < c.SessionIdleTTL {
+			return BFFConfig{}, errors.New("BFF_SESSION_ABSOLUTE_TTL must be at least BFF_SESSION_IDLE_TTL")
+		}
+	}
+	if c.LoginAttemptsPerMinute, err = positiveInt("BFF_LOGIN_ATTEMPTS_PER_MINUTE", 30); err != nil {
+		return BFFConfig{}, err
+	}
+	if c.AllowInsecureHTTP, err = strconv.ParseBool(value("BFF_ALLOW_INSECURE_HTTP", "false")); err != nil {
+		return BFFConfig{}, errors.New("BFF_ALLOW_INSECURE_HTTP must be true or false")
 	}
 	return c, nil
 }

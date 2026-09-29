@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tociva/billmesh/internal/app"
+	"github.com/tociva/billmesh/internal/config"
 )
 
 func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *testing.T) {
@@ -28,6 +30,26 @@ func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *test
 				t.Fatalf("missing %s should prevent API startup before database access, got %v", missing, err)
 			}
 		})
+	}
+}
+
+func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testing.T) {
+	key := make([]byte, 32)
+	cfg := config.Config{
+		OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh", JWKSURL: "https://issuer.example/jwks",
+		BFF: config.BFFConfig{
+			Enabled: true, AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
+			ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",
+			RedirectURI:           "https://billmesh.example/auth/callback",
+			PostLogoutRedirectURI: "https://billmesh.example/auth/logout/callback",
+			SessionEncryptionKeys: "v1:" + base64.RawURLEncoding.EncodeToString(key),
+			SessionIdleTTL:        time.Hour, SessionAbsoluteTTL: 24 * time.Hour,
+			LoginTTL: time.Minute, LogoutTTL: time.Minute, RefreshSkew: time.Minute,
+			ReturnPathPrefixes: []string{"/app"}, LoginAttemptsPerMinute: 30,
+		},
+	}
+	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
+		t.Fatalf("invalid BFF configuration should fail before database access, got %v", err)
 	}
 }
 

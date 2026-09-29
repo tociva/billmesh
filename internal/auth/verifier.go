@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,14 @@ type Claims struct {
 	App         string   `json:"app"`
 	Environment string   `json:"environment"`
 	TokenUse    string   `json:"token_use"`
+	jwt.RegisteredClaims
+}
+
+type IDTokenClaims struct {
+	Nonce  string `json:"nonce"`
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+	AtHash string `json:"at_hash"`
 	jwt.RegisteredClaims
 }
 
@@ -90,6 +99,51 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	}
 	if claims.Subject == "" || claims.OrgID == "" || claims.App == "" {
 		return nil, errors.New("missing identity context")
+	}
+	return claims, nil
+}
+
+// VerifyIDToken validates an OIDC ID token issued for a confidential browser
+// client. Access tokens and ID tokens deliberately use separate validation
+// contracts: Billmesh access tokens require billing identity claims, while ID
+// tokens prove the interactive user's identity and nonce.
+func (v *JWKSVerifier) VerifyIDToken(ctx context.Context, raw, clientID, nonce, accessToken string) (*IDTokenClaims, error) {
+	if raw == "" {
+		return nil, errors.New("missing ID token")
+	}
+	claims := new(IDTokenClaims)
+	token, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
+		if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+			return nil, fmt.Errorf("unexpected signing algorithm %q", t.Method.Alg())
+		}
+		kid, _ := t.Header["kid"].(string)
+		if kid == "" {
+			return nil, errors.New("missing key id")
+		}
+		key, err := v.lookupKey(ctx, kid)
+		if err != nil {
+			return nil, err
+		}
+		if key == nil {
+			return nil, errors.New("unknown signing key")
+		}
+		return key, nil
+	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(clientID), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(v.now))
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid ID token: %w", err)
+	}
+	if claims.Subject == "" {
+		return nil, errors.New("ID token subject is missing")
+	}
+	if nonce != "" && claims.Nonce != nonce {
+		return nil, errors.New("ID token nonce mismatch")
+	}
+	if claims.AtHash != "" {
+		digest := sha256.Sum256([]byte(accessToken))
+		want := base64.RawURLEncoding.EncodeToString(digest[:len(digest)/2])
+		if claims.AtHash != want {
+			return nil, errors.New("ID token access-token hash mismatch")
+		}
 	}
 	return claims, nil
 }
@@ -208,13 +262,17 @@ func MiddlewareWithHooks(verifier TokenVerifier, hooks MiddlewareHooks) func(htt
 				reject("invalid bearer token")
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), contextKey{}, claims))
+			r = r.WithContext(WithClaims(r.Context(), claims))
 			if hooks.Authenticated != nil && !hooks.Authenticated(w, r, claims) {
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func WithClaims(ctx context.Context, claims *Claims) context.Context {
+	return context.WithValue(ctx, contextKey{}, claims)
 }
 
 func FromContext(ctx context.Context) (*Claims, bool) {

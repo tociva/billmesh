@@ -48,6 +48,22 @@ func (a *API) getAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"id": id, "name": name, "external_ref": ref, "created_at": created, "updated_at": updated})
 }
+
+func (a *API) getCurrentAccount(w http.ResponseWriter, r *http.Request) {
+	id, err := a.accountIDForClaims(r.Context())
+	if err != nil {
+		writeError(w, 404, "billing account not found")
+		return
+	}
+	var name string
+	var ref *string
+	var created, updated time.Time
+	if err = a.pool.QueryRow(r.Context(), `SELECT name,external_ref,created_at,updated_at FROM billing_accounts WHERE id=$1`, id).Scan(&name, &ref, &created, &updated); err != nil {
+		writeDBError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "name": name, "external_ref": ref, "created_at": created, "updated_at": updated})
+}
 func (a *API) updateAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {

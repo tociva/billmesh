@@ -37,6 +37,12 @@ type API struct {
 	sseActive       map[uuid.UUID]int
 	authFailures    *failureWindow
 	mutations       *keyedBuckets
+	browser         browserAuth
+}
+
+type browserAuth interface {
+	AuthHandler() http.Handler
+	Middleware(http.Handler) http.Handler
 }
 
 const maxSSEConnectionsPerAccount = 8
@@ -50,6 +56,10 @@ func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *
 	return a
 }
 
+func (a *API) ConfigureBrowserAuth(browser browserAuth) {
+	a.browser = browser
+}
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -59,6 +69,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/payments/webhook", a.paymentWebhook)
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/accounts", auth.Require("billing:write", a.createAccount))
+	protected.HandleFunc("GET /v1/accounts/current", auth.Require("billing:read", a.getCurrentAccount))
 	protected.HandleFunc("GET /v1/accounts/{id}", auth.Require("billing:read", a.getAccount))
 	protected.HandleFunc("PATCH /v1/accounts/{id}", auth.Require("billing:write", a.updateAccount))
 	protected.HandleFunc("POST /v1/accounts/{id}/links", auth.Require("billing:write", a.linkAccount))
@@ -105,6 +116,18 @@ func (a *API) Handler() http.Handler {
 	if a.auth != nil {
 		mux.Handle("/v1/", auth.MiddlewareWithHooks(a.auth, a.requestLimitHooks())(protected))
 	}
+	if a.browser != nil {
+		mux.Handle("/auth/", a.browser.AuthHandler())
+		hooks := a.requestLimitHooks()
+		browserProtected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, _ := auth.FromContext(r.Context())
+			if hooks.Authenticated != nil && !hooks.Authenticated(w, r, claims) {
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
+		mux.Handle("/bff/v1/", http.StripPrefix("/bff", a.browser.Middleware(browserProtected)))
+	}
 	return requestLog(a.log, recoverer(mux))
 }
 
@@ -143,15 +166,36 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var id uuid.UUID
-	var created time.Time
-	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_accounts(name,external_ref) VALUES($1,NULLIF($2,'')) RETURNING id,created_at`, in.Name, in.ExternalRef).Scan(&id, &created); err != nil {
-		writeDBError(w, err)
-		return
-	}
 	environment := claims.Environment
 	if environment == "" {
 		environment = "production"
+	}
+	// Serialize this identity key so a repeated create returns the same account.
+	identityKey := in.Application + ":" + in.OrganizationID + ":" + environment
+	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, identityKey); err != nil {
+		writeDBError(w, err)
+		return
+	}
+	var id uuid.UUID
+	var created time.Time
+	var name string
+	var ref *string
+	err = tx.QueryRow(r.Context(), `SELECT b.id,b.name,b.external_ref,b.created_at FROM account_links l JOIN billing_accounts b ON b.id=l.account_id WHERE l.application=$1 AND l.organization_id=$2 AND l.environment=$3`, in.Application, in.OrganizationID, environment).Scan(&id, &name, &ref, &created)
+	if err == nil {
+		if err = tx.Commit(r.Context()); err != nil {
+			writeDBError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"id": id, "name": name, "external_ref": ref, "created_at": created})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		writeDBError(w, err)
+		return
+	}
+	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_accounts(name,external_ref) VALUES($1,NULLIF($2,'')) RETURNING id,created_at`, in.Name, in.ExternalRef).Scan(&id, &created); err != nil {
+		writeDBError(w, err)
+		return
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id,environment) VALUES($1,$2,$3,$4)`, id, in.Application, in.OrganizationID, environment); err != nil {
 		writeDBError(w, err)
@@ -161,7 +205,7 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "database error")
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "created_at": created})
+	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "external_ref": in.ExternalRef, "created_at": created})
 }
 
 func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {

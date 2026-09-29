@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
@@ -57,6 +58,36 @@ func TestJWKSVerifier(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "org-1", got.OrgID)
 	require.True(t, got.Has("billing:read"))
+}
+
+func TestJWKSVerifierValidatesOIDCIDTokenNonceAndAccessTokenHash(t *testing.T) {
+	fixture := newJWKSFixture(t)
+	defer fixture.close()
+	accessToken := "access-token"
+	digest := sha256.Sum256([]byte(accessToken))
+	claims := IDTokenClaims{
+		Nonce: "nonce", Email: "operator@example.com", Name: "Operator",
+		AtHash: base64.RawURLEncoding.EncodeToString(digest[:len(digest)/2]),
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: fixture.issuer, Audience: jwt.ClaimStrings{"billmesh-web"}, Subject: "user-1",
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)), IssuedAt: jwt.NewNumericDate(time.Now()),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = fixture.kid
+	raw, err := token.SignedString(fixture.key)
+	require.NoError(t, err)
+	verifier := NewJWKSVerifier(fixture.issuer, "billmesh-test", fixture.url, nil)
+	got, err := verifier.VerifyIDToken(context.Background(), raw, "billmesh-web", "nonce", accessToken)
+	require.NoError(t, err)
+	require.Equal(t, "operator@example.com", got.Email)
+
+	_, err = verifier.VerifyIDToken(context.Background(), raw, "billmesh-web", "wrong", accessToken)
+	require.ErrorContains(t, err, "nonce")
+	_, err = verifier.VerifyIDToken(context.Background(), raw, "billmesh-web", "nonce", "tampered")
+	require.ErrorContains(t, err, "hash")
+	_, err = verifier.VerifyIDToken(context.Background(), raw, "another-client", "nonce", accessToken)
+	require.Error(t, err)
 }
 
 func TestJWKSVerifierRejectsWrongAudience(t *testing.T) {

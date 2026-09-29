@@ -15,6 +15,19 @@ import (
 
 type routeTestVerifier struct{}
 
+type routeTestBrowserAuth struct{}
+
+func (routeTestBrowserAuth) AuthHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+}
+
+func (routeTestBrowserAuth) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook"}
+		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
+	})
+}
+
 func (routeTestVerifier) Verify(_ context.Context, token string) (*auth.Claims, error) {
 	if token == "valid" {
 		return &auth.Claims{}, nil
@@ -95,5 +108,29 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("public health route returned %d", resp.Code)
+	}
+}
+
+func TestBrowserAndBearerSurfacesShareProtectedHandlersWithoutAuthAmbiguity(t *testing.T) {
+	a := NewAPI(nil, routeTestVerifier{}, nil)
+	a.ConfigureBrowserAuth(routeTestBrowserAuth{})
+	handler := a.Handler()
+
+	browser := httptest.NewRecorder()
+	handler.ServeHTTP(browser, httptest.NewRequest(http.MethodGet, "/bff/v1/products", nil))
+	if browser.Code == http.StatusUnauthorized || browser.Code == http.StatusNotFound {
+		t.Fatalf("browser authentication did not reach shared handler: %d", browser.Code)
+	}
+
+	bearer := httptest.NewRecorder()
+	handler.ServeHTTP(bearer, httptest.NewRequest(http.MethodGet, "/v1/products", nil))
+	if bearer.Code != http.StatusUnauthorized {
+		t.Fatalf("bearer surface accepted a cookie-style request: %d", bearer.Code)
+	}
+
+	authRoute := httptest.NewRecorder()
+	handler.ServeHTTP(authRoute, httptest.NewRequest(http.MethodGet, "/auth/session", nil))
+	if authRoute.Code != http.StatusNoContent {
+		t.Fatalf("browser auth route was not mounted: %d", authRoute.Code)
 	}
 }

@@ -27,6 +27,33 @@ go run ./cmd/billmesh api
 
 The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected endpoints require a signed token from the configured issuer and the permission named by the handler.
 
+### Browser BFF
+
+Billmesh can additionally expose a cookie-authenticated browser surface without changing the bearer-only service API:
+
+- `/v1/*` continues to require exactly one `Authorization: Bearer` header.
+- `/auth/*` implements OIDC authorization code login with PKCE, session inspection, refresh, and logout.
+- `/bff/v1/*` uses an opaque `__Host-billmesh-session` cookie and dispatches to the same protected handlers as `/v1/*`.
+- Unsafe BFF requests require the `X-CSRF-Token` returned by `GET /auth/session` and an exact allowed browser origin.
+- Access, refresh, and ID tokens stay in encrypted PostgreSQL session records and are never returned to browser code.
+
+Enable it only after registering a confidential Billmesh browser client with the identity provider:
+
+```sh
+export BFF_ENABLED=true
+export BFF_APP_ORIGIN='https://billmesh.example'
+export BFF_ISSUER="$OIDC_ISSUER"
+export BFF_CLIENT_ID='billmesh-web'
+export BFF_CLIENT_SECRET='replace-with-client-secret'
+export BFF_AUDIENCE="$OIDC_AUDIENCE"
+export BFF_REDIRECT_URI='https://billmesh.example/auth/callback'
+export BFF_POST_LOGOUT_REDIRECT_URI='https://billmesh.example/auth/logout/callback'
+export BFF_SESSION_ENCRYPTION_KEYS='v1:replace-with-base64url-encoded-32-byte-key'
+export BFF_RETURN_PATH_PREFIXES='/app'
+```
+
+The first encryption-key entry encrypts new records; retained entries decrypt older records during key rotation. `BFF_ALLOW_INSECURE_HTTP=true` exists only for isolated local/test deployments. Production configuration requires HTTPS. The BFF issuer and audience must match Billmesh's resource-server issuer and audience so browser requests retain the same authorization contract as service requests.
+
 Get a development token from the test-only fake issuer:
 
 ```sh

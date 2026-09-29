@@ -35,3 +35,42 @@ func TestLoadRequiresDatabase(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 }
+
+func TestLoadBFFConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("BFF_ENABLED", "true")
+	t.Setenv("BFF_APP_ORIGIN", "https://billmesh.example")
+	t.Setenv("BFF_ISSUER", "https://identity.example")
+	t.Setenv("BFF_CLIENT_ID", "billmesh-web")
+	t.Setenv("BFF_CLIENT_SECRET", "secret")
+	t.Setenv("BFF_AUDIENCE", "billmesh")
+	t.Setenv("BFF_REDIRECT_URI", "https://billmesh.example/auth/callback")
+	t.Setenv("BFF_POST_LOGOUT_REDIRECT_URI", "https://billmesh.example/auth/logout/callback")
+	t.Setenv("BFF_SESSION_ENCRYPTION_KEYS", "v1:key")
+	t.Setenv("BFF_RETURN_PATH_PREFIXES", "/app,/admin")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.BFF.Enabled)
+	require.Equal(t, []string{"/app", "/admin"}, cfg.BFF.ReturnPathPrefixes)
+	require.Equal(t, 30, cfg.BFF.LoginAttemptsPerMinute)
+}
+
+func TestLoadBFFRequiresSecretsAndValidLifetimes(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("BFF_ENABLED", "true")
+	_, err := Load()
+	require.ErrorContains(t, err, "required")
+
+	t.Setenv("BFF_APP_ORIGIN", "https://billmesh.example")
+	t.Setenv("BFF_ISSUER", "https://identity.example")
+	t.Setenv("BFF_CLIENT_ID", "billmesh-web")
+	t.Setenv("BFF_CLIENT_SECRET", "secret")
+	t.Setenv("BFF_AUDIENCE", "billmesh")
+	t.Setenv("BFF_REDIRECT_URI", "https://billmesh.example/auth/callback")
+	t.Setenv("BFF_POST_LOGOUT_REDIRECT_URI", "https://billmesh.example/auth/logout/callback")
+	t.Setenv("BFF_SESSION_ENCRYPTION_KEYS", "v1:key")
+	t.Setenv("BFF_SESSION_IDLE_TTL", "2h")
+	t.Setenv("BFF_SESSION_ABSOLUTE_TTL", "1h")
+	_, err = Load()
+	require.ErrorContains(t, err, "must be at least")
+}

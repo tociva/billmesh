@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -27,6 +29,12 @@ type server struct {
 	receiverDelay time.Duration
 	ssrfHits      int
 	orderCalls    int
+	oauthCodes    map[string]oauthGrant
+	refreshTokens map[string]oauthGrant
+}
+
+type oauthGrant struct {
+	Nonce, CodeChallenge, ClientID, RedirectURI, Subject string
 }
 
 func main() {
@@ -34,9 +42,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{key: key, kid: "billmesh-test-key"}
+	s := &server{key: key, kid: "billmesh-test-key", oauthCodes: make(map[string]oauthGrant), refreshTokens: make(map[string]oauthGrant)}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.jwks)
+	mux.HandleFunc("GET /oauth/authorize", s.authorize)
+	mux.HandleFunc("POST /oauth/token", s.oauthToken)
+	mux.HandleFunc("POST /oauth/revoke", s.revoke)
+	mux.HandleFunc("GET /oauth/logout", s.providerLogout)
 	mux.HandleFunc("POST /test/token", s.token)
 	mux.HandleFunc("POST /test/rotate-key", s.rotateKey)
 	mux.HandleFunc("POST /v1/orders", s.order)
@@ -54,6 +67,154 @@ func main() {
 	}
 	log.Printf("fake external services listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+const mockIssuer = "http://mock-external:8090"
+
+func (s *server) discovery(w http.ResponseWriter, _ *http.Request) {
+	write(w, map[string]string{
+		"issuer": mockIssuer, "authorization_endpoint": mockIssuer + "/oauth/authorize",
+		"token_endpoint": mockIssuer + "/oauth/token", "revocation_endpoint": mockIssuer + "/oauth/revoke",
+		"end_session_endpoint": mockIssuer + "/oauth/logout", "jwks_uri": mockIssuer + "/.well-known/jwks.json",
+	})
+}
+
+func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Get("response_type") != "code" || query.Get("state") == "" || query.Get("nonce") == "" ||
+		query.Get("code_challenge_method") != "S256" || query.Get("code_challenge") == "" {
+		http.Error(w, "invalid authorization request", http.StatusBadRequest)
+		return
+	}
+	redirect, err := url.Parse(query.Get("redirect_uri"))
+	if err != nil || !redirect.IsAbs() {
+		http.Error(w, "invalid redirect URI", http.StatusBadRequest)
+		return
+	}
+	code := randomString()
+	s.mu.Lock()
+	s.oauthCodes[code] = oauthGrant{
+		Nonce: query.Get("nonce"), CodeChallenge: query.Get("code_challenge"),
+		ClientID: query.Get("client_id"), RedirectURI: query.Get("redirect_uri"),
+		Subject: "bff-operator",
+	}
+	s.mu.Unlock()
+	values := redirect.Query()
+	values.Set("code", code)
+	values.Set("state", query.Get("state"))
+	redirect.RawQuery = values.Encode()
+	http.Redirect(w, r, redirect.String(), http.StatusFound)
+}
+
+func (s *server) oauthToken(w http.ResponseWriter, r *http.Request) {
+	clientID, clientSecret, ok := r.BasicAuth()
+	if !ok || clientID != "billmesh-web-test" || clientSecret != "test-secret" {
+		http.Error(w, "invalid client", http.StatusUnauthorized)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	var grant oauthGrant
+	switch r.Form.Get("grant_type") {
+	case "authorization_code":
+		code := r.Form.Get("code")
+		s.mu.Lock()
+		grant, ok = s.oauthCodes[code]
+		delete(s.oauthCodes, code)
+		s.mu.Unlock()
+		if !ok || grant.ClientID != clientID || grant.RedirectURI != r.Form.Get("redirect_uri") ||
+			grant.CodeChallenge != sha256Base64(r.Form.Get("code_verifier")) {
+			http.Error(w, "invalid authorization code", http.StatusBadRequest)
+			return
+		}
+	case "refresh_token":
+		s.mu.Lock()
+		grant, ok = s.refreshTokens[r.Form.Get("refresh_token")]
+		s.mu.Unlock()
+		if !ok || grant.ClientID != clientID {
+			http.Error(w, "invalid refresh token", http.StatusBadRequest)
+			return
+		}
+	default:
+		http.Error(w, "unsupported grant", http.StatusBadRequest)
+		return
+	}
+	accessToken, idToken, err := s.browserTokens(grant)
+	if err != nil {
+		http.Error(w, "token signing failed", http.StatusInternalServerError)
+		return
+	}
+	refreshToken := randomString()
+	s.mu.Lock()
+	s.refreshTokens[refreshToken] = grant
+	s.mu.Unlock()
+	write(w, map[string]string{
+		"access_token": accessToken, "refresh_token": refreshToken,
+		"id_token": idToken, "token_type": "Bearer",
+	})
+}
+
+func (s *server) browserTokens(grant oauthGrant) (string, string, error) {
+	now := time.Now()
+	accessClaims := jwt.MapClaims{
+		"iss": mockIssuer, "aud": "billmesh-test", "sub": grant.Subject,
+		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "token_use": "access",
+		"org_id": "bff-org", "app": "daybook", "environment": "test",
+		"permissions": []string{"billing:read", "billing:write", "billing:admin", "billing:link", "credits:grant", "credits:reserve", "credits:settle"},
+	}
+	access, err := s.sign(accessClaims)
+	if err != nil {
+		return "", "", err
+	}
+	hash := sha256.Sum256([]byte(access))
+	idClaims := jwt.MapClaims{
+		"iss": mockIssuer, "aud": grant.ClientID, "sub": grant.Subject,
+		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nonce": grant.Nonce,
+		"email": "operator@example.test", "name": "Billmesh Operator",
+		"at_hash": base64.RawURLEncoding.EncodeToString(hash[:len(hash)/2]),
+	}
+	id, err := s.sign(idClaims)
+	return access, id, err
+}
+
+func (s *server) sign(claims jwt.MapClaims) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	s.mu.Lock()
+	key, kid := s.key, s.kid
+	s.mu.Unlock()
+	token.Header["kid"] = kid
+	return token.SignedString(key)
+}
+
+func (s *server) revoke(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err == nil {
+		s.mu.Lock()
+		delete(s.refreshTokens, r.Form.Get("token"))
+		s.mu.Unlock()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) providerLogout(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Query().Get("post_logout_redirect_uri")
+	if target == "" {
+		http.Error(w, "missing redirect", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func randomString() string {
+	raw := make([]byte, 32)
+	_, _ = rand.Read(raw)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func sha256Base64(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 func (s *server) jwks(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()

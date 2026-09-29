@@ -58,6 +58,17 @@ services:
       OIDC_ISSUER: http://mock-external:8090
       OIDC_AUDIENCE: billmesh-test
       JWKS_URL: http://mock-external:8090/.well-known/jwks.json
+      BFF_ENABLED: "true"
+      BFF_ALLOW_INSECURE_HTTP: "true"
+      BFF_APP_ORIGIN: http://api:8080
+      BFF_ISSUER: http://mock-external:8090
+      BFF_CLIENT_ID: billmesh-web-test
+      BFF_CLIENT_SECRET: test-secret
+      BFF_AUDIENCE: billmesh-test
+      BFF_REDIRECT_URI: http://api:8080/auth/callback
+      BFF_POST_LOGOUT_REDIRECT_URI: http://api:8080/auth/logout/callback
+      BFF_SESSION_ENCRYPTION_KEYS: v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      BFF_RETURN_PATH_PREFIXES: /app
       RAZORPAY_BASE_URL: http://mock-external:8090
       RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
       WEBHOOK_ALLOWED_PRIVATE_HOSTS: mock-external

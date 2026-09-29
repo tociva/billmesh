@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/tociva/billmesh/internal/app"
 	"github.com/tociva/billmesh/internal/auth"
+	"github.com/tociva/billmesh/internal/bff"
 	"github.com/tociva/billmesh/internal/config"
 	"github.com/tociva/billmesh/internal/database"
 )
@@ -60,6 +62,13 @@ func run() error {
 	case "api":
 		verifier := auth.NewJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.JWKSURL, nil)
 		api := app.NewAPI(pool, verifier, nil)
+		if cfg.BFF.Enabled {
+			browser, err := bff.New(cfg.BFF, pool, verifier, nil)
+			if err != nil {
+				return fmt.Errorf("configure BFF: %w", err)
+			}
+			api.ConfigureBrowserAuth(browser)
+		}
 		api.ConfigureRequestLimits(cfg.AuthFailuresPerMinute, cfg.MutationRatePerSecond, cfg.MutationBurst)
 		server := newAPIServer(cfg.HTTPAddr, api.Handler())
 		go func() {
@@ -84,6 +93,14 @@ func run() error {
 func validateAPIAuthConfig(cfg config.Config) error {
 	if cfg.OIDCIssuer == "" || cfg.OIDCAudience == "" || cfg.JWKSURL == "" {
 		return errors.New("OIDC_ISSUER, OIDC_AUDIENCE and JWKS_URL are required for api")
+	}
+	if cfg.BFF.Enabled {
+		if strings.TrimRight(cfg.BFF.Issuer, "/") != strings.TrimRight(cfg.OIDCIssuer, "/") || cfg.BFF.Audience != cfg.OIDCAudience {
+			return errors.New("BFF_ISSUER and BFF_AUDIENCE must match OIDC_ISSUER and OIDC_AUDIENCE")
+		}
+		if err := bff.ValidateConfig(cfg.BFF); err != nil {
+			return fmt.Errorf("invalid BFF configuration: %w", err)
+		}
 	}
 	return nil
 }

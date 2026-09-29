@@ -19,6 +19,52 @@ func TestJourney1DaybookWithoutTaskmeshPremium(t *testing.T) {
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"product": "daybook", "plan": "daybook-paid", "payment_status": "verified"}, token)
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/account-links", map[string]any{"application": "taskmesh", "organization_id": testkit.Unique("journey-1-taskmesh")}, token)
 }
+
+func TestDaybookAccountCreateIsRecoverable(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	org := testkit.Unique("daybook-account-recovery")
+	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, nil)
+	request := map[string]any{"name": "Recoverable Account", "external_ref": "daybook:production:" + org, "application": "daybook", "organization_id": org}
+	created := testkit.Decode[struct {
+		ID string `json:"id"`
+	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", request, token))
+	repeated := testkit.Decode[struct {
+		ID string `json:"id"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/accounts", request, token))
+	linked := testkit.Decode[struct {
+		ID string `json:"id"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, token))
+	require.Equal(t, created.ID, repeated.ID)
+	require.Equal(t, created.ID, linked.ID)
+}
+
+func TestDaybookCatalogueExposesOrganizationLimits(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	org := testkit.Unique("daybook-catalogue")
+	token := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
+	plans := testkit.Decode[[]struct {
+		Slug         string         `json:"slug"`
+		Entitlements map[string]any `json:"entitlements"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/plans?product=daybook", nil, token))
+	want := map[string][3]float64{
+		"daybook-free":                 {1, 1, 0},
+		"daybook-basic-monthly":        {1, 1, 0},
+		"daybook-basic-annual":         {1, 1, 0},
+		"daybook-professional-monthly": {3, 6, 1},
+		"daybook-professional-annual":  {3, 6, 1},
+	}
+	for _, plan := range plans {
+		limits, ok := want[plan.Slug]
+		if !ok {
+			continue
+		}
+		require.Equal(t, limits[0], plan.Entitlements["branches"])
+		require.Equal(t, limits[1], plan.Entitlements["users"])
+		require.Equal(t, limits[2], plan.Entitlements["serviceusers"])
+		delete(want, plan.Slug)
+	}
+	require.Empty(t, want)
+}
 func TestJourney2ExhaustionAndTopUp(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("journey-2")
