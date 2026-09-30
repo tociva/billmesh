@@ -44,7 +44,7 @@ func TestSecurityVerifierAcceptsMultipleAudiences(t *testing.T) {
 	f := newJWKSFixture(t)
 	defer f.close()
 	raw := f.token(t, func(c *Claims) { c.Audience = jwt.ClaimStrings{"another-service", "billmesh-test"} })
-	_, err := NewJWKSVerifier(f.issuer, "billmesh-test", f.url, nil).Verify(context.Background(), raw)
+	_, err := NewJWKSVerifier(f.issuer, "billmesh-test", nil).Verify(context.Background(), raw)
 	require.NoError(t, err)
 }
 
@@ -52,7 +52,7 @@ func TestSecurityVerifierEnforcesTimeBoundariesWithControlledClock(t *testing.T)
 	f := newJWKSFixture(t)
 	defer f.close()
 	now := time.Now().UTC().Truncate(time.Second)
-	v := NewJWKSVerifier(f.issuer, "billmesh-test", f.url, nil)
+	v := NewJWKSVerifier(f.issuer, "billmesh-test", nil)
 	v.now = func() time.Time { return now }
 	for _, tc := range []struct {
 		name   string
@@ -84,13 +84,13 @@ func TestSecurityVerifierRetiresCachedKeyAfterRefreshWindow(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	var mu sync.Mutex
 	active := []any{securityJWK(oldKey, "old")}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newOIDCTestServer(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": active})
-	}))
+	})
 	defer srv.Close()
-	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.URL, srv.Client())
+	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.Client())
 	v.now = func() time.Time { return now }
 	oldToken := securityToken(t, oldKey, "old", srv.URL, now, nil)
 	_, err = v.Verify(context.Background(), oldToken)
@@ -118,12 +118,12 @@ func TestSecurityVerifierBoundsUnknownKeyFetches(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	var fetches atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newOIDCTestServer(func(w http.ResponseWriter, _ *http.Request) {
 		fetches.Add(1)
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{securityJWK(key, "known")}})
-	}))
+	})
 	defer srv.Close()
-	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.URL, srv.Client())
+	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.Client())
 	now := time.Now()
 	known := securityToken(t, key, "known", srv.URL, now, nil)
 	_, err = v.Verify(context.Background(), known)
@@ -148,7 +148,7 @@ func TestSecurityMiddlewareRejectsDuplicateAuthorizationBeforeHandler(t *testing
 	f := newJWKSFixture(t)
 	defer f.close()
 	var calls atomic.Int32
-	handler := Middleware(NewJWKSVerifier(f.issuer, "billmesh-test", f.url, nil))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := Middleware(NewJWKSVerifier(f.issuer, "billmesh-test", nil))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -167,7 +167,7 @@ func TestSecurityVerifierJWKSOutageGraceAndRecovery(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	var mu sync.Mutex
 	status := http.StatusOK
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newOIDCTestServer(func(w http.ResponseWriter, _ *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		if status != http.StatusOK {
@@ -175,9 +175,9 @@ func TestSecurityVerifierJWKSOutageGraceAndRecovery(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{securityJWK(key, "known")}})
-	}))
+	})
 	defer srv.Close()
-	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.URL, srv.Client())
+	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.Client())
 	v.now = func() time.Time { return now }
 	known := securityToken(t, key, "known", srv.URL, now, nil)
 	_, err = v.Verify(context.Background(), known)
@@ -203,17 +203,17 @@ func TestSecurityVerifierJWKSTimeoutFailsClosedAndRecovers(t *testing.T) {
 	require.NoError(t, err)
 	now := time.Now().UTC().Truncate(time.Second)
 	var stalled atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newOIDCTestServer(func(w http.ResponseWriter, r *http.Request) {
 		if stalled.Load() {
 			<-r.Context().Done()
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{securityJWK(key, "known")}})
-	}))
+	})
 	defer srv.Close()
 	client := srv.Client()
 	client.Timeout = 25 * time.Millisecond
-	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.URL, client)
+	v := NewJWKSVerifier(srv.URL, "billmesh-test", client)
 	v.now = func() time.Time { return now }
 	known := securityToken(t, key, "known", srv.URL, now, nil)
 	_, err = v.Verify(context.Background(), known)
@@ -234,11 +234,11 @@ func TestSecurityVerifierRejectsUnusableAndMissingKeyIDs(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	now := time.Now()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := newOIDCTestServer(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": "bad", "n": "***", "e": "AQAB"}}})
-	}))
+	})
 	defer srv.Close()
-	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.URL, srv.Client())
+	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.Client())
 	_, err = v.Verify(context.Background(), securityToken(t, key, "bad", srv.URL, now, nil))
 	require.Error(t, err)
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, Claims{OrgID: "org-1", App: "daybook", TokenUse: "access", RegisteredClaims: jwt.RegisteredClaims{Issuer: srv.URL, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))}})
@@ -274,7 +274,7 @@ func TestSecurityVerifierRejectsWrongClaimTypes(t *testing.T) {
 			token.Header["kid"] = f.kid
 			raw, err := token.SignedString(f.key)
 			require.NoError(t, err)
-			_, err = NewJWKSVerifier(f.issuer, "billmesh-test", f.url, nil).Verify(context.Background(), raw)
+			_, err = NewJWKSVerifier(f.issuer, "billmesh-test", nil).Verify(context.Background(), raw)
 			require.Error(t, err)
 		})
 	}
@@ -283,7 +283,7 @@ func TestSecurityVerifierRejectsWrongClaimTypes(t *testing.T) {
 func TestSecurityVerifierRejectsMalformedJWTShapes(t *testing.T) {
 	f := newJWKSFixture(t)
 	defer f.close()
-	v := NewJWKSVerifier(f.issuer, "billmesh-test", f.url, nil)
+	v := NewJWKSVerifier(f.issuer, "billmesh-test", nil)
 	for _, raw := range []string{"", "a.b", "a.b.c.d", "%%%%.%%%%.%%%%", strings.Repeat("a", 256*1024)} {
 		_, err := v.Verify(context.Background(), raw)
 		require.Error(t, err)
@@ -294,7 +294,7 @@ func TestSecurityIssuedPermissionSnapshotRemainsValidUntilExpiry(t *testing.T) {
 	f := newJWKSFixture(t)
 	defer f.close()
 	now := time.Now().UTC().Truncate(time.Second)
-	v := NewJWKSVerifier(f.issuer, "billmesh-test", f.url, nil)
+	v := NewJWKSVerifier(f.issuer, "billmesh-test", nil)
 	v.now = func() time.Time { return now }
 	old := f.token(t, func(c *Claims) {
 		c.Permissions = []string{"billing:admin"}

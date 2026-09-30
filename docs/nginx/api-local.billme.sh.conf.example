@@ -1,0 +1,32 @@
+# Proposed local-development reverse proxy for the Billmesh API.
+# Copy this file to the Nginx servers directory; do not place certificates in
+# the repository. Adjust /opt/homebrew if Nginx uses a different prefix.
+
+server {
+    listen 443 ssl;
+    server_name api-local.billme.sh;
+
+    ssl_certificate     /opt/homebrew/etc/nginx/ssl/local.billme.sh.pem;
+    ssl_certificate_key /opt/homebrew/etc/nginx/ssl/local.billme.sh-key.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # Keep long-lived responses such as SSE open.
+        proxy_read_timeout 1h;
+    }
+}
+
+server {
+    listen 80;
+    server_name api-local.billme.sh;
+    return 301 https://$host$request_uri;
+}

@@ -27,6 +27,84 @@ Billmesh automatically loads `.env` when it starts. Existing environment variabl
 
 Application tables, types, functions, indexes, and sequences live in the dedicated `billmesh` schema. Runtime connections use only that schema; migration connections temporarily retain `public` as a fallback so databases created with older migrations can be upgraded safely.
 
+### Local HTTPS with Nginx
+
+The API can be exposed at `https://api-local.billme.sh` through a
+developer-managed Nginx reverse proxy, following the same convention as the
+Daybook local environment. Nginx terminates TLS and forwards requests to the
+local API at `http://127.0.0.1:5000`.
+
+The repository provides a proposed configuration at
+[`docs/nginx/api-local.billme.sh.conf.example`](docs/nginx/api-local.billme.sh.conf.example).
+It does not install Nginx, create certificates, edit `/etc/hosts`, copy files
+outside the repository, or reload Nginx.
+
+The examples below assume Homebrew on Apple Silicon, where Nginx uses
+`/opt/homebrew/etc/nginx`. If `brew --prefix` prints another prefix, update the
+certificate paths in the proposed configuration before installing it.
+
+1. Install the local prerequisites:
+
+   ```sh
+   brew install nginx mkcert
+   mkcert -install
+   ```
+
+   `mkcert -install` adds the local development CA to this machine's trust
+   stores. Run it only on a developer workstation.
+
+2. Create one certificate covering the API and both Billmesh web applications.
+   Keep the certificate and private key outside the repositories:
+
+   ```sh
+   NGINX_ROOT="$(brew --prefix)/etc/nginx"
+   mkdir -p "$NGINX_ROOT/ssl"
+   mkcert \
+     -cert-file "$NGINX_ROOT/ssl/local.billme.sh.pem" \
+     -key-file "$NGINX_ROOT/ssl/local.billme.sh-key.pem" \
+     api-local.billme.sh \
+     console-local.billme.sh \
+     admin-local.billme.sh
+   chmod 600 "$NGINX_ROOT/ssl/local.billme.sh-key.pem"
+   ```
+
+3. Add the local names to `/etc/hosts` (once, without duplicating an existing
+   entry):
+
+   ```text
+   127.0.0.1 api-local.billme.sh console-local.billme.sh admin-local.billme.sh
+   ```
+
+4. Copy the proposed API server block into the Homebrew Nginx `servers`
+   directory:
+
+   ```sh
+   NGINX_ROOT="$(brew --prefix)/etc/nginx"
+   mkdir -p "$NGINX_ROOT/servers"
+   cp docs/nginx/api-local.billme.sh.conf.example \
+     "$NGINX_ROOT/servers/api-local.billme.sh.conf"
+   ```
+
+   Ensure the `http` block in `$NGINX_ROOT/nginx.conf` contains
+   `include servers/*;`. Install the Console and Admin server blocks from the
+   sibling `billmesh-web` repository when those applications are needed.
+
+5. Start Billmesh normally, then validate and reload the developer-managed
+   proxy:
+
+   ```sh
+   HTTP_ADDR=:5000 go run ./cmd/billmesh api
+   nginx -t
+   brew services restart nginx
+   curl https://api-local.billme.sh/healthz
+   ```
+
+When the browser BFF is enabled, use the HTTPS application origin that the
+browser actually opens. For example, a Console-oriented API process uses
+`BFF_APP_ORIGIN=https://console-local.billme.sh` and callback URLs on that
+same origin. Register those exact HTTPS callback and logout URLs with the OIDC
+provider. Do not set `BFF_ALLOW_INSECURE_HTTP=true` for this setup.
+
 Generate URL-safe database passwords with OpenSSL:
 
 ```sh
@@ -46,11 +124,14 @@ The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, 
 ### API documentation
 
 The running API embeds an offline Swagger UI and OpenAPI 3.1 contract. Both are
-private by default:
+private by default. With the local HTTPS gateway configured:
 
-- Browser users with a valid BFF session can open [`http://localhost:8080/docs/`](http://localhost:8080/docs/).
-- Bearer-token users can open [`http://localhost:8080/docs/access`](http://localhost:8080/docs/access). The token remains only in that page's memory and is sent to same-origin documentation and `/v1/*` requests.
-- The raw contract at [`http://localhost:8080/openapi.yaml`](http://localhost:8080/openapi.yaml) accepts either a valid BFF session or a bearer token, for example `curl -H 'Authorization: Bearer …' http://localhost:8080/openapi.yaml`.
+- Browser users with a valid BFF session can open [`https://api-local.billme.sh/docs/`](https://api-local.billme.sh/docs/).
+- Bearer-token users can open [`https://api-local.billme.sh/docs/access`](https://api-local.billme.sh/docs/access). The token remains only in that page's memory and is sent to same-origin documentation and `/v1/*` requests.
+- The raw contract at [`https://api-local.billme.sh/openapi.yaml`](https://api-local.billme.sh/openapi.yaml) accepts either a valid BFF session or a bearer token, for example `curl -H 'Authorization: Bearer …' https://api-local.billme.sh/openapi.yaml`.
+
+Without the optional gateway, replace the HTTPS origin above with the direct
+development origin `http://localhost:5000`.
 
 Swagger's static JavaScript and CSS assets remain public, but do not contain the
 API contract. Set `PUBLIC_OPENAPI=true` only when intentionally exposing both
@@ -75,22 +156,41 @@ Billmesh can additionally expose a cookie-authenticated browser surface without 
 - Unsafe BFF requests require the `X-CSRF-Token` returned by `GET /auth/session` and an exact allowed browser origin.
 - Access, refresh, and ID tokens stay in encrypted PostgreSQL session records and are never returned to browser code.
 
-Enable it only after registering a confidential Billmesh browser client with the identity provider:
+Enable it only after registering a confidential Billmesh browser client in
+IdNest. Copy the BFF section from `.env.example` into the backend `.env`, then
+replace its placeholders with the values from that IdNest client:
 
-```sh
-export BFF_ENABLED=true
-export BFF_APP_ORIGIN='https://billmesh.example'
-export BFF_ISSUER="$OIDC_ISSUER"
-export BFF_CLIENT_ID='billmesh-web'
-export BFF_CLIENT_SECRET='replace-with-client-secret'
-export BFF_AUDIENCE="$OIDC_AUDIENCE"
-export BFF_REDIRECT_URI='https://billmesh.example/auth/callback'
-export BFF_POST_LOGOUT_REDIRECT_URI='https://billmesh.example/auth/logout/callback'
-export BFF_SESSION_ENCRYPTION_KEYS='v1:replace-with-base64url-encoded-32-byte-key'
-export BFF_RETURN_PATH_PREFIXES='/app'
+```dotenv
+BFF_ENABLED=true
+BFF_APP_ORIGIN=https://billmesh.example
+BFF_ISSUER=https://idnest.example
+BFF_CLIENT_ID=replace-with-idnest-client-id
+BFF_CLIENT_SECRET=replace-with-idnest-client-secret
+BFF_AUDIENCE=billmesh
+BFF_SCOPE=openid profile email offline_access
+BFF_REDIRECT_URI=https://billmesh.example/auth/callback
+BFF_POST_LOGOUT_REDIRECT_URI=https://billmesh.example/auth/logout/callback
+BFF_SESSION_ENCRYPTION_KEYS=v1:replace-with-base64url-encoded-32-byte-key
+BFF_RETURN_PATH_PREFIXES=/app
+BFF_ALLOW_INSECURE_HTTP=false
 ```
 
-The first encryption-key entry encrypts new records; retained entries decrypt older records during key rotation. `BFF_ALLOW_INSECURE_HTTP=true` exists only for isolated local/test deployments. Production configuration requires HTTPS. The BFF issuer and audience must match Billmesh's resource-server issuer and audience so browser requests retain the same authorization contract as service requests.
+`BFF_CLIENT_ID` and `BFF_CLIENT_SECRET` are the credentials of the confidential
+IdNest client. They belong only in the backend environment or deployment secret
+manager; do not put them in the web application's runtime configuration or any
+checked-in file. Register `BFF_REDIRECT_URI` and
+`BFF_POST_LOGOUT_REDIRECT_URI` as exact allowed callback URLs for that client.
+
+`BFF_ISSUER` and `BFF_AUDIENCE` must exactly match `OIDC_ISSUER` and
+`OIDC_AUDIENCE`, respectively, so BFF and service-to-service requests use the
+same token validation contract. The default scope requests a refresh token by
+including `offline_access`; the IdNest client must be allowed to issue it.
+
+`BFF_SESSION_ENCRYPTION_KEYS` is a Billmesh secret rather than an IdNest
+credential. Generate it with the command in the local setup section above. The
+first key entry encrypts new session records; retained entries decrypt older
+records during key rotation. `BFF_ALLOW_INSECURE_HTTP=true` exists only for
+isolated local/test deployments. Production configuration requires HTTPS.
 
 Get a development token from the test-only fake issuer:
 

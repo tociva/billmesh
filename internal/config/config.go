@@ -16,7 +16,6 @@ type Config struct {
 	DatabaseURL           string
 	OIDCIssuer            string
 	OIDCAudience          string
-	JWKSURL               string
 	WebhookTimeout        time.Duration
 	WorkerInterval        time.Duration
 	AuthFailuresPerMinute int
@@ -58,7 +57,6 @@ func Load() (Config, error) {
 		DatabaseURL:  databaseURL,
 		OIDCIssuer:   os.Getenv("OIDC_ISSUER"),
 		OIDCAudience: os.Getenv("OIDC_AUDIENCE"),
-		JWKSURL:      os.Getenv("JWKS_URL"),
 	}
 	parsed, err := url.Parse(databaseURL)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {

@@ -16,17 +16,16 @@ import (
 )
 
 func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *testing.T) {
-	for _, missing := range []string{"OIDC_ISSUER", "OIDC_AUDIENCE", "JWKS_URL"} {
+	for _, missing := range []string{"OIDC_ISSUER", "OIDC_AUDIENCE"} {
 		t.Run(missing, func(t *testing.T) {
 			t.Setenv("DATABASE_URL", "postgres://unreachable.invalid:5432/billmesh")
 			t.Setenv("OIDC_ISSUER", "https://issuer.example")
 			t.Setenv("OIDC_AUDIENCE", "billmesh")
-			t.Setenv("JWKS_URL", "https://issuer.example/jwks")
 			t.Setenv(missing, "")
 			originalArgs := os.Args
 			os.Args = []string{"billmesh", "api"}
 			defer func() { os.Args = originalArgs }()
-			if err := run(); err == nil || !strings.Contains(err.Error(), "OIDC_ISSUER, OIDC_AUDIENCE and JWKS_URL are required") {
+			if err := run(); err == nil || !strings.Contains(err.Error(), "OIDC_ISSUER and OIDC_AUDIENCE are required") {
 				t.Fatalf("missing %s should prevent API startup before database access, got %v", missing, err)
 			}
 		})
@@ -36,7 +35,7 @@ func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *test
 func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testing.T) {
 	key := make([]byte, 32)
 	cfg := config.Config{
-		OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh", JWKSURL: "https://issuer.example/jwks",
+		OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh",
 		BFF: config.BFFConfig{
 			Enabled: true, AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
 			ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",

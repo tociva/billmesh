@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -48,25 +49,26 @@ type TokenVerifier interface {
 }
 
 type JWKSVerifier struct {
-	issuer, audience, url string
-	client                *http.Client
-	mu                    sync.RWMutex
-	refreshMu             sync.Mutex
-	keys                  map[string]*rsa.PublicKey
-	lastRefresh           time.Time
-	lastAttempt           time.Time
-	now                   func() time.Time
+	issuer, audience string
+	client           *http.Client
+	mu               sync.RWMutex
+	refreshMu        sync.Mutex
+	keys             map[string]*rsa.PublicKey
+	jwksURL          string
+	lastRefresh      time.Time
+	lastAttempt      time.Time
+	now              func() time.Time
 }
 
 const keyCacheLifetime = time.Minute
 const keyCacheOutageGrace = 5 * time.Minute
 const unknownKeyRefreshInterval = time.Second
 
-func NewJWKSVerifier(issuer, audience, url string, client *http.Client) *JWKSVerifier {
+func NewJWKSVerifier(issuer, audience string, client *http.Client) *JWKSVerifier {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &JWKSVerifier{issuer: issuer, audience: audience, url: url, client: client, keys: map[string]*rsa.PublicKey{}, now: time.Now}
+	return &JWKSVerifier{issuer: issuer, audience: audience, client: client, keys: map[string]*rsa.PublicKey{}, now: time.Now}
 }
 
 func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) {
@@ -182,7 +184,11 @@ func (v *JWKSVerifier) lookupKey(ctx context.Context, kid string) (*rsa.PublicKe
 }
 
 func (v *JWKSVerifier) refresh(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.url, nil)
+	jwksURL, err := v.resolveJWKSURL(ctx)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return err
 	}
@@ -224,6 +230,41 @@ func (v *JWKSVerifier) refresh(ctx context.Context) error {
 	v.lastRefresh = v.now()
 	v.mu.Unlock()
 	return nil
+}
+
+func (v *JWKSVerifier) resolveJWKSURL(ctx context.Context) (string, error) {
+	if v.jwksURL != "" {
+		return v.jwksURL, nil
+	}
+	discoveryURL := strings.TrimRight(v.issuer, "/") + "/.well-known/openid-configuration"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create OIDC discovery request: %w", err)
+	}
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("discover OIDC provider: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("discover OIDC provider: status %d", resp.StatusCode)
+	}
+	var metadata struct {
+		Issuer  string `json:"issuer"`
+		JWKSURL string `json:"jwks_uri"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return "", fmt.Errorf("decode OIDC discovery: %w", err)
+	}
+	if strings.TrimRight(metadata.Issuer, "/") != strings.TrimRight(v.issuer, "/") {
+		return "", errors.New("OIDC discovery issuer mismatch")
+	}
+	parsed, err := url.Parse(metadata.JWKSURL)
+	if err != nil || !parsed.IsAbs() || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return "", errors.New("OIDC discovery contains an invalid jwks_uri")
+	}
+	v.jwksURL = metadata.JWKSURL
+	return v.jwksURL, nil
 }
 
 type contextKey struct{}
