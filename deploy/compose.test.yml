@@ -60,15 +60,26 @@ services:
       PUBLIC_OPENAPI: "false"
       BFF_ENABLED: "true"
       BFF_ALLOW_INSECURE_HTTP: "true"
-      BFF_APP_ORIGIN: http://api:8080
-      BFF_ISSUER: http://mock-external:8090
-      BFF_CLIENT_ID: billmesh-web-test
-      BFF_CLIENT_SECRET: test-secret
-      BFF_AUDIENCE: billmesh-test
-      BFF_REDIRECT_URI: http://api:8080/auth/callback
-      BFF_POST_LOGOUT_REDIRECT_URI: http://api:8080/auth/logout/callback
+      CONSOLE_APP_ORIGIN: http://console.test
+      ADMIN_APP_ORIGIN: http://admin.test
+      BFF_CONSOLE_ISSUER: http://mock-external:8090
+      BFF_CONSOLE_CLIENT_ID: billmesh-console-test
+      BFF_CONSOLE_CLIENT_SECRET: test-secret
+      BFF_CONSOLE_AUDIENCE: billmesh-test
+      BFF_CONSOLE_REDIRECT_URI: http://api:8080/api/v1/auth/console/callback
+      BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI: http://api:8080/api/v1/auth/console/logout/callback
+      BFF_CONSOLE_STANDALONE_LOGOUT_URI: http://mock-external:8090/logout
+      BFF_CONSOLE_RETURN_PATH_PREFIXES: /app
+      BFF_ADMIN_ISSUER: http://mock-external:8090
+      BFF_ADMIN_CLIENT_ID: billmesh-admin-test
+      BFF_ADMIN_CLIENT_SECRET: test-secret
+      BFF_ADMIN_AUDIENCE: billmesh-test
+      BFF_ADMIN_SCOPE: openid profile email offline_access billing:admin
+      BFF_ADMIN_REDIRECT_URI: http://api:8080/api/v1/auth/admin/callback
+      BFF_ADMIN_POST_LOGOUT_REDIRECT_URI: http://api:8080/api/v1/auth/admin/logout/callback
+      BFF_ADMIN_STANDALONE_LOGOUT_URI: http://mock-external:8090/logout
+      BFF_ADMIN_RETURN_PATH_PREFIXES: /app
       BFF_SESSION_ENCRYPTION_KEYS: v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-      BFF_RETURN_PATH_PREFIXES: /app
       RAZORPAY_BASE_URL: http://mock-external:8090
       RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
       WEBHOOK_ALLOWED_PRIVATE_HOSTS: mock-external

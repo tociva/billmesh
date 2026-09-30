@@ -62,44 +62,62 @@ func ValidateConfig(cfg config.BFFConfig) error {
 }
 
 func validateConfig(cfg config.BFFConfig) error {
-	appOrigin, err := parseSecureURL(cfg.AppOrigin, "BFF_APP_ORIGIN", cfg.AllowInsecureHTTP)
+	if cfg.Realm != "console" && cfg.Realm != "admin" {
+		return errors.New("BFF realm must be console or admin")
+	}
+	prefix := "BFF_" + strings.ToUpper(cfg.Realm)
+	appOriginName := strings.ToUpper(cfg.Realm) + "_APP_ORIGIN"
+	appOrigin, err := parseSecureURL(cfg.AppOrigin, appOriginName, cfg.AllowInsecureHTTP)
 	if err != nil {
 		return err
 	}
 	if appOrigin.Path != "" && appOrigin.Path != "/" || appOrigin.RawQuery != "" || appOrigin.Fragment != "" {
-		return errors.New("BFF_APP_ORIGIN must be an origin without a path")
+		return fmt.Errorf("%s must be an origin without a path", appOriginName)
 	}
-	redirect, err := parseSecureURL(cfg.RedirectURI, "BFF_REDIRECT_URI", cfg.AllowInsecureHTTP)
+	redirect, err := parseSecureURL(cfg.RedirectURI, prefix+"_REDIRECT_URI", cfg.AllowInsecureHTTP)
 	if err != nil {
 		return err
 	}
-	logout, err := parseSecureURL(cfg.PostLogoutRedirectURI, "BFF_POST_LOGOUT_REDIRECT_URI", cfg.AllowInsecureHTTP)
+	logout, err := parseSecureURL(cfg.PostLogoutRedirectURI, prefix+"_POST_LOGOUT_REDIRECT_URI", cfg.AllowInsecureHTTP)
 	if err != nil {
 		return err
 	}
 	if redirect.Scheme != logout.Scheme || redirect.Host != logout.Host {
-		return errors.New("BFF callback and post-logout callback must use the same origin")
+		return fmt.Errorf("%s_POST_LOGOUT_REDIRECT_URI must use the same origin as %s_REDIRECT_URI", prefix, prefix)
 	}
-	if redirect.Scheme != appOrigin.Scheme || redirect.Host != appOrigin.Host {
-		return errors.New("BFF callbacks and application must use the same origin")
+	if redirect.Path != "/api/v1/auth/"+cfg.Realm+"/callback" {
+		return fmt.Errorf("%s_REDIRECT_URI must point to /api/v1/auth/%s/callback", prefix, cfg.Realm)
 	}
-	if _, err = parseSecureURL(cfg.Issuer, "BFF_ISSUER", cfg.AllowInsecureHTTP); err != nil {
+	if logout.Path != "/api/v1/auth/"+cfg.Realm+"/logout/callback" {
+		return fmt.Errorf("%s_POST_LOGOUT_REDIRECT_URI must point to /api/v1/auth/%s/logout/callback", prefix, cfg.Realm)
+	}
+	if _, err = parseSecureURL(cfg.Issuer, prefix+"_ISSUER", cfg.AllowInsecureHTTP); err != nil {
 		return err
 	}
-	if cfg.StandaloneLogoutURI != "" {
-		if _, err = parseSecureURL(cfg.StandaloneLogoutURI, "BFF_STANDALONE_LOGOUT_URI", cfg.AllowInsecureHTTP); err != nil {
-			return err
-		}
+	if _, err = parseSecureURL(cfg.StandaloneLogoutURI, prefix+"_STANDALONE_LOGOUT_URI", cfg.AllowInsecureHTTP); err != nil {
+		return err
 	}
 	if len(cfg.ReturnPathPrefixes) == 0 {
-		return errors.New("BFF_RETURN_PATH_PREFIXES must contain at least one path")
+		return fmt.Errorf("%s_RETURN_PATH_PREFIXES must contain at least one path", prefix)
 	}
 	for _, prefix := range cfg.ReturnPathPrefixes {
 		if !strings.HasPrefix(prefix, "/") || strings.HasPrefix(prefix, "//") || strings.Contains(prefix, "\\") {
 			return fmt.Errorf("invalid BFF return path prefix %q", prefix)
 		}
 	}
+	if cfg.Realm == "admin" && !containsScope(cfg.Scope, "billing:admin") {
+		return errors.New("BFF_ADMIN_SCOPE must include billing:admin")
+	}
 	return nil
+}
+
+func containsScope(value, expected string) bool {
+	for _, scope := range strings.Fields(value) {
+		if scope == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func parseSecureURL(value, name string, allowInsecure bool) (*url.URL, error) {
@@ -118,13 +136,31 @@ func parseSecureURL(value, name string, allowInsecure bool) (*url.URL, error) {
 
 func (m *Manager) AuthHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /auth/login", m.login)
-	mux.HandleFunc("GET /auth/callback", m.callback)
-	mux.HandleFunc("GET /auth/session", m.session)
-	mux.HandleFunc("POST /auth/logout", m.logout)
-	mux.HandleFunc("GET /auth/logout/continue", m.continueLogout)
-	mux.HandleFunc("GET /auth/logout/callback", m.logoutCallback)
+	base := m.AuthBasePath()
+	mux.HandleFunc("GET "+base+"/login", m.login)
+	mux.HandleFunc("GET "+base+"/callback", m.callback)
+	mux.HandleFunc("GET "+base+"/session", m.session)
+	mux.HandleFunc("POST "+base+"/logout", m.logout)
+	mux.HandleFunc("GET "+base+"/logout/continue", m.continueLogout)
+	mux.HandleFunc("GET "+base+"/logout/provider", m.providerLogout)
+	mux.HandleFunc("GET "+base+"/logout/callback", m.logoutCallback)
 	return mux
+}
+
+func (m *Manager) AuthBasePath() string {
+	return "/api/v1/auth/" + m.config.Realm
+}
+
+func (m *Manager) AppOrigin() string {
+	return strings.TrimRight(m.config.AppOrigin, "/")
+}
+
+func (m *Manager) sessionCookieName() string {
+	return "__Host-billmesh-" + m.config.Realm + "-session"
+}
+
+func (m *Manager) loginCookieName() string {
+	return "__Host-billmesh-" + m.config.Realm + "-login"
 }
 
 func (m *Manager) Middleware(next http.Handler) http.Handler {
@@ -174,7 +210,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transaction := loginTransaction{
-		SchemaVersion: schemaVersion, State: state, Nonce: nonce, CodeVerifier: verifier,
+		SchemaVersion: schemaVersion, Realm: m.config.Realm, State: state, Nonce: nonce, CodeVerifier: verifier,
 		CorrelationHash: digest(correlation), ReturnTo: m.safeReturnTo(r.URL.Query().Get("returnTo")), CreatedAt: m.now(),
 	}
 	redirect, err := m.oidc.authorizationURL(r.Context(), transaction)
@@ -186,7 +222,7 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	http.SetCookie(w, secureCookie(loginCookieName, correlation, m.config.LoginTTL))
+	http.SetCookie(w, secureCookie(m.loginCookieName(), correlation, m.config.LoginTTL))
 	http.Redirect(w, r, redirect, http.StatusFound)
 }
 
@@ -195,15 +231,16 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	if !m.allowAuthAttempt(w, r) {
 		return
 	}
-	clearCookie(w, loginCookieName)
+	clearCookie(w, m.loginCookieName())
 	state := r.URL.Query().Get("state")
 	if state == "" {
 		http.Error(w, "invalid login callback", http.StatusUnauthorized)
 		return
 	}
 	transaction, err := m.store.takeLogin(r.Context(), state)
-	correlation, cookieErr := r.Cookie(loginCookieName)
+	correlation, cookieErr := r.Cookie(m.loginCookieName())
 	if err != nil || cookieErr != nil || transaction == nil || transaction.SchemaVersion != schemaVersion ||
+		transaction.Realm != m.config.Realm ||
 		!equalBytes(transaction.CorrelationHash, digest(correlation.Value)) {
 		http.Error(w, "invalid login callback", http.StatusUnauthorized)
 		return
@@ -246,7 +283,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session := browserSession{
-		SchemaVersion: schemaVersion, SessionID: sessionID, Subject: claims.Subject,
+		SchemaVersion: schemaVersion, Realm: m.config.Realm, SessionID: sessionID, Subject: claims.Subject,
 		Email: identity.Email, Name: identity.Name, OrgID: claims.OrgID, App: claims.App,
 		Environment: claims.Environment, Permissions: claims.Permissions, CSRFToken: csrf,
 		AllowedOrigin: strings.TrimRight(m.config.AppOrigin, "/"), CreatedAt: m.now(),
@@ -258,7 +295,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	http.SetCookie(w, secureCookie(sessionCookieName, sessionID, m.config.SessionAbsoluteTTL))
+	http.SetCookie(w, secureCookie(m.sessionCookieName(), sessionID, m.config.SessionAbsoluteTTL))
 	http.Redirect(w, r, newURL(m.config.AppOrigin, transaction.ReturnTo), http.StatusFound)
 }
 
@@ -281,7 +318,7 @@ func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
 	session, _, status, err := m.authenticate(r)
 	if err != nil {
-		clearCookie(w, sessionCookieName)
+		clearCookie(w, m.sessionCookieName())
 		http.Error(w, http.StatusText(status), status)
 		return
 	}
@@ -297,20 +334,24 @@ func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = m.store.deleteSession(r.Context(), session.SessionID)
 	ticket, err := m.store.saveLogout(r.Context(), logoutTransaction{
-		SchemaVersion: schemaVersion, IDToken: session.IDToken, CreatedAt: m.now(),
+		SchemaVersion: schemaVersion, Realm: m.config.Realm, IDToken: session.IDToken, CreatedAt: m.now(),
 	})
 	if err != nil {
 		http.Error(w, "logout unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	clearCookie(w, sessionCookieName)
-	writeJSON(w, http.StatusOK, map[string]string{"logoutUrl": "/auth/logout/continue?ticket=" + url.QueryEscape(ticket)})
+	clearCookie(w, m.sessionCookieName())
+	continuation, _ := url.Parse(m.config.RedirectURI)
+	continuation.Path = m.AuthBasePath() + "/logout/continue"
+	continuation.RawQuery = "ticket=" + url.QueryEscape(ticket)
+	continuation.Fragment = ""
+	writeJSON(w, http.StatusOK, map[string]string{"logoutUrl": continuation.String()})
 }
 
 func (m *Manager) continueLogout(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
 	transaction, err := m.store.takeLogout(r.Context(), r.URL.Query().Get("ticket"))
-	if err != nil || transaction == nil || transaction.SchemaVersion != schemaVersion {
+	if err != nil || transaction == nil || transaction.SchemaVersion != schemaVersion || transaction.Realm != m.config.Realm {
 		http.Error(w, "invalid logout transaction", http.StatusUnauthorized)
 		return
 	}
@@ -324,14 +365,30 @@ func (m *Manager) continueLogout(w http.ResponseWriter, r *http.Request) {
 
 func (m *Manager) logoutCallback(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
-	http.Redirect(w, r, strings.TrimRight(m.config.AppOrigin, "/")+"/", http.StatusFound)
+	http.Redirect(w, r, strings.TrimRight(m.config.AppOrigin, "/")+"/auth/logout", http.StatusFound)
+}
+
+func (m *Manager) providerLogout(w http.ResponseWriter, r *http.Request) {
+	noStore(w)
+	clearCookie(w, m.sessionCookieName())
+	clearCookie(w, m.loginCookieName())
+	logout, err := url.Parse(m.config.StandaloneLogoutURI)
+	if err != nil {
+		http.Error(w, "logout unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	query := logout.Query()
+	query.Set("client_id", m.config.ClientID)
+	query.Set("return_to", m.config.PostLogoutRedirectURI)
+	logout.RawQuery = query.Encode()
+	http.Redirect(w, r, logout.String(), http.StatusFound)
 }
 
 func (m *Manager) authenticate(r *http.Request) (*browserSession, *auth.Claims, int, error) {
 	if !m.originAllowed(r) {
 		return nil, nil, http.StatusForbidden, errors.New("origin is not allowed")
 	}
-	cookie, err := singleCookie(r, sessionCookieName)
+	cookie, err := singleCookie(r, m.sessionCookieName())
 	if err != nil {
 		return nil, nil, http.StatusUnauthorized, err
 	}
@@ -340,7 +397,7 @@ func (m *Manager) authenticate(r *http.Request) (*browserSession, *auth.Claims, 
 		m.log.Error("BFF session load failed", "error", err)
 		return nil, nil, http.StatusServiceUnavailable, err
 	}
-	if session == nil || session.SchemaVersion != schemaVersion || session.SessionID != cookie.Value ||
+	if session == nil || session.SchemaVersion != schemaVersion || session.Realm != m.config.Realm || session.SessionID != cookie.Value ||
 		session.AllowedOrigin != strings.TrimRight(m.config.AppOrigin, "/") || !m.now().Before(session.AbsoluteExpiry) {
 		return nil, nil, http.StatusUnauthorized, errors.New("invalid browser session")
 	}
@@ -439,10 +496,7 @@ func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (
 
 func (m *Manager) originAllowed(r *http.Request) bool {
 	origins := r.Header.Values("Origin")
-	if len(origins) == 1 {
-		return origins[0] == strings.TrimRight(m.config.AppOrigin, "/")
-	}
-	return len(origins) == 0 && safeMethod(r.Method) && r.Header.Get("Sec-Fetch-Site") != "cross-site"
+	return len(origins) == 1 && origins[0] == strings.TrimRight(m.config.AppOrigin, "/")
 }
 
 func (m *Manager) safeReturnTo(value string) string {

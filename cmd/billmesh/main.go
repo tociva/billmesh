@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -68,9 +67,18 @@ func run() error {
 		api := app.NewAPI(pool, verifier, nil)
 		api.ConfigureOpenAPI(cfg.PublicOpenAPI)
 		if cfg.BFF.Enabled {
-			browser, err := bff.New(cfg.BFF, pool, verifier, nil)
+			managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
+			for _, realm := range cfg.BFF.Realms {
+				browserVerifier := auth.NewJWKSVerifier(realm.Issuer, realm.Audience, nil)
+				manager, err := bff.New(realm, pool, browserVerifier, nil)
+				if err != nil {
+					return fmt.Errorf("configure %s BFF: %w", realm.Realm, err)
+				}
+				managers = append(managers, manager)
+			}
+			browser, err := bff.NewRouter(managers...)
 			if err != nil {
-				return fmt.Errorf("configure BFF: %w", err)
+				return fmt.Errorf("configure BFF router: %w", err)
 			}
 			api.ConfigureBrowserAuth(browser)
 		}
@@ -107,11 +115,10 @@ func validateAPIAuthConfig(cfg config.Config) error {
 		return errors.New("OIDC_ISSUER and OIDC_AUDIENCE are required for api")
 	}
 	if cfg.BFF.Enabled {
-		if strings.TrimRight(cfg.BFF.Issuer, "/") != strings.TrimRight(cfg.OIDCIssuer, "/") || cfg.BFF.Audience != cfg.OIDCAudience {
-			return errors.New("BFF_ISSUER and BFF_AUDIENCE must match OIDC_ISSUER and OIDC_AUDIENCE")
-		}
-		if err := bff.ValidateConfig(cfg.BFF); err != nil {
-			return fmt.Errorf("invalid BFF configuration: %w", err)
+		for _, realm := range cfg.BFF.Realms {
+			if err := bff.ValidateConfig(realm); err != nil {
+				return fmt.Errorf("invalid %s BFF configuration: %w", realm.Realm, err)
+			}
 		}
 	}
 	return nil

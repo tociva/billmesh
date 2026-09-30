@@ -8,9 +8,7 @@ import (
 )
 
 const (
-	schemaVersion      = 1
-	sessionCookieName  = "__Host-billmesh-session"
-	loginCookieName    = "__Host-billmesh-login"
+	schemaVersion      = 2
 	csrfHeaderName     = "X-CSRF-Token"
 	refreshLease       = time.Minute
 	sessionTouchPeriod = 5 * time.Minute
@@ -23,6 +21,7 @@ type tokenVerifier interface {
 
 type loginTransaction struct {
 	SchemaVersion   int       `json:"schema_version"`
+	Realm           string    `json:"realm"`
 	State           string    `json:"state"`
 	Nonce           string    `json:"nonce"`
 	CodeVerifier    string    `json:"code_verifier"`
@@ -33,6 +32,7 @@ type loginTransaction struct {
 
 type browserSession struct {
 	SchemaVersion  int       `json:"schema_version"`
+	Realm          string    `json:"realm"`
 	SessionID      string    `json:"session_id"`
 	Subject        string    `json:"subject"`
 	Email          string    `json:"email,omitempty"`
@@ -53,6 +53,7 @@ type browserSession struct {
 
 type logoutTransaction struct {
 	SchemaVersion int       `json:"schema_version"`
+	Realm         string    `json:"realm"`
 	IDToken       string    `json:"id_token,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,20 +106,18 @@ func TestLoadRejectsInvalidDatabaseComponents(t *testing.T) {
 func TestLoadBFFConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("BFF_ENABLED", "true")
-	t.Setenv("BFF_APP_ORIGIN", "https://billmesh.example")
-	t.Setenv("BFF_ISSUER", "https://identity.example")
-	t.Setenv("BFF_CLIENT_ID", "billmesh-web")
-	t.Setenv("BFF_CLIENT_SECRET", "secret")
-	t.Setenv("BFF_AUDIENCE", "billmesh")
-	t.Setenv("BFF_REDIRECT_URI", "https://billmesh.example/auth/callback")
-	t.Setenv("BFF_POST_LOGOUT_REDIRECT_URI", "https://billmesh.example/auth/logout/callback")
+	setBFFRealmEnvironment(t, "CONSOLE", "https://console.billmesh.example")
+	setBFFRealmEnvironment(t, "ADMIN", "https://admin.billmesh.example")
 	t.Setenv("BFF_SESSION_ENCRYPTION_KEYS", "v1:key")
-	t.Setenv("BFF_RETURN_PATH_PREFIXES", "/app,/admin")
+	t.Setenv("BFF_CONSOLE_RETURN_PATH_PREFIXES", "/app,/billing")
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.True(t, cfg.BFF.Enabled)
-	require.Equal(t, []string{"/app", "/admin"}, cfg.BFF.ReturnPathPrefixes)
-	require.Equal(t, 30, cfg.BFF.LoginAttemptsPerMinute)
+	require.Len(t, cfg.BFF.Realms, 2)
+	require.Equal(t, "console", cfg.BFF.Realms[0].Realm)
+	require.Equal(t, []string{"/app", "/billing"}, cfg.BFF.Realms[0].ReturnPathPrefixes)
+	require.Equal(t, 30, cfg.BFF.Realms[0].LoginAttemptsPerMinute)
+	require.Equal(t, "admin", cfg.BFF.Realms[1].Realm)
 }
 
 func TestLoadBFFRequiresSecretsAndValidLifetimes(t *testing.T) {
@@ -127,18 +126,29 @@ func TestLoadBFFRequiresSecretsAndValidLifetimes(t *testing.T) {
 	_, err := Load()
 	require.ErrorContains(t, err, "required")
 
-	t.Setenv("BFF_APP_ORIGIN", "https://billmesh.example")
-	t.Setenv("BFF_ISSUER", "https://identity.example")
-	t.Setenv("BFF_CLIENT_ID", "billmesh-web")
-	t.Setenv("BFF_CLIENT_SECRET", "secret")
-	t.Setenv("BFF_AUDIENCE", "billmesh")
-	t.Setenv("BFF_REDIRECT_URI", "https://billmesh.example/auth/callback")
-	t.Setenv("BFF_POST_LOGOUT_REDIRECT_URI", "https://billmesh.example/auth/logout/callback")
+	setBFFRealmEnvironment(t, "CONSOLE", "https://console.billmesh.example")
+	setBFFRealmEnvironment(t, "ADMIN", "https://admin.billmesh.example")
 	t.Setenv("BFF_SESSION_ENCRYPTION_KEYS", "v1:key")
 	t.Setenv("BFF_SESSION_IDLE_TTL", "2h")
 	t.Setenv("BFF_SESSION_ABSOLUTE_TTL", "1h")
 	_, err = Load()
 	require.ErrorContains(t, err, "must be at least")
+}
+
+func setBFFRealmEnvironment(t *testing.T, realm, appOrigin string) {
+	t.Helper()
+	prefix := "BFF_" + realm
+	t.Setenv(realm+"_APP_ORIGIN", appOrigin)
+	t.Setenv(prefix+"_ISSUER", "https://identity.example")
+	t.Setenv(prefix+"_CLIENT_ID", "billmesh-"+strings.ToLower(realm))
+	t.Setenv(prefix+"_CLIENT_SECRET", "secret")
+	t.Setenv(prefix+"_AUDIENCE", "billmesh")
+	if realm == "ADMIN" {
+		t.Setenv(prefix+"_SCOPE", "openid profile email offline_access billing:admin")
+	}
+	t.Setenv(prefix+"_REDIRECT_URI", "https://api.billmesh.example/api/v1/auth/"+strings.ToLower(realm)+"/callback")
+	t.Setenv(prefix+"_POST_LOGOUT_REDIRECT_URI", "https://api.billmesh.example/api/v1/auth/"+strings.ToLower(realm)+"/logout/callback")
+	t.Setenv(prefix+"_STANDALONE_LOGOUT_URI", "https://auth.idnest.example/logout")
 }
 
 func clearDatabaseComponents(t *testing.T) {

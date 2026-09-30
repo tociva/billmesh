@@ -42,11 +42,22 @@ func TestOpenAPIDocumentDescribesEveryRegisteredRoute(t *testing.T) {
 	}
 
 	want := registeredRoutes(t, "../internal/app/api.go")
-	for route := range registeredRoutes(t, "../internal/bff/manager.go") {
-		want[route] = true
+	for _, realm := range []string{"console", "admin"} {
+		base := "/api/v1/auth/" + realm
+		for _, route := range []string{
+			"GET " + base + "/login",
+			"GET " + base + "/callback",
+			"GET " + base + "/session",
+			"POST " + base + "/logout",
+			"GET " + base + "/logout/continue",
+			"GET " + base + "/logout/provider",
+			"GET " + base + "/logout/callback",
+		} {
+			want[route] = true
+		}
 	}
-	if len(want) != 54 {
-		t.Fatalf("discovered %d registered routes, want 54", len(want))
+	if len(want) != 62 {
+		t.Fatalf("discovered %d registered routes, want 62", len(want))
 	}
 
 	verbs := map[string]bool{"get": true, "post": true, "put": true, "patch": true, "delete": true, "head": true, "options": true, "trace": true}

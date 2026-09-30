@@ -32,6 +32,8 @@ func (routeTestBrowserAuth) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+func (routeTestBrowserAuth) CORS(next http.Handler) http.Handler { return next }
+
 func (routeTestVerifier) Verify(_ context.Context, token string) (*auth.Claims, error) {
 	if token == "valid" {
 		return &auth.Claims{}, nil
@@ -121,7 +123,9 @@ func TestBrowserAndBearerSurfacesShareProtectedHandlersWithoutAuthAmbiguity(t *t
 	handler := a.Handler()
 
 	browser := httptest.NewRecorder()
-	handler.ServeHTTP(browser, httptest.NewRequest(http.MethodGet, "/bff/v1/products", nil))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/products", nil)
+	request.Header.Set("Origin", "https://console.billmesh.example")
+	handler.ServeHTTP(browser, request)
 	if browser.Code == http.StatusUnauthorized || browser.Code == http.StatusNotFound {
 		t.Fatalf("browser authentication did not reach shared handler: %d", browser.Code)
 	}
@@ -133,7 +137,7 @@ func TestBrowserAndBearerSurfacesShareProtectedHandlersWithoutAuthAmbiguity(t *t
 	}
 
 	authRoute := httptest.NewRecorder()
-	handler.ServeHTTP(authRoute, httptest.NewRequest(http.MethodGet, "/auth/session", nil))
+	handler.ServeHTTP(authRoute, httptest.NewRequest(http.MethodGet, "/api/v1/auth/console/session", nil))
 	if authRoute.Code != http.StatusNoContent {
 		t.Fatalf("browser auth route was not mounted: %d", authRoute.Code)
 	}

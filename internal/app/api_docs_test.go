@@ -24,6 +24,7 @@ func (b *documentationBrowserAuth) Authenticate(*http.Request) (*auth.Claims, in
 
 func (*documentationBrowserAuth) AuthHandler() http.Handler                 { return http.NotFoundHandler() }
 func (*documentationBrowserAuth) Middleware(next http.Handler) http.Handler { return next }
+func (*documentationBrowserAuth) CORS(next http.Handler) http.Handler       { return next }
 
 func TestAPIDocumentationIsPrivateByDefault(t *testing.T) {
 	handler := NewAPI(nil, routeTestVerifier{}, nil).Handler()

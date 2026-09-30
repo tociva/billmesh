@@ -13,9 +13,10 @@ import (
 
 func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 	const apiOrigin = "http://api:8080"
+	const consoleOrigin = "http://console.test"
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 
-	login, err := client.Get(apiOrigin + "/auth/login?returnTo=%2Fapp%2Fbilling")
+	login, err := client.Get(apiOrigin + "/api/v1/auth/console/login?returnTo=%2Fapp%2Fbilling")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +24,7 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 	if login.StatusCode != http.StatusFound {
 		t.Fatalf("login: want 302, got %d", login.StatusCode)
 	}
-	correlation := requireCookie(t, login.Cookies(), "__Host-billmesh-login")
+	correlation := requireCookie(t, login.Cookies(), "__Host-billmesh-console-login")
 	requireSecureHostCookie(t, correlation)
 	authorizationURL := login.Header.Get("Location")
 	if !strings.Contains(authorizationURL, "code_challenge_method=S256") ||
@@ -46,14 +47,14 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer callback.Body.Close()
-	if callback.StatusCode != http.StatusFound || callback.Header.Get("Location") != apiOrigin+"/app/billing" {
+	if callback.StatusCode != http.StatusFound || callback.Header.Get("Location") != consoleOrigin+"/app/billing" {
 		t.Fatalf("callback: got status %d and location %q", callback.StatusCode, callback.Header.Get("Location"))
 	}
-	sessionCookie := requireCookie(t, callback.Cookies(), "__Host-billmesh-session")
+	sessionCookie := requireCookie(t, callback.Cookies(), "__Host-billmesh-console-session")
 	requireSecureHostCookie(t, sessionCookie)
 
-	sessionRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/auth/session", nil)
-	sessionRequest.Header.Set("Origin", apiOrigin)
+	sessionRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/auth/console/session", nil)
+	sessionRequest.Header.Set("Origin", consoleOrigin)
 	sessionRequest.AddCookie(sessionCookie)
 	sessionResponse, err := client.Do(sessionRequest)
 	if err != nil {
@@ -63,6 +64,9 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 	if sessionResponse.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(sessionResponse.Body)
 		t.Fatalf("session: want 200, got %d: %s", sessionResponse.StatusCode, raw)
+	}
+	if sessionResponse.Header.Get("Access-Control-Allow-Origin") != consoleOrigin || sessionResponse.Header.Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("session response omitted credentialed CORS headers: %v", sessionResponse.Header)
 	}
 	var projection struct {
 		Authenticated bool `json:"authenticated"`
@@ -79,8 +83,8 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("incomplete safe session projection: %+v", projection)
 	}
 
-	productsRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/bff/v1/products", nil)
-	productsRequest.Header.Set("Origin", apiOrigin)
+	productsRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/products", nil)
+	productsRequest.Header.Set("Origin", consoleOrigin)
 	productsRequest.AddCookie(sessionCookie)
 	productsResponse, err := client.Do(productsRequest)
 	if err != nil {
@@ -92,8 +96,8 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("cookie-authenticated API read: want 200, got %d", productsResponse.StatusCode)
 	}
 
-	mutationRequest, _ := http.NewRequest(http.MethodPost, apiOrigin+"/bff/v1/accounts", strings.NewReader("{}"))
-	mutationRequest.Header.Set("Origin", apiOrigin)
+	mutationRequest, _ := http.NewRequest(http.MethodPost, apiOrigin+"/api/v1/accounts", strings.NewReader("{}"))
+	mutationRequest.Header.Set("Origin", consoleOrigin)
 	mutationRequest.Header.Set("Content-Type", "application/json")
 	mutationRequest.AddCookie(sessionCookie)
 	mutationResponse, err := client.Do(mutationRequest)
@@ -106,8 +110,8 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("mutation without CSRF: want 403, got %d", mutationResponse.StatusCode)
 	}
 
-	mutationRequest, _ = http.NewRequest(http.MethodPost, apiOrigin+"/bff/v1/accounts", strings.NewReader("{}"))
-	mutationRequest.Header.Set("Origin", apiOrigin)
+	mutationRequest, _ = http.NewRequest(http.MethodPost, apiOrigin+"/api/v1/accounts", strings.NewReader("{}"))
+	mutationRequest.Header.Set("Origin", consoleOrigin)
 	mutationRequest.Header.Set("Content-Type", "application/json")
 	mutationRequest.Header.Set("X-CSRF-Token", projection.CSRFToken)
 	mutationRequest.AddCookie(sessionCookie)
@@ -121,7 +125,7 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("mutation with CSRF should reach existing handler: want 400, got %d", mutationResponse.StatusCode)
 	}
 
-	foreignRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/bff/v1/products", nil)
+	foreignRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/products", nil)
 	foreignRequest.Header.Set("Origin", "https://untrusted.example")
 	foreignRequest.AddCookie(sessionCookie)
 	foreignResponse, err := client.Do(foreignRequest)
@@ -133,8 +137,8 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("foreign origin: want 403, got %d", foreignResponse.StatusCode)
 	}
 
-	logoutRequest, _ := http.NewRequest(http.MethodPost, apiOrigin+"/auth/logout", nil)
-	logoutRequest.Header.Set("Origin", apiOrigin)
+	logoutRequest, _ := http.NewRequest(http.MethodPost, apiOrigin+"/api/v1/auth/console/logout", nil)
+	logoutRequest.Header.Set("Origin", consoleOrigin)
 	logoutRequest.Header.Set("X-CSRF-Token", projection.CSRFToken)
 	logoutRequest.AddCookie(sessionCookie)
 	logoutResponse, err := client.Do(logoutRequest)
@@ -146,8 +150,8 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("logout: want 200, got %d", logoutResponse.StatusCode)
 	}
 
-	expiredRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/auth/session", nil)
-	expiredRequest.Header.Set("Origin", apiOrigin)
+	expiredRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/auth/console/session", nil)
+	expiredRequest.Header.Set("Origin", consoleOrigin)
 	expiredRequest.AddCookie(sessionCookie)
 	expiredResponse, err := client.Do(expiredRequest)
 	if err != nil {
@@ -161,7 +165,7 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 
 func TestBrowserBFFRejectsUnsafeReturnTargetsAndBearerConfusion(t *testing.T) {
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	login, err := client.Get("http://api:8080/auth/login?returnTo=" + url.QueryEscape("//evil.example"))
+	login, err := client.Get("http://api:8080/api/v1/auth/console/login?returnTo=" + url.QueryEscape("//evil.example"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +173,8 @@ func TestBrowserBFFRejectsUnsafeReturnTargetsAndBearerConfusion(t *testing.T) {
 	if login.StatusCode != http.StatusFound {
 		t.Fatalf("login: want 302, got %d", login.StatusCode)
 	}
-	request, _ := http.NewRequest(http.MethodGet, "http://api:8080/bff/v1/products", nil)
+	request, _ := http.NewRequest(http.MethodGet, "http://api:8080/api/v1/products", nil)
+	request.Header.Set("Origin", "http://console.test")
 	request.Header.Set("Authorization", "Bearer not-accepted-here")
 	response, err := client.Do(request)
 	if err != nil {

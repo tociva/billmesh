@@ -6,9 +6,9 @@ info:
     Billing, subscriptions, credit wallets, metering, payments, and webhook APIs.
 
     Service clients call `/v1/*` with a bearer token. When the browser BFF is
-    enabled, the same protected operations are also available below `/bff/v1/*`
-    with the `__Host-billmesh-session` cookie. Unsafe BFF requests additionally
-    require the `X-CSRF-Token` returned by `GET /auth/session`.
+    enabled, the same protected operations are available below `/api/v1/*`
+    with a realm-specific opaque cookie. Unsafe BFF requests additionally
+    require the `X-CSRF-Token` returned by that realm's session endpoint.
 servers:
   - url: /
     description: Current Billmesh server
@@ -47,9 +47,9 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Readiness" }
         "503": { $ref: "#/components/responses/Error" }
-  /auth/login:
+  /api/v1/auth/console/login:
     get:
-      operationId: startBrowserLogin
+      operationId: startConsoleBrowserLogin
       tags: [Browser authentication]
       summary: Start the browser OIDC authorization-code flow
       description: Available only when the browser BFF is enabled.
@@ -62,9 +62,9 @@ paths:
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
         default: { $ref: "#/components/responses/PlainError" }
-  /auth/callback:
+  /api/v1/auth/console/callback:
     get:
-      operationId: completeBrowserLogin
+      operationId: completeConsoleBrowserLogin
       tags: [Browser authentication]
       summary: Complete the OIDC login callback
       security: []
@@ -75,13 +75,13 @@ paths:
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
         default: { $ref: "#/components/responses/PlainError" }
-  /auth/session:
+  /api/v1/auth/console/session:
     get:
-      operationId: getBrowserSession
+      operationId: getConsoleBrowserSession
       tags: [Browser authentication]
       summary: Read the current browser session and CSRF token
       security:
-        - browserSession: []
+        - consoleBrowserSession: []
       responses:
         "200":
           description: Authenticated browser session.
@@ -89,13 +89,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/BrowserSession" }
         default: { $ref: "#/components/responses/PlainError" }
-  /auth/logout:
+  /api/v1/auth/console/logout:
     post:
-      operationId: logoutBrowserSession
+      operationId: logoutConsoleBrowserSession
       tags: [Browser authentication]
       summary: Revoke and remove the current browser session
       security:
-        - browserSession: []
+        - consoleBrowserSession: []
           csrfToken: []
       parameters:
         - { $ref: "#/components/parameters/CSRFToken" }
@@ -110,9 +110,9 @@ paths:
                 properties:
                   logoutUrl: { type: string }
         default: { $ref: "#/components/responses/PlainError" }
-  /auth/logout/continue:
+  /api/v1/auth/console/logout/continue:
     get:
-      operationId: continueBrowserLogout
+      operationId: continueConsoleBrowserLogout
       tags: [Browser authentication]
       summary: Continue logout at the OIDC provider
       security: []
@@ -121,11 +121,110 @@ paths:
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
         default: { $ref: "#/components/responses/PlainError" }
-  /auth/logout/callback:
+  /api/v1/auth/console/logout/provider:
     get:
-      operationId: completeBrowserLogout
+      operationId: startStandaloneConsoleProviderLogout
+      tags: [Browser authentication]
+      summary: Start Console provider logout without requiring a session
+      security: []
+      responses:
+        "302": { $ref: "#/components/responses/Redirect" }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/console/logout/callback:
+    get:
+      operationId: completeConsoleBrowserLogout
       tags: [Browser authentication]
       summary: Complete provider logout and return to the application
+      security: []
+      responses:
+        "302": { $ref: "#/components/responses/Redirect" }
+  /api/v1/auth/admin/login:
+    get:
+      operationId: startAdminBrowserLogin
+      tags: [Browser authentication]
+      summary: Start the Admin OIDC authorization-code flow
+      security: []
+      parameters:
+        - name: returnTo
+          in: query
+          schema: { type: string }
+          description: Allowed application-relative return path.
+      responses:
+        "302": { $ref: "#/components/responses/Redirect" }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/admin/callback:
+    get:
+      operationId: completeAdminBrowserLogin
+      tags: [Browser authentication]
+      summary: Complete the Admin OIDC login callback
+      security: []
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, required: true, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "302": { $ref: "#/components/responses/Redirect" }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/admin/session:
+    get:
+      operationId: getAdminBrowserSession
+      tags: [Browser authentication]
+      summary: Read the current Admin browser session and CSRF token
+      security:
+        - adminBrowserSession: []
+      responses:
+        "200":
+          description: Authenticated Admin browser session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BrowserSession" }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/admin/logout:
+    post:
+      operationId: logoutAdminBrowserSession
+      tags: [Browser authentication]
+      summary: Revoke and remove the current Admin browser session
+      security:
+        - adminBrowserSession: []
+          csrfToken: []
+      parameters:
+        - { $ref: "#/components/parameters/CSRFToken" }
+      responses:
+        "200":
+          description: URL that continues provider logout.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [logoutUrl]
+                properties:
+                  logoutUrl: { type: string }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/admin/logout/continue:
+    get:
+      operationId: continueAdminBrowserLogout
+      tags: [Browser authentication]
+      summary: Continue Admin logout at the OIDC provider
+      security: []
+      parameters:
+        - { name: ticket, in: query, required: true, schema: { type: string } }
+      responses:
+        "302": { $ref: "#/components/responses/Redirect" }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/admin/logout/provider:
+    get:
+      operationId: startStandaloneAdminProviderLogout
+      tags: [Browser authentication]
+      summary: Start Admin provider logout without requiring a session
+      security: []
+      responses:
+        "302": { $ref: "#/components/responses/Redirect" }
+        default: { $ref: "#/components/responses/PlainError" }
+  /api/v1/auth/admin/logout/callback:
+    get:
+      operationId: completeAdminBrowserLogout
+      tags: [Browser authentication]
+      summary: Complete Admin provider logout and return to the application
       security: []
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
@@ -793,11 +892,16 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: OIDC access token carrying Billmesh permissions and application context.
-    browserSession:
+    consoleBrowserSession:
       type: apiKey
       in: cookie
-      name: __Host-billmesh-session
-      description: Opaque browser session cookie used only on `/auth/*` and mirrored `/bff/v1/*` routes.
+      name: __Host-billmesh-console-session
+      description: Opaque Console session cookie owned by the Billmesh API origin.
+    adminBrowserSession:
+      type: apiKey
+      in: cookie
+      name: __Host-billmesh-admin-session
+      description: Opaque Admin session cookie owned by the Billmesh API origin.
     csrfToken:
       type: apiKey
       in: header

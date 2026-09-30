@@ -46,6 +46,7 @@ type browserAuth interface {
 	AuthHandler() http.Handler
 	Authenticate(*http.Request) (*auth.Claims, int, error)
 	Middleware(http.Handler) http.Handler
+	CORS(http.Handler) http.Handler
 }
 
 const maxSSEConnectionsPerAccount = 8
@@ -133,7 +134,7 @@ func (a *API) Handler() http.Handler {
 		mux.Handle("/v1/", auth.MiddlewareWithHooks(a.auth, a.requestLimitHooks())(protected))
 	}
 	if a.browser != nil {
-		mux.Handle("/auth/", a.browser.AuthHandler())
+		mux.Handle("/api/v1/auth/", a.browser.AuthHandler())
 		hooks := a.requestLimitHooks()
 		browserProtected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, _ := auth.FromContext(r.Context())
@@ -142,9 +143,13 @@ func (a *API) Handler() http.Handler {
 			}
 			protected.ServeHTTP(w, r)
 		})
-		mux.Handle("/bff/v1/", http.StripPrefix("/bff", a.browser.Middleware(browserProtected)))
+		mux.Handle("/api/v1/", a.browser.Middleware(http.StripPrefix("/api", browserProtected)))
 	}
-	return requestLog(a.log, recoverer(mux))
+	handler := http.Handler(requestLog(a.log, recoverer(mux)))
+	if a.browser != nil {
+		handler = a.browser.CORS(handler)
+	}
+	return handler
 }
 
 func (a *API) ready(w http.ResponseWriter, r *http.Request) {

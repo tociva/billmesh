@@ -13,10 +13,11 @@ import (
 
 func testConfig() config.BFFConfig {
 	return config.BFFConfig{
-		AppOrigin: "https://billmesh.example", Issuer: "https://identity.example",
+		Realm: "console", AppOrigin: "https://console.billmesh.example", Issuer: "https://identity.example",
 		ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",
-		RedirectURI:           "https://billmesh.example/auth/callback",
-		PostLogoutRedirectURI: "https://billmesh.example/auth/logout/callback",
+		RedirectURI:           "https://api.billmesh.example/api/v1/auth/console/callback",
+		PostLogoutRedirectURI: "https://api.billmesh.example/api/v1/auth/console/logout/callback",
+		StandaloneLogoutURI:   "https://auth.idnest.example/logout",
 		SessionEncryptionKeys: "v1:" + encodedKey(1), SessionIdleTTL: time.Hour,
 		SessionAbsoluteTTL: 24 * time.Hour, LoginTTL: 5 * time.Minute,
 		LogoutTTL: 2 * time.Minute, RefreshSkew: time.Minute,
@@ -27,10 +28,12 @@ func testConfig() config.BFFConfig {
 func TestValidateConfigRequiresSecureConsistentOrigins(t *testing.T) {
 	require.NoError(t, validateConfig(testConfig()))
 	for name, mutate := range map[string]func(*config.BFFConfig){
-		"insecure":        func(c *config.BFFConfig) { c.AppOrigin = "http://billmesh.example" },
-		"invalid scheme":  func(c *config.BFFConfig) { c.AppOrigin = "ftp://billmesh.example" },
-		"callback origin": func(c *config.BFFConfig) { c.RedirectURI = "https://api.example/auth/callback" },
-		"return prefix":   func(c *config.BFFConfig) { c.ReturnPathPrefixes = []string{"https://evil.example"} },
+		"insecure":       func(c *config.BFFConfig) { c.AppOrigin = "http://billmesh.example" },
+		"invalid scheme": func(c *config.BFFConfig) { c.AppOrigin = "ftp://billmesh.example" },
+		"logout origin": func(c *config.BFFConfig) {
+			c.PostLogoutRedirectURI = "https://other.example/api/v1/auth/console/logout/callback"
+		},
+		"return prefix": func(c *config.BFFConfig) { c.ReturnPathPrefixes = []string{"https://evil.example"} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testConfig()
@@ -49,7 +52,7 @@ func TestSafeReturnToRejectsExternalAndAuthPaths(t *testing.T) {
 }
 
 func TestSecureCookiesUseHostOnlyBrowserContract(t *testing.T) {
-	cookie := secureCookie(sessionCookieName, "opaque", time.Hour)
+	cookie := secureCookie("__Host-billmesh-console-session", "opaque", time.Hour)
 	require.True(t, cookie.Secure)
 	require.True(t, cookie.HttpOnly)
 	require.Equal(t, "/", cookie.Path)

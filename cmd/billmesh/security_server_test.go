@@ -36,16 +36,17 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 	key := make([]byte, 32)
 	cfg := config.Config{
 		OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh",
-		BFF: config.BFFConfig{
-			Enabled: true, AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
+		BFF: config.BrowserAuthConfig{Enabled: true, Realms: []config.BFFConfig{{
+			Realm: "console", AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
 			ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",
-			RedirectURI:           "https://billmesh.example/auth/callback",
-			PostLogoutRedirectURI: "https://billmesh.example/auth/logout/callback",
+			RedirectURI:           "https://api.billmesh.example/api/v1/auth/console/callback",
+			PostLogoutRedirectURI: "https://api.billmesh.example/api/v1/auth/console/logout/callback",
+			StandaloneLogoutURI:   "https://auth.idnest.example/logout",
 			SessionEncryptionKeys: "v1:" + base64.RawURLEncoding.EncodeToString(key),
 			SessionIdleTTL:        time.Hour, SessionAbsoluteTTL: 24 * time.Hour,
 			LoginTTL: time.Minute, LogoutTTL: time.Minute, RefreshSkew: time.Minute,
 			ReturnPathPrefixes: []string{"/app"}, LoginAttemptsPerMinute: 30,
-		},
+		}}},
 	}
 	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "must use HTTPS") {
 		t.Fatalf("invalid BFF configuration should fail before database access, got %v", err)
