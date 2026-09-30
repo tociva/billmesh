@@ -1,0 +1,7 @@
+services:
+  postgres:
+    ports:
+      - "5433:5432"
+  mock-external:
+    ports:
+      - "8090:8090"

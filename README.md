@@ -16,14 +16,30 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 Requirements: Go 1.24+, Docker, and Docker Compose.
 
 ```sh
-docker compose -f deploy/compose.test.yml -f deploy/compose.dev.yml up -d postgres mock-external
-export DATABASE_URL='postgres://billmesh:testpassword@localhost:5433/billmesh_e2e?sslmode=disable'
-export OIDC_ISSUER='http://localhost:8090'
-export OIDC_AUDIENCE='billmesh-test'
-export JWKS_URL='http://localhost:8090/.well-known/jwks.json'
-go run ./cmd/billmesh migrate up
+cp .env.example .env
+make db-bootstrap
 go run ./cmd/billmesh api
 ```
+
+Billmesh automatically loads `.env` when it starts. Existing environment variables take precedence, and `.env` is ignored by Git. Copy `.env.example` for local development; production deployments should supply configuration through their environment or secret manager. Local configuration uses `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_SSLMODE`; the legacy `DATABASE_URL` remains supported and takes precedence when provided.
+
+`make db-bootstrap` starts the local PostgreSQL and mock services, synchronizes the local PostgreSQL role password with `DB_PASSWORD`, terminates connections to the local `billmesh` database, drops and recreates it, and applies every migration. Local bootstrap deliberately manages only the `billmesh` database configured as `DB_NAME=billmesh`.
+
+Application tables, types, functions, indexes, and sequences live in the dedicated `billmesh` schema. Runtime connections use only that schema; migration connections temporarily retain `public` as a fallback so databases created with older migrations can be upgraded safely.
+
+Generate URL-safe database passwords with OpenSSL:
+
+```sh
+openssl rand -hex 32
+```
+
+Generate a 32-byte base64url BFF session-encryption key with:
+
+```sh
+printf 'v1:'; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'; printf '\n'
+```
+
+Hexadecimal database passwords can be placed directly in a PostgreSQL URL without percent-encoding. Replace the checked-in local-only passwords in deployment configuration; do not commit generated secrets.
 
 The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected endpoints require a signed token from the configured issuer and the permission named by the handler.
 
@@ -71,7 +87,7 @@ make test-performance  # provisions the isolated API/worker stack and runs bench
 make test-clean        # remove test containers and volumes
 ```
 
-Integration and E2E databases are separate. Never point their `DATABASE_URL` at development or production data.
+Integration, E2E, restore, and performance databases are disposable test infrastructure. Their Compose projects and volumes are removed automatically when each test command completes or is interrupted. Developers only configure and bootstrap `DB_NAME=billmesh`; never point test database URLs at development or production data.
 
 `make test-performance` is also self-contained. It starts an isolated Compose project, waits for the API health check, runs the benchmark container with the required service URLs, and removes its containers and volumes afterward.
 

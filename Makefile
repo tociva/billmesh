@@ -1,8 +1,8 @@
-.PHONY: build run-api run-worker migrate test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
+.PHONY: build run-api run-worker migrate db-bootstrap test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
 
-INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.dev.yml -p billmesh-integration
-INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable
-INTEGRATION_RESTORE_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_restore?sslmode=disable
+INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.integration.yml -p billmesh-integration
+INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable&search_path=billmesh
+INTEGRATION_RESTORE_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_restore?sslmode=disable&search_path=billmesh
 E2E_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-test
 PERFORMANCE_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-performance
 
@@ -17,6 +17,9 @@ run-worker:
 
 migrate:
 	go run ./cmd/billmesh migrate up
+
+db-bootstrap:
+	./scripts/bootstrap-database.sh
 
 test: test-unit
 

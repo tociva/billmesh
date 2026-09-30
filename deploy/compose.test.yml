@@ -32,7 +32,7 @@ services:
     build: *runtime-build
     command: ["migrate", "up"]
     environment:
-      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +54,7 @@ services:
     command: ["api"]
     environment:
       HTTP_ADDR: ":8080"
-      DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable
+      DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
       OIDC_ISSUER: http://mock-external:8090
       OIDC_AUDIENCE: billmesh-test
       JWKS_URL: http://mock-external:8090/.well-known/jwks.json
@@ -89,7 +89,7 @@ services:
     build: *runtime-build
     command: ["worker"]
     environment:
-      DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable
+      DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
       WORKER_INTERVAL: 1s
       WEBHOOK_ALLOWED_PRIVATE_HOSTS: mock-external
     depends_on:
@@ -101,10 +101,10 @@ services:
     environment:
       BILLMESH_BASE_URL: http://api:8080
       MOCK_SERVER_URL: http://mock-external:8090
-      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_integration?sslmode=disable
-      BILLMESH_E2E_DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
-      BILLMESH_RUNTIME_DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable
-      BILLMESH_RESTORE_DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_restore?sslmode=disable
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_integration?sslmode=disable&search_path=billmesh
+      BILLMESH_E2E_DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
+      BILLMESH_RUNTIME_DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
+      BILLMESH_RESTORE_DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_restore?sslmode=disable&search_path=billmesh
       BILLMESH_ROUTE_TRACE_FILE: /tmp/billmesh-route-trace.ndjson
     command:
       - sh
@@ -128,7 +128,7 @@ services:
     environment:
       BILLMESH_BASE_URL: http://api:8080
       MOCK_SERVER_URL: http://mock-external:8090
-      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable
+      DATABASE_URL: postgres://billmesh:testpassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
       TEST_SUITE_NAME: Performance tests
     command: ["./scripts/test-output.sh", "go", "test", "-v", "-tags=performance", "-run", "^$$", "-bench=.", "-benchtime=10x", "./tests/performance/..."]
     depends_on:

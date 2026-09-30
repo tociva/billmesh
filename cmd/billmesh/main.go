@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/tociva/billmesh/internal/app"
 	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/bff"
@@ -34,6 +35,9 @@ func run() error {
 			return errors.New("usage: billmesh healthcheck URL")
 		}
 		return healthcheck(os.Args[2])
+	}
+	if err := loadEnvironment(); err != nil {
+		return err
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -88,6 +92,13 @@ func run() error {
 	default:
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
+}
+
+func loadEnvironment(filenames ...string) error {
+	if err := godotenv.Load(filenames...); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load .env: %w", err)
+	}
+	return nil
 }
 
 func validateAPIAuthConfig(cfg config.Config) error {

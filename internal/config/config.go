@@ -48,17 +48,18 @@ type BFFConfig struct {
 }
 
 func Load() (Config, error) {
+	databaseURL, err := loadDatabaseURL()
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
 		HTTPAddr:     value("HTTP_ADDR", ":8080"),
-		DatabaseURL:  os.Getenv("DATABASE_URL"),
+		DatabaseURL:  databaseURL,
 		OIDCIssuer:   os.Getenv("OIDC_ISSUER"),
 		OIDCAudience: os.Getenv("OIDC_AUDIENCE"),
 		JWKSURL:      os.Getenv("JWKS_URL"),
 	}
-	if c.DatabaseURL == "" {
-		return Config{}, errors.New("DATABASE_URL is required")
-	}
-	parsed, err := url.Parse(c.DatabaseURL)
+	parsed, err := url.Parse(databaseURL)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {
 		return Config{}, errors.New("DATABASE_URL must be a valid PostgreSQL URL")
 	}
@@ -89,6 +90,44 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+func loadDatabaseURL() (string, error) {
+	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
+		return databaseURL, nil
+	}
+
+	required := []string{"DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"}
+	for _, key := range required {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			return "", fmt.Errorf("DATABASE_URL or %s is required", strings.Join(required, ", "))
+		}
+	}
+
+	port := value("DB_PORT", "5432")
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", errors.New("DB_PORT must be a valid TCP port")
+	}
+	sslMode := value("DB_SSLMODE", "require")
+	validSSLModes := map[string]bool{
+		"disable": true, "allow": true, "prefer": true, "require": true,
+		"verify-ca": true, "verify-full": true,
+	}
+	if !validSSLModes[sslMode] {
+		return "", errors.New("DB_SSLMODE must be disable, allow, prefer, require, verify-ca, or verify-full")
+	}
+
+	databaseURL := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD")),
+		Host:   net.JoinHostPort(os.Getenv("DB_HOST"), port),
+		Path:   os.Getenv("DB_NAME"),
+	}
+	query := databaseURL.Query()
+	query.Set("sslmode", sslMode)
+	databaseURL.RawQuery = query.Encode()
+	return databaseURL.String(), nil
 }
 
 func loadBFF() (BFFConfig, error) {

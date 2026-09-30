@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,8 +16,13 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	cfg, err := pgxpool.ParseConfig(url)
+const (
+	databaseSchema      = "billmesh"
+	migrationSearchPath = databaseSchema + ",public"
+)
+
+func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+	cfg, err := poolConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
@@ -33,13 +39,29 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-func Migrate(ctx context.Context, url, command string) error {
+func poolConfig(databaseURL string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = databaseSchema
+	return cfg, nil
+}
+
+func Migrate(ctx context.Context, databaseURL, command string) error {
 	sub, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return err
 	}
 	goose.SetBaseFS(sub)
-	db, err := goose.OpenDBWithDriver("pgx", url)
+	// Keep migration history in public for compatibility with databases created
+	// before the application objects moved into the dedicated schema.
+	goose.SetTableName("public.goose_db_version")
+	migrationURL, err := withSearchPath(databaseURL, migrationSearchPath)
+	if err != nil {
+		return fmt.Errorf("configure migration database URL: %w", err)
+	}
+	db, err := goose.OpenDBWithDriver("pgx", migrationURL)
 	if err != nil {
 		return fmt.Errorf("open migration database: %w", err)
 	}
@@ -54,4 +76,15 @@ func Migrate(ctx context.Context, url, command string) error {
 	default:
 		return fmt.Errorf("unsupported migration command %q", command)
 	}
+}
+
+func withSearchPath(databaseURL, searchPath string) (string, error) {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("search_path", searchPath)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
