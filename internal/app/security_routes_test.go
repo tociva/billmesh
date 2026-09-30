@@ -17,6 +17,10 @@ type routeTestVerifier struct{}
 
 type routeTestBrowserAuth struct{}
 
+func (routeTestBrowserAuth) Authenticate(*http.Request) (*auth.Claims, int, error) {
+	return &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook"}, 0, nil
+}
+
 func (routeTestBrowserAuth) AuthHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 }

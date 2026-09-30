@@ -14,6 +14,7 @@ jobs:
         run: |
           go vet ./...
           test -z "$(gofmt -l .)"
+          make openapi-check
       - name: Unit tests
         run: TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./internal/... ./tests/unit/...
       - name: Integration and E2E

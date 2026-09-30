@@ -19,6 +19,22 @@ func TestLoadDefaults(t *testing.T) {
 	require.Equal(t, 30, cfg.AuthFailuresPerMinute)
 	require.Equal(t, 10, cfg.MutationRatePerSecond)
 	require.Equal(t, 50, cfg.MutationBurst)
+	require.False(t, cfg.PublicOpenAPI)
+}
+
+func TestLoadPublicOpenAPI(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("PUBLIC_OPENAPI", "true")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.PublicOpenAPI)
+}
+
+func TestLoadRejectsInvalidPublicOpenAPI(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("PUBLIC_OPENAPI", "sometimes")
+	_, err := Load()
+	require.ErrorContains(t, err, "PUBLIC_OPENAPI")
 }
 
 func TestLoadRejectsInvalidRequestLimits(t *testing.T) {

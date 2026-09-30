@@ -368,6 +368,13 @@ func (m *Manager) authenticate(r *http.Request) (*browserSession, *auth.Claims, 
 	return session, claims, 0, nil
 }
 
+// Authenticate validates a browser session for non-BFF resources such as the
+// API documentation, without exposing the stored browser tokens.
+func (m *Manager) Authenticate(r *http.Request) (*auth.Claims, int, error) {
+	_, claims, status, err := m.authenticate(r)
+	return claims, status, err
+}
+
 func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (*browserSession, error) {
 	if session.AccessExpiry.Sub(m.now()) > m.config.RefreshSkew {
 		return &session, nil

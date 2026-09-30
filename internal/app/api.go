@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apidocs "github.com/tociva/billmesh/api"
 	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/wallets"
 )
@@ -38,10 +39,12 @@ type API struct {
 	authFailures    *failureWindow
 	mutations       *keyedBuckets
 	browser         browserAuth
+	publicOpenAPI   bool
 }
 
 type browserAuth interface {
 	AuthHandler() http.Handler
+	Authenticate(*http.Request) (*auth.Claims, int, error)
 	Middleware(http.Handler) http.Handler
 }
 
@@ -60,8 +63,21 @@ func (a *API) ConfigureBrowserAuth(browser browserAuth) {
 	a.browser = browser
 }
 
+// ConfigureOpenAPI controls whether the documentation can be viewed without
+// authentication. Documentation is private unless explicitly made public.
+func (a *API) ConfigureOpenAPI(public bool) {
+	a.publicOpenAPI = public
+}
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	docs := apidocs.SwaggerHandler()
+	mux.Handle("GET /openapi.yaml", a.documentationGate(http.HandlerFunc(apidocs.SpecificationHandler)))
+	mux.Handle("GET /docs/{$}", a.documentationGate(docs))
+	mux.Handle("GET /docs/access", http.HandlerFunc(apidocs.AccessHandler))
+	// Swagger's versioned browser assets contain no API contract or credentials
+	// and must remain public so the bearer-token launcher can render the UI.
+	mux.Handle("GET /docs/", docs)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

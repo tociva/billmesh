@@ -1,4 +1,4 @@
-.PHONY: build run-api run-worker migrate db-bootstrap test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
+.PHONY: build run-api run-worker migrate db-bootstrap openapi-check test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
 
 INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.integration.yml -p billmesh-integration
 INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable&search_path=billmesh
@@ -21,10 +21,13 @@ migrate:
 db-bootstrap:
 	./scripts/bootstrap-database.sh
 
+openapi-check:
+	go test ./api
+
 test: test-unit
 
 test-unit:
-	@TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./internal/... ./tests/unit/...
+	@TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./api ./internal/... ./tests/unit/...
 
 test-integration:
 	@set -eu; \

@@ -58,6 +58,7 @@ services:
       OIDC_ISSUER: http://mock-external:8090
       OIDC_AUDIENCE: billmesh-test
       JWKS_URL: http://mock-external:8090/.well-known/jwks.json
+      PUBLIC_OPENAPI: "false"
       BFF_ENABLED: "true"
       BFF_ALLOW_INSECURE_HTTP: "true"
       BFF_APP_ORIGIN: http://api:8080

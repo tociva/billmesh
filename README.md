@@ -43,6 +43,28 @@ Hexadecimal database passwords can be placed directly in a PostgreSQL URL withou
 
 The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected endpoints require a signed token from the configured issuer and the permission named by the handler.
 
+### API documentation
+
+The running API embeds an offline Swagger UI and OpenAPI 3.1 contract. Both are
+private by default:
+
+- Browser users with a valid BFF session can open [`http://localhost:8080/docs/`](http://localhost:8080/docs/).
+- Bearer-token users can open [`http://localhost:8080/docs/access`](http://localhost:8080/docs/access). The token remains only in that page's memory and is sent to same-origin documentation and `/v1/*` requests.
+- The raw contract at [`http://localhost:8080/openapi.yaml`](http://localhost:8080/openapi.yaml) accepts either a valid BFF session or a bearer token, for example `curl -H 'Authorization: Bearer …' http://localhost:8080/openapi.yaml`.
+
+Swagger's static JavaScript and CSS assets remain public, but do not contain the
+API contract. Set `PUBLIC_OPENAPI=true` only when intentionally exposing both
+the UI and raw contract without authentication. The source contract is also
+available in the repository at [`api/openapi.yaml`](api/openapi.yaml).
+
+The service endpoints under `/v1/*` use bearer tokens. When the browser BFF is
+enabled, the same protected handlers are mirrored under `/bff/v1/*` and use the
+`__Host-billmesh-session` cookie plus `X-CSRF-Token` for unsafe requests.
+
+Run `make openapi-check` after changing routes or the API contract. The check
+validates the document and fails when a registered route is missing from it or
+the contract contains an operation that is not registered by the service.
+
 ### Browser BFF
 
 Billmesh can additionally expose a cookie-authenticated browser surface without changing the bearer-only service API:

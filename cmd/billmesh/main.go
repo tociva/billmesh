@@ -66,6 +66,7 @@ func run() error {
 	case "api":
 		verifier := auth.NewJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.JWKSURL, nil)
 		api := app.NewAPI(pool, verifier, nil)
+		api.ConfigureOpenAPI(cfg.PublicOpenAPI)
 		if cfg.BFF.Enabled {
 			browser, err := bff.New(cfg.BFF, pool, verifier, nil)
 			if err != nil {
