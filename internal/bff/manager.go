@@ -289,14 +289,30 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, err := m.verifier.Verify(r.Context(), tokens.AccessToken)
-	if err != nil || claims.ExpiresAt == nil {
-		m.log.Warn("BFF received an invalid access token")
+	if err != nil {
+		m.log.Warn("BFF received an invalid access token", "realm", m.config.Realm, "error", err)
+		m.redirectLoginError(w, r)
+		return
+	}
+	if claims.ExpiresAt == nil {
+		m.log.Warn("BFF received an invalid access token", "realm", m.config.Realm, "reason", "missing expiration")
+		m.redirectLoginError(w, r)
+		return
+	}
+	claims.AddPermissions(tokens.Scope)
+	if err := m.validateRealmClaims(claims); err != nil {
+		m.log.Warn("BFF received an unauthorized access token", "realm", m.config.Realm, "error", err)
 		m.redirectLoginError(w, r)
 		return
 	}
 	identity, err := m.verifier.VerifyIDToken(r.Context(), tokens.IDToken, m.config.ClientID, transaction.Nonce, tokens.AccessToken)
-	if err != nil || identity.Subject != claims.Subject {
-		m.log.Warn("BFF received an invalid ID token")
+	if err != nil {
+		m.log.Warn("BFF received an invalid ID token", "realm", m.config.Realm, "error", err)
+		m.redirectLoginError(w, r)
+		return
+	}
+	if identity.Subject != claims.Subject {
+		m.log.Warn("BFF received an invalid ID token", "realm", m.config.Realm, "reason", "subject does not match access token")
 		m.redirectLoginError(w, r)
 		return
 	}
@@ -313,7 +329,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	session := browserSession{
 		SchemaVersion: schemaVersion, Realm: m.config.Realm, SessionID: sessionID, Subject: claims.Subject,
 		Email: identity.Email, Name: identity.Name, OrgID: claims.OrgID, App: claims.App,
-		Environment: claims.Environment, Permissions: claims.Permissions, CSRFToken: csrf,
+		Environment: claims.Environment, Permissions: []string(claims.Permissions), CSRFToken: csrf,
 		AllowedOrigin: strings.TrimRight(m.config.AppOrigin, "/"), CreatedAt: m.now(),
 		AbsoluteExpiry: m.now().Add(m.config.SessionAbsoluteTTL), AccessToken: tokens.AccessToken,
 		AccessExpiry: claims.ExpiresAt.Time, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken,
@@ -434,14 +450,29 @@ func (m *Manager) authenticate(r *http.Request) (*browserSession, *auth.Claims, 
 		if errors.Is(err, errRefreshBusy) {
 			return nil, nil, http.StatusServiceUnavailable, err
 		}
+		m.log.Warn("BFF browser session refresh failed", "realm", m.config.Realm, "error", err)
 		_ = m.store.deleteSession(r.Context(), cookie.Value)
 		return nil, nil, http.StatusUnauthorized, err
 	}
 	claims, err := m.verifier.Verify(r.Context(), session.AccessToken)
-	if err != nil || claims.Subject != session.Subject || claims.OrgID != session.OrgID ||
-		claims.App != session.App || claims.Environment != session.Environment {
+	if err != nil {
+		m.log.Warn("BFF stored access token is invalid", "realm", m.config.Realm, "error", err)
+		_ = m.store.deleteSession(r.Context(), cookie.Value)
+		return nil, nil, http.StatusUnauthorized, errors.New("browser access token is invalid")
+	}
+	if claims.Subject != session.Subject || claims.OrgID != session.OrgID || claims.App != session.App ||
+		claims.Environment != session.Environment {
+		m.log.Warn("BFF stored access token no longer matches session", "realm", m.config.Realm)
 		_ = m.store.deleteSession(r.Context(), cookie.Value)
 		return nil, nil, http.StatusUnauthorized, errors.New("browser access token no longer matches session")
+	}
+	if m.config.Realm == "admin" {
+		claims.AddPermissions(session.Permissions...)
+	}
+	if err := m.validateRealmClaims(claims); err != nil {
+		m.log.Warn("BFF stored access token is unauthorized", "realm", m.config.Realm, "error", err)
+		_ = m.store.deleteSession(r.Context(), cookie.Value)
+		return nil, nil, http.StatusUnauthorized, errors.New("browser access token is unauthorized")
 	}
 	ok, err := m.store.touchSession(r.Context(), *session)
 	if err != nil {
@@ -498,20 +529,36 @@ func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (
 		return nil, err
 	}
 	claims, err := m.verifier.Verify(ctx, tokens.AccessToken)
-	if err != nil || claims.ExpiresAt == nil || claims.Subject != latest.Subject || claims.OrgID != latest.OrgID ||
-		claims.App != latest.App || claims.Environment != latest.Environment {
+	if err != nil {
+		return nil, fmt.Errorf("verify refreshed access token: %w", err)
+	}
+	if claims.ExpiresAt == nil {
+		return nil, errors.New("refreshed access token is missing expiration")
+	}
+	claims.AddPermissions(tokens.Scope)
+	if m.config.Realm == "admin" && tokens.Scope == "" {
+		claims.AddPermissions(latest.Permissions...)
+	}
+	if err := m.validateRealmClaims(claims); err != nil {
+		return nil, fmt.Errorf("refreshed access token is unauthorized: %w", err)
+	}
+	if claims.Subject != latest.Subject || claims.OrgID != latest.OrgID || claims.App != latest.App ||
+		claims.Environment != latest.Environment {
 		return nil, errors.New("refreshed access token changed browser identity")
 	}
 	if tokens.IDToken != "" {
 		identity, verifyErr := m.verifier.VerifyIDToken(ctx, tokens.IDToken, m.config.ClientID, "", tokens.AccessToken)
-		if verifyErr != nil || identity.Subject != latest.Subject {
-			return nil, errors.New("invalid refreshed ID token")
+		if verifyErr != nil {
+			return nil, fmt.Errorf("verify refreshed ID token: %w", verifyErr)
+		}
+		if identity.Subject != latest.Subject {
+			return nil, errors.New("refreshed ID token changed browser identity")
 		}
 		latest.Email, latest.Name, latest.IDToken = identity.Email, identity.Name, tokens.IDToken
 	}
 	latest.AccessToken = tokens.AccessToken
 	latest.AccessExpiry = claims.ExpiresAt.Time
-	latest.Permissions = claims.Permissions
+	latest.Permissions = []string(claims.Permissions)
 	if tokens.RefreshToken != "" {
 		latest.RefreshToken = tokens.RefreshToken
 	}
@@ -520,6 +567,13 @@ func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (
 		return nil, errors.New("browser session expired during refresh")
 	}
 	return latest, nil
+}
+
+func (m *Manager) validateRealmClaims(claims *auth.Claims) error {
+	if m.config.Realm == "admin" && !claims.Has("billing:admin") {
+		return errors.New("missing billing:admin permission")
+	}
+	return nil
 }
 
 func (m *Manager) originAllowed(r *http.Request) bool {

@@ -19,11 +19,12 @@ import (
 )
 
 type Claims struct {
-	Permissions []string `json:"permissions"`
-	OrgID       string   `json:"org_id"`
-	App         string   `json:"app"`
-	Environment string   `json:"environment"`
-	TokenUse    string   `json:"token_use"`
+	Permissions jwt.ClaimStrings `json:"permissions"`
+	Scope       jwt.ClaimStrings `json:"scope"`
+	Scopes      jwt.ClaimStrings `json:"scp"`
+	OrgID       string           `json:"org_id"`
+	App         string           `json:"app"`
+	Environment string           `json:"environment"`
 	jwt.RegisteredClaims
 }
 
@@ -51,6 +52,7 @@ type TokenVerifier interface {
 type JWKSVerifier struct {
 	issuer, audience string
 	client           *http.Client
+	requireContext   bool
 	mu               sync.RWMutex
 	refreshMu        sync.Mutex
 	keys             map[string]*rsa.PublicKey
@@ -65,10 +67,21 @@ const keyCacheOutageGrace = 5 * time.Minute
 const unknownKeyRefreshInterval = time.Second
 
 func NewJWKSVerifier(issuer, audience string, client *http.Client) *JWKSVerifier {
+	return newJWKSVerifier(issuer, audience, client, true)
+}
+
+// NewOIDCJWKSVerifier validates the standard JWT access-token contract used by
+// interactive OIDC clients. Unlike service tokens, interactive Admin tokens do
+// not have to carry Billmesh's tenant-specific org_id and app claims.
+func NewOIDCJWKSVerifier(issuer, audience string, client *http.Client) *JWKSVerifier {
+	return newJWKSVerifier(issuer, audience, client, false)
+}
+
+func newJWKSVerifier(issuer, audience string, client *http.Client, requireContext bool) *JWKSVerifier {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &JWKSVerifier{issuer: issuer, audience: audience, client: client, keys: map[string]*rsa.PublicKey{}, now: time.Now}
+	return &JWKSVerifier{issuer: issuer, audience: audience, client: client, requireContext: requireContext, keys: map[string]*rsa.PublicKey{}, now: time.Now}
 }
 
 func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) {
@@ -96,19 +109,44 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	if claims.TokenUse != "access" {
-		return nil, errors.New("invalid token use")
+	claims.AddPermissions()
+	if claims.Subject == "" {
+		return nil, errors.New("missing token subject")
 	}
-	if claims.Subject == "" || claims.OrgID == "" || claims.App == "" {
+	if v.requireContext && (claims.OrgID == "" || claims.App == "") {
 		return nil, errors.New("missing identity context")
 	}
 	return claims, nil
 }
 
+// AddPermissions normalizes the permissions, scp, and scope claim shapes used
+// by IdNest/Hydra. Claims and OAuth token responses may encode scopes either as
+// arrays or as space-delimited strings.
+func (c *Claims) AddPermissions(scopes ...string) {
+	seen := make(map[string]struct{})
+	permissions := make(jwt.ClaimStrings, 0, len(c.Permissions)+len(c.Scope)+len(c.Scopes))
+	add := func(values ...string) {
+		for _, value := range values {
+			for _, permission := range strings.Fields(value) {
+				if _, exists := seen[permission]; exists {
+					continue
+				}
+				seen[permission] = struct{}{}
+				permissions = append(permissions, permission)
+			}
+		}
+	}
+	add(c.Permissions...)
+	add(c.Scopes...)
+	add(c.Scope...)
+	add(scopes...)
+	c.Permissions = permissions
+}
+
 // VerifyIDToken validates an OIDC ID token issued for a confidential browser
 // client. Access tokens and ID tokens deliberately use separate validation
-// contracts: Billmesh access tokens require billing identity claims, while ID
-// tokens prove the interactive user's identity and nonce.
+// contracts: access tokens are validated for their configured resource
+// audience, while ID tokens prove the interactive user's identity and nonce.
 func (v *JWKSVerifier) VerifyIDToken(ctx context.Context, raw, clientID, nonce, accessToken string) (*IDTokenClaims, error) {
 	if raw == "" {
 		return nil, errors.New("missing ID token")

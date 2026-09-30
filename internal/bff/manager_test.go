@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/config"
 )
 
@@ -73,6 +74,14 @@ func TestBrowserMiddlewareRejectsAuthorizationBeforeSessionLookup(t *testing.T) 
 	require.Equal(t, http.StatusBadRequest, resp.Code)
 	require.False(t, called)
 	require.Equal(t, "no-store", resp.Header().Get("Cache-Control"))
+}
+
+func TestAdminRealmRequiresBillingAdminPermission(t *testing.T) {
+	cfg := testConfig()
+	cfg.Realm = "admin"
+	manager := &Manager{config: cfg}
+	require.ErrorContains(t, manager.validateRealmClaims(&auth.Claims{}), "billing:admin")
+	require.NoError(t, manager.validateRealmClaims(&auth.Claims{Permissions: []string{"billing:admin"}}))
 }
 
 func TestAuthAttemptLimiterIsClientScoped(t *testing.T) {

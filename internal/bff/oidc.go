@@ -140,6 +140,7 @@ func (o *oidcClient) tokenRequest(ctx context.Context, values url.Values) (token
 		RefreshToken string `json:"refresh_token"`
 		IDToken      string `json:"id_token"`
 		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
 		return tokenSet{}, fmt.Errorf("decode OIDC token response: %w", err)
@@ -147,7 +148,7 @@ func (o *oidcClient) tokenRequest(ctx context.Context, values url.Values) (token
 	if body.AccessToken == "" || !strings.EqualFold(body.TokenType, "Bearer") {
 		return tokenSet{}, errors.New("OIDC token response is missing a bearer access token")
 	}
-	return tokenSet{AccessToken: body.AccessToken, RefreshToken: body.RefreshToken, IDToken: body.IDToken}, nil
+	return tokenSet{AccessToken: body.AccessToken, RefreshToken: body.RefreshToken, IDToken: body.IDToken, Scope: body.Scope}, nil
 }
 
 func (o *oidcClient) revoke(ctx context.Context, refreshToken string) error {

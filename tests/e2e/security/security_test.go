@@ -89,7 +89,7 @@ func replaceJWTAlgorithm(t *testing.T, raw, algorithm string) string {
 func TestSecuritySignedMissingAndMalformedClaims(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("claims")
-	for _, claim := range []string{"exp", "iss", "aud", "sub", "org_id", "app", "token_use"} {
+	for _, claim := range []string{"exp", "iss", "aud", "sub", "org_id", "app"} {
 		t.Run("missing "+claim, func(t *testing.T) {
 			token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"omit_claims": []string{claim}})
 			h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/products", nil, token)
@@ -99,7 +99,7 @@ func TestSecuritySignedMissingAndMalformedClaims(t *testing.T) {
 		claim string
 		value any
 	}{
-		{"permissions", "billing:admin"}, {"org_id", []string{org}}, {"app", true}, {"exp", "tomorrow"}, {"token_use", "id"},
+		{"org_id", []string{org}}, {"app", true}, {"exp", "tomorrow"},
 	} {
 		t.Run("wrong type "+tc.claim, func(t *testing.T) {
 			token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"claim_overrides": map[string]any{tc.claim: tc.value}})
@@ -113,7 +113,7 @@ func TestSecurityMissingTokenContextIsRejected(t *testing.T) {
 	org := testkit.Unique("gap-context")
 
 	withoutTokenUse := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"omit_token_use": true})
-	h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/products", nil, withoutTokenUse)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, withoutTokenUse)
 
 	withoutOrg := h.IssueToken(t, "", "daybook", testkit.AllPermissions(), nil)
 	status, raw, _ := h.JSON(t, http.MethodPost, "/v1/accounts", map[string]any{"name": "Missing Org", "external_ref": testkit.Unique("acct"), "application": "daybook", "organization_id": org}, withoutOrg)

@@ -65,10 +65,12 @@ func run() error {
 	case "api":
 		verifier := auth.NewJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, nil)
 		api := app.NewAPI(pool, verifier, nil)
-		api.ConfigureOpenAPI(cfg.PublicOpenAPI)
 		managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
 		for _, realm := range cfg.BFF.Realms {
 			browserVerifier := auth.NewJWKSVerifier(realm.Issuer, realm.Audience, nil)
+			if realm.Realm == "admin" {
+				browserVerifier = auth.NewOIDCJWKSVerifier(realm.Issuer, realm.Audience, nil)
+			}
 			manager, err := bff.New(realm, pool, browserVerifier, nil)
 			if err != nil {
 				return fmt.Errorf("configure %s BFF: %w", realm.Realm, err)

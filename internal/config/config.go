@@ -21,7 +21,6 @@ type Config struct {
 	AuthFailuresPerMinute int
 	MutationRatePerSecond int
 	MutationBurst         int
-	PublicOpenAPI         bool
 	BFF                   BrowserAuthConfig
 }
 
@@ -88,9 +87,6 @@ func Load() (Config, error) {
 	}
 	if c.MutationBurst, err = positiveInt("MUTATION_BURST", 50); err != nil {
 		return Config{}, err
-	}
-	if c.PublicOpenAPI, err = strconv.ParseBool(value("PUBLIC_OPENAPI", "false")); err != nil {
-		return Config{}, errors.New("PUBLIC_OPENAPI must be true or false")
 	}
 	if c.BFF, err = loadBrowserAuth(); err != nil {
 		return Config{}, err

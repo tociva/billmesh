@@ -62,7 +62,6 @@ services:
       DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
       OIDC_ISSUER: https://mock-external:8090
       OIDC_AUDIENCE: billmesh-test
-      PUBLIC_OPENAPI: "false"
       SSL_CERT_FILE: /certs/ca.crt
       CONSOLE_APP_ORIGIN: https://console.test
       ADMIN_APP_ORIGIN: https://admin.test

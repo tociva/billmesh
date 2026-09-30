@@ -39,7 +39,6 @@ type API struct {
 	authFailures    *failureWindow
 	mutations       *keyedBuckets
 	browser         browserAuth
-	publicOpenAPI   bool
 }
 
 type browserAuth interface {
@@ -62,12 +61,6 @@ func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *
 
 func (a *API) ConfigureBrowserAuth(browser browserAuth) {
 	a.browser = browser
-}
-
-// ConfigureOpenAPI controls whether the documentation can be viewed without
-// authentication. Documentation is private unless explicitly made public.
-func (a *API) ConfigureOpenAPI(public bool) {
-	a.publicOpenAPI = public
 }
 
 func (a *API) Handler() http.Handler {

@@ -14,11 +14,6 @@ func (a *API) documentationGate(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "private, no-store")
 		w.Header().Add("Vary", "Authorization")
 		w.Header().Add("Vary", "Cookie")
-		if a.publicOpenAPI {
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		// The deliberate presence of Authorization selects bearer authentication.
 		// Never fall back to a browser cookie when that credential is malformed or
 		// invalid, as doing so can mask a bad credential supplied by a caller.

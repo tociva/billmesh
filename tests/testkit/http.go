@@ -512,7 +512,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	token := ""
 	switch tc.ID {
 	case "AUTH-017":
-		token = h.IssueToken(t, org, "daybook", permissions, map[string]any{"token_use": "id"})
+		token = h.IssueToken(t, org, "daybook", permissions, map[string]any{"token_use": "id", "audience": "billmesh-browser-client"})
 	case "AUTH-018":
 		token = h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
 		status, raw, _ := h.JSON(t, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack": "credits-500"}, token)

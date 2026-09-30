@@ -120,8 +120,9 @@ The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, 
 
 ### API documentation
 
-The running API embeds an offline Swagger UI and OpenAPI 3.1 contract. Both are
-private by default. With the local HTTPS gateway configured:
+The running API embeds an offline Swagger UI and OpenAPI 3.1 contract. The UI
+and raw contract always require authentication. With the local HTTPS gateway
+configured:
 
 - Bearer-token users can open [`https://api-local.billme.sh/docs/access`](https://api-local.billme.sh/docs/access). The token remains only in that page's memory and is sent to same-origin documentation and `/v1/*` requests.
 - The raw contract at [`https://api-local.billme.sh/openapi.yaml`](https://api-local.billme.sh/openapi.yaml) accepts a bearer token, for example `curl -H 'Authorization: Bearer …' https://api-local.billme.sh/openapi.yaml`. A configured Console or Admin origin may also fetch it with its BFF session.
@@ -130,9 +131,8 @@ Without the optional gateway, replace the HTTPS origin above with the direct
 development origin `http://localhost:5001`.
 
 Swagger's static JavaScript and CSS assets remain public, but do not contain the
-API contract. Set `PUBLIC_OPENAPI=true` only when intentionally exposing both
-the UI and raw contract without authentication. The source contract is also
-available in the repository at [`api/openapi.yaml`](api/openapi.yaml).
+API contract. The source contract is also available in the repository at
+[`api/openapi.yaml`](api/openapi.yaml).
 
 The service endpoints under `/v1/*` use bearer tokens. The browser-facing
 protected handlers are mirrored under `/api/v1/*` and use a realm-specific

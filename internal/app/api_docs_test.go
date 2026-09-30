@@ -26,7 +26,7 @@ func (*documentationBrowserAuth) AuthHandler() http.Handler                 { re
 func (*documentationBrowserAuth) Middleware(next http.Handler) http.Handler { return next }
 func (*documentationBrowserAuth) CORS(next http.Handler) http.Handler       { return next }
 
-func TestAPIDocumentationIsPrivateByDefault(t *testing.T) {
+func TestAPIDocumentationRequiresAuthentication(t *testing.T) {
 	handler := NewAPI(nil, routeTestVerifier{}, nil).Handler()
 	for _, path := range []string{"/openapi.yaml", "/docs/"} {
 		t.Run(path, func(t *testing.T) {
@@ -103,19 +103,6 @@ func TestAPIDocumentationBrowserAuthenticationFailure(t *testing.T) {
 	api.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/docs/", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", response.Code)
-	}
-}
-
-func TestPublicOpenAPIBypassesAuthentication(t *testing.T) {
-	api := NewAPI(nil, nil, nil)
-	api.ConfigureOpenAPI(true)
-	handler := api.Handler()
-	for _, path := range []string{"/openapi.yaml", "/docs/"} {
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s: status = %d, want 200", path, response.Code)
-		}
 	}
 }
 

@@ -23,7 +23,7 @@ import (
 func securityToken(t *testing.T, key *rsa.PrivateKey, kid, issuer string, now time.Time, mutate func(*Claims)) string {
 	t.Helper()
 	claims := Claims{
-		Permissions: []string{"billing:read"}, OrgID: "org-1", App: "daybook", TokenUse: "access",
+		Permissions: []string{"billing:read"}, OrgID: "org-1", App: "daybook",
 		RegisteredClaims: jwt.RegisteredClaims{Issuer: issuer, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))},
 	}
 	if mutate != nil {
@@ -241,7 +241,7 @@ func TestSecurityVerifierRejectsUnusableAndMissingKeyIDs(t *testing.T) {
 	v := NewJWKSVerifier(srv.URL, "billmesh-test", srv.Client())
 	_, err = v.Verify(context.Background(), securityToken(t, key, "bad", srv.URL, now, nil))
 	require.Error(t, err)
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, Claims{OrgID: "org-1", App: "daybook", TokenUse: "access", RegisteredClaims: jwt.RegisteredClaims{Issuer: srv.URL, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))}})
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, Claims{OrgID: "org-1", App: "daybook", RegisteredClaims: jwt.RegisteredClaims{Issuer: srv.URL, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))}})
 	raw, err := token.SignedString(key)
 	require.NoError(t, err)
 	_, err = v.Verify(context.Background(), raw)
@@ -251,18 +251,16 @@ func TestSecurityVerifierRejectsUnusableAndMissingKeyIDs(t *testing.T) {
 func TestSecurityVerifierRejectsWrongClaimTypes(t *testing.T) {
 	f := newJWKSFixture(t)
 	defer f.close()
-	base := jwt.MapClaims{"iss": f.issuer, "aud": "billmesh-test", "sub": "user-1", "exp": time.Now().Add(time.Hour).Unix(), "org_id": "org-1", "app": "daybook", "permissions": []string{"billing:read"}, "token_use": "access"}
+	base := jwt.MapClaims{"iss": f.issuer, "aud": "billmesh-test", "sub": "user-1", "exp": time.Now().Add(time.Hour).Unix(), "org_id": "org-1", "app": "daybook", "permissions": []string{"billing:read"}}
 	for _, tc := range []struct {
 		name, claim string
 		value       any
 	}{
-		{"permissions", "permissions", "billing:admin"},
 		{"organization", "org_id", []string{"org-1"}},
 		{"application", "app", true},
 		{"expiry", "exp", "tomorrow"},
 		{"audience", "aud", 5},
 		{"issuer", "iss", []string{f.issuer}},
-		{"token use", "token_use", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			claims := jwt.MapClaims{}

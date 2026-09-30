@@ -62,4 +62,5 @@ type tokenSet struct {
 	AccessToken  string
 	RefreshToken string
 	IDToken      string
+	Scope        string
 }
