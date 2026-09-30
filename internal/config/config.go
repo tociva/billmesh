@@ -26,8 +26,7 @@ type Config struct {
 }
 
 type BrowserAuthConfig struct {
-	Enabled bool
-	Realms  []BFFConfig
+	Realms []BFFConfig
 }
 
 type BFFConfig struct {
@@ -47,9 +46,9 @@ type BFFConfig struct {
 	LoginTTL               time.Duration
 	LogoutTTL              time.Duration
 	RefreshSkew            time.Duration
+	DefaultReturnPath      string
 	ReturnPathPrefixes     []string
 	LoginAttemptsPerMinute int
-	AllowInsecureHTTP      bool
 }
 
 func Load() (Config, error) {
@@ -138,22 +137,21 @@ func loadDatabaseURL() (string, error) {
 }
 
 func loadBrowserAuth() (BrowserAuthConfig, error) {
-	enabled, err := strconv.ParseBool(value("BFF_ENABLED", "false"))
-	if err != nil {
-		return BrowserAuthConfig{}, errors.New("BFF_ENABLED must be true or false")
-	}
+	var err error
 	commonKeys := os.Getenv("BFF_SESSION_ENCRYPTION_KEYS")
-	allowInsecure, err := strconv.ParseBool(value("BFF_ALLOW_INSECURE_HTTP", "false"))
-	if err != nil {
-		return BrowserAuthConfig{}, errors.New("BFF_ALLOW_INSECURE_HTTP must be true or false")
-	}
 	loginAttempts, err := positiveInt("BFF_LOGIN_ATTEMPTS_PER_MINUTE", 30)
 	if err != nil {
 		return BrowserAuthConfig{}, err
 	}
 	configs := []BFFConfig{
-		{Realm: "console", AppOrigin: os.Getenv("CONSOLE_APP_ORIGIN")},
-		{Realm: "admin", AppOrigin: os.Getenv("ADMIN_APP_ORIGIN")},
+		{
+			Realm: "console", AppOrigin: os.Getenv("CONSOLE_APP_ORIGIN"),
+			DefaultReturnPath: "/app", ReturnPathPrefixes: []string{"/app"},
+		},
+		{
+			Realm: "admin", AppOrigin: os.Getenv("ADMIN_APP_ORIGIN"),
+			DefaultReturnPath: "/app", ReturnPathPrefixes: []string{"/app"},
+		},
 	}
 	for index := range configs {
 		c := &configs[index]
@@ -168,7 +166,6 @@ func loadBrowserAuth() (BrowserAuthConfig, error) {
 		c.StandaloneLogoutURI = os.Getenv(prefix + "_STANDALONE_LOGOUT_URI")
 		c.SessionEncryptionKeys = commonKeys
 		c.LoginAttemptsPerMinute = loginAttempts
-		c.AllowInsecureHTTP = allowInsecure
 	}
 	settings := []struct {
 		key      string
@@ -194,36 +191,11 @@ func loadBrowserAuth() (BrowserAuthConfig, error) {
 		c.LoginTTL = durations["BFF_LOGIN_TTL"]
 		c.LogoutTTL = durations["BFF_LOGOUT_TTL"]
 		c.RefreshSkew = durations["BFF_REFRESH_SKEW"]
-		prefixes := value("BFF_"+strings.ToUpper(c.Realm)+"_RETURN_PATH_PREFIXES", "/")
-		for _, prefix := range strings.Split(prefixes, ",") {
-			if prefix = strings.TrimSpace(prefix); prefix != "" {
-				c.ReturnPathPrefixes = append(c.ReturnPathPrefixes, prefix)
-			}
+		if c.SessionAbsoluteTTL < c.SessionIdleTTL {
+			return BrowserAuthConfig{}, errors.New("BFF_SESSION_ABSOLUTE_TTL must be at least BFF_SESSION_IDLE_TTL")
 		}
 	}
-	if enabled {
-		if strings.TrimSpace(commonKeys) == "" {
-			return BrowserAuthConfig{}, errors.New("BFF_SESSION_ENCRYPTION_KEYS is required when BFF_ENABLED=true")
-		}
-		for _, c := range configs {
-			prefix := "BFF_" + strings.ToUpper(c.Realm)
-			originName := strings.ToUpper(c.Realm) + "_APP_ORIGIN"
-			for name, field := range map[string]string{
-				originName: c.AppOrigin, prefix + "_ISSUER": c.Issuer, prefix + "_CLIENT_ID": c.ClientID,
-				prefix + "_CLIENT_SECRET": c.ClientSecret, prefix + "_AUDIENCE": c.Audience,
-				prefix + "_REDIRECT_URI": c.RedirectURI, prefix + "_POST_LOGOUT_REDIRECT_URI": c.PostLogoutRedirectURI,
-				prefix + "_STANDALONE_LOGOUT_URI": c.StandaloneLogoutURI,
-			} {
-				if strings.TrimSpace(field) == "" {
-					return BrowserAuthConfig{}, fmt.Errorf("%s is required when BFF_ENABLED=true", name)
-				}
-			}
-			if c.SessionAbsoluteTTL < c.SessionIdleTTL {
-				return BrowserAuthConfig{}, errors.New("BFF_SESSION_ABSOLUTE_TTL must be at least BFF_SESSION_IDLE_TTL")
-			}
-		}
-	}
-	return BrowserAuthConfig{Enabled: enabled, Realms: configs}, nil
+	return BrowserAuthConfig{Realms: configs}, nil
 }
 
 func positiveInt(key string, fallback int) (int, error) {

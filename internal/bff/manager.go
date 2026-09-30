@@ -67,18 +67,30 @@ func validateConfig(cfg config.BFFConfig) error {
 	}
 	prefix := "BFF_" + strings.ToUpper(cfg.Realm)
 	appOriginName := strings.ToUpper(cfg.Realm) + "_APP_ORIGIN"
-	appOrigin, err := parseSecureURL(cfg.AppOrigin, appOriginName, cfg.AllowInsecureHTTP)
+	for name, value := range map[string]string{
+		appOriginName: cfg.AppOrigin, prefix + "_ISSUER": cfg.Issuer,
+		prefix + "_CLIENT_ID": cfg.ClientID, prefix + "_CLIENT_SECRET": cfg.ClientSecret,
+		prefix + "_AUDIENCE": cfg.Audience, prefix + "_REDIRECT_URI": cfg.RedirectURI,
+		prefix + "_POST_LOGOUT_REDIRECT_URI": cfg.PostLogoutRedirectURI,
+		prefix + "_STANDALONE_LOGOUT_URI":    cfg.StandaloneLogoutURI,
+		"BFF_SESSION_ENCRYPTION_KEYS":        cfg.SessionEncryptionKeys,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+	}
+	appOrigin, err := parseSecureURL(cfg.AppOrigin, appOriginName)
 	if err != nil {
 		return err
 	}
 	if appOrigin.Path != "" && appOrigin.Path != "/" || appOrigin.RawQuery != "" || appOrigin.Fragment != "" {
 		return fmt.Errorf("%s must be an origin without a path", appOriginName)
 	}
-	redirect, err := parseSecureURL(cfg.RedirectURI, prefix+"_REDIRECT_URI", cfg.AllowInsecureHTTP)
+	redirect, err := parseSecureURL(cfg.RedirectURI, prefix+"_REDIRECT_URI")
 	if err != nil {
 		return err
 	}
-	logout, err := parseSecureURL(cfg.PostLogoutRedirectURI, prefix+"_POST_LOGOUT_REDIRECT_URI", cfg.AllowInsecureHTTP)
+	logout, err := parseSecureURL(cfg.PostLogoutRedirectURI, prefix+"_POST_LOGOUT_REDIRECT_URI")
 	if err != nil {
 		return err
 	}
@@ -91,19 +103,29 @@ func validateConfig(cfg config.BFFConfig) error {
 	if logout.Path != "/api/v1/auth/"+cfg.Realm+"/logout/callback" {
 		return fmt.Errorf("%s_POST_LOGOUT_REDIRECT_URI must point to /api/v1/auth/%s/logout/callback", prefix, cfg.Realm)
 	}
-	if _, err = parseSecureURL(cfg.Issuer, prefix+"_ISSUER", cfg.AllowInsecureHTTP); err != nil {
+	if _, err = parseSecureURL(cfg.Issuer, prefix+"_ISSUER"); err != nil {
 		return err
 	}
-	if _, err = parseSecureURL(cfg.StandaloneLogoutURI, prefix+"_STANDALONE_LOGOUT_URI", cfg.AllowInsecureHTTP); err != nil {
+	if _, err = parseSecureURL(cfg.StandaloneLogoutURI, prefix+"_STANDALONE_LOGOUT_URI"); err != nil {
 		return err
+	}
+	if !validReturnPath(cfg.DefaultReturnPath) {
+		return fmt.Errorf("invalid BFF default return path %q", cfg.DefaultReturnPath)
 	}
 	if len(cfg.ReturnPathPrefixes) == 0 {
-		return fmt.Errorf("%s_RETURN_PATH_PREFIXES must contain at least one path", prefix)
+		return errors.New("BFF return path policy must contain at least one prefix")
 	}
-	for _, prefix := range cfg.ReturnPathPrefixes {
-		if !strings.HasPrefix(prefix, "/") || strings.HasPrefix(prefix, "//") || strings.Contains(prefix, "\\") {
-			return fmt.Errorf("invalid BFF return path prefix %q", prefix)
+	defaultAllowed := false
+	for _, allowedPrefix := range cfg.ReturnPathPrefixes {
+		if !validReturnPath(allowedPrefix) {
+			return fmt.Errorf("invalid BFF return path prefix %q", allowedPrefix)
 		}
+		if pathMatchesPrefix(cfg.DefaultReturnPath, allowedPrefix) {
+			defaultAllowed = true
+		}
+	}
+	if !defaultAllowed {
+		return errors.New("BFF default return path must match the realm return path policy")
 	}
 	if cfg.Realm == "admin" && !containsScope(cfg.Scope, "billing:admin") {
 		return errors.New("BFF_ADMIN_SCOPE must include billing:admin")
@@ -120,16 +142,22 @@ func containsScope(value, expected string) bool {
 	return false
 }
 
-func parseSecureURL(value, name string, allowInsecure bool) (*url.URL, error) {
+func validReturnPath(value string) bool {
+	return strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") &&
+		!strings.Contains(value, "\\") && !strings.HasPrefix(value, "/auth/")
+}
+
+func pathMatchesPrefix(path, prefix string) bool {
+	return prefix == "/" || path == prefix || strings.HasPrefix(path, strings.TrimRight(prefix, "/")+"/")
+}
+
+func parseSecureURL(value, name string) (*url.URL, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" {
 		return nil, fmt.Errorf("%s must be an absolute URL", name)
 	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return nil, fmt.Errorf("%s must use HTTP or HTTPS", name)
-	}
-	if parsed.Scheme == "http" && !allowInsecure && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" {
-		return nil, fmt.Errorf("%s must use HTTPS outside localhost", name)
+	if parsed.Scheme != "https" {
+		return nil, fmt.Errorf("%s must use HTTPS", name)
 	}
 	return parsed, nil
 }
@@ -500,17 +528,19 @@ func (m *Manager) originAllowed(r *http.Request) bool {
 }
 
 func (m *Manager) safeReturnTo(value string) string {
-	if value == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") ||
-		strings.Contains(value, "\\") || strings.HasPrefix(value, "/auth/") {
-		return "/"
+	if !validReturnPath(value) {
+		return m.config.DefaultReturnPath
 	}
-	path := strings.SplitN(value, "?", 2)[0]
+	path := value
+	if separator := strings.IndexAny(path, "?#"); separator >= 0 {
+		path = path[:separator]
+	}
 	for _, prefix := range m.config.ReturnPathPrefixes {
-		if prefix == "/" || path == prefix || strings.HasPrefix(path, strings.TrimRight(prefix, "/")+"/") {
+		if pathMatchesPrefix(path, prefix) {
 			return value
 		}
 	}
-	return "/"
+	return m.config.DefaultReturnPath
 }
 
 func (m *Manager) redirectLoginError(w http.ResponseWriter, r *http.Request) {

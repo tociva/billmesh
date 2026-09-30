@@ -75,7 +75,7 @@ func (o *oidcClient) metadata(ctx context.Context) (*providerMetadata, error) {
 		if endpoint == "" {
 			continue
 		}
-		if _, err := parseSecureURL(endpoint, "OIDC "+name+" endpoint", o.config.AllowInsecureHTTP); err != nil {
+		if _, err := parseSecureURL(endpoint, "OIDC "+name+" endpoint"); err != nil {
 			return nil, err
 		}
 	}

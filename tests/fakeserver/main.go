@@ -65,11 +65,27 @@ func main() {
 	if addr == "" {
 		addr = ":8090"
 	}
+	certFile := os.Getenv("TLS_CERT_FILE")
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	if certFile != "" || keyFile != "" {
+		if certFile == "" || keyFile == "" {
+			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must be configured together")
+		}
+		log.Printf("fake external services listening with TLS on %s", addr)
+		log.Fatal(http.ListenAndServeTLS(addr, certFile, keyFile, mux))
+	}
 	log.Printf("fake external services listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
-const mockIssuer = "http://mock-external:8090"
+var mockIssuer = value("MOCK_ISSUER", "http://mock-external:8090")
+
+func value(key, fallback string) string {
+	if configured := os.Getenv(key); configured != "" {
+		return configured
+	}
+	return fallback
+}
 
 func (s *server) discovery(w http.ResponseWriter, _ *http.Request) {
 	write(w, map[string]string{
@@ -245,7 +261,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 	issuer := in.Issuer
 	if issuer == "" {
-		issuer = "http://mock-external:8090"
+		issuer = mockIssuer
 	}
 	audience := in.Audience
 	if audience == "" {

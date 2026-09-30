@@ -66,22 +66,20 @@ func run() error {
 		verifier := auth.NewJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, nil)
 		api := app.NewAPI(pool, verifier, nil)
 		api.ConfigureOpenAPI(cfg.PublicOpenAPI)
-		if cfg.BFF.Enabled {
-			managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
-			for _, realm := range cfg.BFF.Realms {
-				browserVerifier := auth.NewJWKSVerifier(realm.Issuer, realm.Audience, nil)
-				manager, err := bff.New(realm, pool, browserVerifier, nil)
-				if err != nil {
-					return fmt.Errorf("configure %s BFF: %w", realm.Realm, err)
-				}
-				managers = append(managers, manager)
-			}
-			browser, err := bff.NewRouter(managers...)
+		managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
+		for _, realm := range cfg.BFF.Realms {
+			browserVerifier := auth.NewJWKSVerifier(realm.Issuer, realm.Audience, nil)
+			manager, err := bff.New(realm, pool, browserVerifier, nil)
 			if err != nil {
-				return fmt.Errorf("configure BFF router: %w", err)
+				return fmt.Errorf("configure %s BFF: %w", realm.Realm, err)
 			}
-			api.ConfigureBrowserAuth(browser)
+			managers = append(managers, manager)
 		}
+		browser, err := bff.NewRouter(managers...)
+		if err != nil {
+			return fmt.Errorf("configure BFF router: %w", err)
+		}
+		api.ConfigureBrowserAuth(browser)
 		api.ConfigureRequestLimits(cfg.AuthFailuresPerMinute, cfg.MutationRatePerSecond, cfg.MutationBurst)
 		server := newAPIServer(cfg.HTTPAddr, api.Handler())
 		go func() {
@@ -114,12 +112,18 @@ func validateAPIAuthConfig(cfg config.Config) error {
 	if cfg.OIDCIssuer == "" || cfg.OIDCAudience == "" {
 		return errors.New("OIDC_ISSUER and OIDC_AUDIENCE are required for api")
 	}
-	if cfg.BFF.Enabled {
-		for _, realm := range cfg.BFF.Realms {
-			if err := bff.ValidateConfig(realm); err != nil {
-				return fmt.Errorf("invalid %s BFF configuration: %w", realm.Realm, err)
-			}
+	if len(cfg.BFF.Realms) != 2 {
+		return errors.New("console and admin BFF configurations are required for api")
+	}
+	realms := make(map[string]bool, len(cfg.BFF.Realms))
+	for _, realm := range cfg.BFF.Realms {
+		if err := bff.ValidateConfig(realm); err != nil {
+			return fmt.Errorf("invalid %s BFF configuration: %w", realm.Realm, err)
 		}
+		realms[realm.Realm] = true
+	}
+	if !realms["console"] || !realms["admin"] {
+		return errors.New("console and admin BFF configurations are required for api")
 	}
 	return nil
 }

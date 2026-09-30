@@ -13,7 +13,7 @@ import (
 
 func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 	const apiOrigin = "http://api:8080"
-	const consoleOrigin = "http://console.test"
+	const consoleOrigin = "https://console.test"
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 
 	login, err := client.Get(apiOrigin + "/api/v1/auth/console/login?returnTo=%2Fapp%2Fbilling")
@@ -40,7 +40,13 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 	if authorization.StatusCode != http.StatusFound {
 		t.Fatalf("authorize: want 302, got %d", authorization.StatusCode)
 	}
-	callbackRequest, _ := http.NewRequest(http.MethodGet, authorization.Header.Get("Location"), nil)
+	callbackURL, err := url.Parse(authorization.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackURL.Scheme = "http"
+	callbackURL.Host = "api:8080"
+	callbackRequest, _ := http.NewRequest(http.MethodGet, callbackURL.String(), nil)
 	callbackRequest.AddCookie(correlation)
 	callback, err := client.Do(callbackRequest)
 	if err != nil {
@@ -174,7 +180,7 @@ func TestBrowserBFFRejectsUnsafeReturnTargetsAndBearerConfusion(t *testing.T) {
 		t.Fatalf("login: want 302, got %d", login.StatusCode)
 	}
 	request, _ := http.NewRequest(http.MethodGet, "http://api:8080/api/v1/products", nil)
-	request.Header.Set("Origin", "http://console.test")
+	request.Header.Set("Origin", "https://console.test")
 	request.Header.Set("Authorization", "Bearer not-accepted-here")
 	response, err := client.Do(request)
 	if err != nil {

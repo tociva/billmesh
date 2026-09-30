@@ -202,7 +202,7 @@ func benchmarkSlowWebhookIsolation(b *testing.B, f *fixture) {
 	b.Cleanup(func() {
 		_ = f.expectMock(http.StatusNoContent, "/test/receiver-delay", map[string]any{"milliseconds": 0})
 	})
-	f.require(b, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": "http://mock-external:8090/receivers/daybook", "secret": "performance-secret"})
+	f.require(b, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": "https://mock-external:8090/receivers/daybook", "secret": "performance-secret"})
 	benchmarkRequests(b, false, func() error {
 		if err := f.expect(http.StatusOK, http.MethodPost, "/v1/wallets/"+f.wallets[0]+"/grants", map[string]any{"source": "performance", "operation_ref": f.unique("webhook"), "amount": 1}); err != nil {
 			return err

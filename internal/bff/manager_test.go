@@ -21,7 +21,7 @@ func testConfig() config.BFFConfig {
 		SessionEncryptionKeys: "v1:" + encodedKey(1), SessionIdleTTL: time.Hour,
 		SessionAbsoluteTTL: 24 * time.Hour, LoginTTL: 5 * time.Minute,
 		LogoutTTL: 2 * time.Minute, RefreshSkew: time.Minute,
-		ReturnPathPrefixes: []string{"/app"}, LoginAttemptsPerMinute: 2,
+		DefaultReturnPath: "/app", ReturnPathPrefixes: []string{"/app"}, LoginAttemptsPerMinute: 2,
 	}
 }
 
@@ -29,6 +29,7 @@ func TestValidateConfigRequiresSecureConsistentOrigins(t *testing.T) {
 	require.NoError(t, validateConfig(testConfig()))
 	for name, mutate := range map[string]func(*config.BFFConfig){
 		"insecure":       func(c *config.BFFConfig) { c.AppOrigin = "http://billmesh.example" },
+		"localhost HTTP": func(c *config.BFFConfig) { c.Issuer = "http://localhost:8090" },
 		"invalid scheme": func(c *config.BFFConfig) { c.AppOrigin = "ftp://billmesh.example" },
 		"logout origin": func(c *config.BFFConfig) {
 			c.PostLogoutRedirectURI = "https://other.example/api/v1/auth/console/logout/callback"
@@ -46,8 +47,9 @@ func TestValidateConfigRequiresSecureConsistentOrigins(t *testing.T) {
 func TestSafeReturnToRejectsExternalAndAuthPaths(t *testing.T) {
 	manager := &Manager{config: testConfig()}
 	require.Equal(t, "/app/billing?tab=plans", manager.safeReturnTo("/app/billing?tab=plans"))
-	for _, value := range []string{"", "//evil.example", "https://evil.example", "/auth/callback", "/other", "/app\\evil"} {
-		require.Equal(t, "/", manager.safeReturnTo(value))
+	require.Equal(t, "/app/billing#usage", manager.safeReturnTo("/app/billing#usage"))
+	for _, value := range []string{"", "//evil.example", "https://evil.example", "/auth/callback", "/other", "/application", "/app\\evil"} {
+		require.Equal(t, "/app", manager.safeReturnTo(value))
 	}
 }
 

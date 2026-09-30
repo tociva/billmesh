@@ -97,11 +97,10 @@ certificate paths in the proposed configuration before installing it.
    curl https://api-local.billme.sh/healthz
    ```
 
-When the browser BFF is enabled, `api-local.billme.sh` owns the Console and
-Admin session cookies. Register the realm-specific callback and logout URLs
-from `.env.example` with IdNest. The API allows credentialed CORS only from
-`CONSOLE_APP_ORIGIN` and `ADMIN_APP_ORIGIN`. Do not set
-`BFF_ALLOW_INSECURE_HTTP=true` for this HTTPS setup.
+`api-local.billme.sh` owns the Console and Admin session cookies. Register the
+realm-specific callback and logout URLs from `.env.example` with IdNest. The
+API allows credentialed CORS only from `CONSOLE_APP_ORIGIN` and
+`ADMIN_APP_ORIGIN`; all browser-authentication URLs must use HTTPS.
 
 Generate URL-safe database passwords with OpenSSL:
 
@@ -135,10 +134,9 @@ API contract. Set `PUBLIC_OPENAPI=true` only when intentionally exposing both
 the UI and raw contract without authentication. The source contract is also
 available in the repository at [`api/openapi.yaml`](api/openapi.yaml).
 
-The service endpoints under `/v1/*` use bearer tokens. When the browser BFF is
-enabled, the same protected handlers are mirrored under `/api/v1/*` and use a
-realm-specific `__Host-billmesh-*-session` cookie plus `X-CSRF-Token` for
-unsafe requests.
+The service endpoints under `/v1/*` use bearer tokens. The browser-facing
+protected handlers are mirrored under `/api/v1/*` and use a realm-specific
+`__Host-billmesh-*-session` cookie plus `X-CSRF-Token` for unsafe requests.
 
 Run `make openapi-check` after changing routes or the API contract. The check
 validates the document and fails when a registered route is missing from it or
@@ -146,7 +144,7 @@ the contract contains an operation that is not registered by the service.
 
 ### Browser BFF
 
-Billmesh can additionally expose a cookie-authenticated browser surface without changing the bearer-only service API:
+Billmesh exposes a cookie-authenticated browser surface without changing the bearer-only service API:
 
 - `/v1/*` continues to require exactly one `Authorization: Bearer` header.
 - `/api/v1/auth/console/*` and `/api/v1/auth/admin/*` implement independent OIDC authorization-code flows with PKCE, session inspection, refresh, and logout.
@@ -154,12 +152,11 @@ Billmesh can additionally expose a cookie-authenticated browser surface without 
 - Unsafe BFF requests require the `X-CSRF-Token` returned by the realm's session endpoint and an exact allowed browser origin.
 - Access, refresh, and ID tokens stay in encrypted PostgreSQL session records and are never returned to browser code.
 
-Enable it only after registering separate confidential Billmesh Console and
-Admin clients in IdNest. Copy the BFF section from `.env.example` into the
-backend `.env`, then replace its placeholders with the client values:
+Register separate confidential Billmesh Console and Admin clients in IdNest.
+Copy the BFF section from `.env.example` into the backend `.env`, then replace
+its placeholders with the client values:
 
 ```dotenv
-BFF_ENABLED=true
 CONSOLE_APP_ORIGIN=https://console.billme.sh
 ADMIN_APP_ORIGIN=https://admin.billme.sh
 BFF_CONSOLE_ISSUER=https://idnest.example
@@ -170,7 +167,6 @@ BFF_CONSOLE_SCOPE=openid profile email offline_access
 BFF_CONSOLE_REDIRECT_URI=https://api.billme.sh/api/v1/auth/console/callback
 BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI=https://api.billme.sh/api/v1/auth/console/logout/callback
 BFF_CONSOLE_STANDALONE_LOGOUT_URI=https://auth.idnest.example/logout
-BFF_CONSOLE_RETURN_PATH_PREFIXES=/app
 BFF_ADMIN_ISSUER=https://idnest.example
 BFF_ADMIN_CLIENT_ID=replace-with-idnest-admin-client-id
 BFF_ADMIN_CLIENT_SECRET=replace-with-idnest-admin-client-secret
@@ -179,9 +175,7 @@ BFF_ADMIN_SCOPE=openid profile email offline_access billing:admin
 BFF_ADMIN_REDIRECT_URI=https://api.billme.sh/api/v1/auth/admin/callback
 BFF_ADMIN_POST_LOGOUT_REDIRECT_URI=https://api.billme.sh/api/v1/auth/admin/logout/callback
 BFF_ADMIN_STANDALONE_LOGOUT_URI=https://auth.idnest.example/logout
-BFF_ADMIN_RETURN_PATH_PREFIXES=/app
 BFF_SESSION_ENCRYPTION_KEYS=v1:replace-with-base64url-encoded-32-byte-key
-BFF_ALLOW_INSECURE_HTTP=false
 ```
 
 The client IDs and secrets are credentials of the confidential IdNest clients.
@@ -197,8 +191,9 @@ IdNest clients must be allowed to issue it. The Admin client should include the
 `BFF_SESSION_ENCRYPTION_KEYS` is a Billmesh secret rather than an IdNest
 credential. Generate it with the command in the local setup section above. The
 first key entry encrypts new session records; retained entries decrypt older
-records during key rotation. `BFF_ALLOW_INSECURE_HTTP=true` exists only for
-isolated local/test deployments. Production configuration requires HTTPS.
+records during key rotation. Browser-authentication origins, issuer endpoints,
+and callbacks always require HTTPS. Console and Admin return paths default to
+and are restricted to `/app` by application policy.
 
 Get a development token from the test-only fake issuer:
 

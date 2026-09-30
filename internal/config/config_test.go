@@ -105,33 +105,33 @@ func TestLoadRejectsInvalidDatabaseComponents(t *testing.T) {
 
 func TestLoadBFFConfiguration(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("BFF_ENABLED", "true")
 	setBFFRealmEnvironment(t, "CONSOLE", "https://console.billmesh.example")
 	setBFFRealmEnvironment(t, "ADMIN", "https://admin.billmesh.example")
 	t.Setenv("BFF_SESSION_ENCRYPTION_KEYS", "v1:key")
-	t.Setenv("BFF_CONSOLE_RETURN_PATH_PREFIXES", "/app,/billing")
 	cfg, err := Load()
 	require.NoError(t, err)
-	require.True(t, cfg.BFF.Enabled)
 	require.Len(t, cfg.BFF.Realms, 2)
 	require.Equal(t, "console", cfg.BFF.Realms[0].Realm)
-	require.Equal(t, []string{"/app", "/billing"}, cfg.BFF.Realms[0].ReturnPathPrefixes)
+	require.Equal(t, "/app", cfg.BFF.Realms[0].DefaultReturnPath)
+	require.Equal(t, []string{"/app"}, cfg.BFF.Realms[0].ReturnPathPrefixes)
 	require.Equal(t, 30, cfg.BFF.Realms[0].LoginAttemptsPerMinute)
 	require.Equal(t, "admin", cfg.BFF.Realms[1].Realm)
+	require.Equal(t, "/app", cfg.BFF.Realms[1].DefaultReturnPath)
+	require.Equal(t, []string{"/app"}, cfg.BFF.Realms[1].ReturnPathPrefixes)
 }
 
-func TestLoadBFFRequiresSecretsAndValidLifetimes(t *testing.T) {
+func TestLoadBFFAllowsNonAPIProcessesWithoutCredentials(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("BFF_ENABLED", "true")
-	_, err := Load()
-	require.ErrorContains(t, err, "required")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Len(t, cfg.BFF.Realms, 2)
+}
 
-	setBFFRealmEnvironment(t, "CONSOLE", "https://console.billmesh.example")
-	setBFFRealmEnvironment(t, "ADMIN", "https://admin.billmesh.example")
-	t.Setenv("BFF_SESSION_ENCRYPTION_KEYS", "v1:key")
+func TestLoadBFFRejectsInvalidLifetimes(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("BFF_SESSION_IDLE_TTL", "2h")
 	t.Setenv("BFF_SESSION_ABSOLUTE_TTL", "1h")
-	_, err = Load()
+	_, err := Load()
 	require.ErrorContains(t, err, "must be at least")
 }
 
