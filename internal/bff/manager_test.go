@@ -1,6 +1,7 @@
 package bff
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -72,8 +73,33 @@ func TestBrowserMiddlewareRejectsAuthorizationBeforeSessionLookup(t *testing.T) 
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 	require.Equal(t, http.StatusBadRequest, resp.Code)
+	require.Equal(t, "application/json", resp.Header().Get("Content-Type"))
+	require.True(t, json.Valid(resp.Body.Bytes()))
 	require.False(t, called)
 	require.Equal(t, "no-store", resp.Header().Get("Cache-Control"))
+}
+
+func TestBrowserMiddlewareAuthenticationFailureIsJSON(t *testing.T) {
+	manager := &Manager{config: testConfig()}
+	handler := manager.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unauthenticated request reached handler")
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/v1/products", nil)
+	req.Header.Set("Origin", manager.config.AppOrigin)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusUnauthorized, resp.Code)
+	require.Equal(t, "application/json", resp.Header().Get("Content-Type"))
+	require.True(t, json.Valid(resp.Body.Bytes()))
+}
+
+func TestBrowserRedirectHasNoResponseBody(t *testing.T) {
+	manager := &Manager{config: testConfig()}
+	response := httptest.NewRecorder()
+	manager.redirectLoginError(response, httptest.NewRequest(http.MethodGet, "/callback", nil))
+	require.Equal(t, http.StatusFound, response.Code)
+	require.Empty(t, response.Body.Bytes())
+	require.Equal(t, "https://console.billmesh.example/auth/error?reason=login_failed", response.Header().Get("Location"))
 }
 
 func TestAdminRealmRequiresBillingAdminPermission(t *testing.T) {

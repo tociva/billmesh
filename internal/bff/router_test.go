@@ -1,6 +1,7 @@
 package bff
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -46,6 +47,8 @@ func TestRouterAllowsCredentialedCORSOnlyForConfiguredOrigins(t *testing.T) {
 	handler.ServeHTTP(response, foreign)
 	require.Equal(t, http.StatusForbidden, response.Code)
 	require.Empty(t, response.Header().Get("Access-Control-Allow-Origin"))
+	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
+	require.True(t, json.Valid(response.Body.Bytes()))
 }
 
 func TestRouterRejectsUnknownBrowserOriginsBeforeAuthentication(t *testing.T) {
@@ -57,6 +60,8 @@ func TestRouterRejectsUnknownBrowserOriginsBeforeAuthentication(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
+	require.True(t, json.Valid(response.Body.Bytes()))
 	require.False(t, called)
 }
 
@@ -66,4 +71,13 @@ func TestRouterRequiresOneSharedAPICallbackOrigin(t *testing.T) {
 	admin.config.PostLogoutRedirectURI = "https://other-api.billmesh.example/api/v1/auth/admin/logout/callback"
 	_, err := NewRouter(console, admin)
 	require.ErrorContains(t, err, "same API callback origin")
+}
+
+func TestRouterAuthHandlerUnknownRealmReturnsJSON(t *testing.T) {
+	_, _, router := testManagers(t)
+	response := httptest.NewRecorder()
+	router.AuthHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/auth/unknown/session", nil))
+	require.Equal(t, http.StatusNotFound, response.Code)
+	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
+	require.True(t, json.Valid(response.Body.Bytes()))
 }

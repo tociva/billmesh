@@ -134,6 +134,13 @@ func TestOpenAPIInternalReferencesResolve(t *testing.T) {
 	}
 }
 
+func TestOpenAPIDoesNotDeclarePlainTextAPIResponses(t *testing.T) {
+	contract := string(Specification())
+	if strings.Contains(contract, "text/plain") || strings.Contains(contract, "PlainError") {
+		t.Fatal("OpenAPI contract declares a plain-text API response")
+	}
+}
+
 func resolveReference(node *yaml.Node, path []string) *yaml.Node {
 	for _, segment := range path {
 		if node.Kind != yaml.MappingNode {

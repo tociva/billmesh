@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tociva/billmesh/internal/auth"
+	"github.com/tociva/billmesh/internal/httpresponse"
 )
 
 // Router exposes realm-specific OAuth endpoints and selects the matching BFF
@@ -54,7 +55,7 @@ func (r *Router) AuthHandler() http.Handler {
 	for _, manager := range r.managers {
 		mux.Handle(manager.AuthBasePath()+"/", manager.AuthHandler())
 	}
-	return mux
+	return httpresponse.JSONFallbacks(mux)
 }
 
 func (r *Router) managerForRequest(request *http.Request) *Manager {
@@ -69,7 +70,7 @@ func (r *Router) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		manager := r.managerForRequest(request)
 		if manager == nil {
-			http.Error(w, "origin is not allowed", http.StatusForbidden)
+			httpresponse.Error(w, http.StatusForbidden, "origin is not allowed")
 			return
 		}
 		manager.Middleware(next).ServeHTTP(w, request)
@@ -100,13 +101,13 @@ func (r *Router) CORS(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Access-Control-Request-Method")
 			w.Header().Add("Vary", "Access-Control-Request-Headers")
 			if !allowed {
-				http.Error(w, "origin is not allowed", http.StatusForbidden)
+				httpresponse.Error(w, http.StatusForbidden, "origin is not allowed")
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, X-CSRF-Token")
 			w.Header().Set("Access-Control-Max-Age", "600")
-			w.WriteHeader(http.StatusNoContent)
+			httpresponse.NoContent(w)
 			return
 		}
 		next.ServeHTTP(w, request)

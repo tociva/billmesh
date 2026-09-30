@@ -53,7 +53,7 @@ func (a *API) revokeInstallation(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeNoContent(w)
 }
 
 func (a *API) settleInstallationExecution(w http.ResponseWriter, r *http.Request) {

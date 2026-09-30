@@ -14,7 +14,7 @@ func (a *API) requireAdmin(action, resourceType string, next http.HandlerFunc) h
 		claims, ok := auth.FromContext(r.Context())
 		if !ok || !claims.Has("billing:admin") {
 			a.auditDeniedAdmin(r, action, resourceType, r.URL.Path, "missing_permission")
-			http.Error(w, "forbidden", http.StatusForbidden)
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next(w, r)

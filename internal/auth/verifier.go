@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/tociva/billmesh/internal/httpresponse"
 )
 
 type Claims struct {
@@ -322,10 +324,10 @@ func MiddlewareWithHooks(verifier TokenVerifier, hooks MiddlewareHooks) func(htt
 			reject := func(message string) {
 				if hooks.Rejected != nil && hooks.Rejected(r) {
 					w.Header().Set("Retry-After", "60")
-					http.Error(w, "too many authentication failures", http.StatusTooManyRequests)
+					httpresponse.Error(w, http.StatusTooManyRequests, "too many authentication failures")
 					return
 				}
-				http.Error(w, message, http.StatusUnauthorized)
+				httpresponse.Error(w, http.StatusUnauthorized, message)
 			}
 			if len(r.Header.Values("Authorization")) != 1 {
 				reject("missing or ambiguous bearer token")
@@ -363,7 +365,7 @@ func Require(permission string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := FromContext(r.Context())
 		if !ok || !claims.Has(permission) {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			httpresponse.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next(w, r)

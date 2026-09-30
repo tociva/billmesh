@@ -3,7 +3,6 @@ package bff
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/config"
+	"github.com/tociva/billmesh/internal/httpresponse"
 )
 
 type Manager struct {
@@ -172,7 +172,7 @@ func (m *Manager) AuthHandler() http.Handler {
 	mux.HandleFunc("GET "+base+"/logout/continue", m.continueLogout)
 	mux.HandleFunc("GET "+base+"/logout/provider", m.providerLogout)
 	mux.HandleFunc("GET "+base+"/logout/callback", m.logoutCallback)
-	return mux
+	return httpresponse.JSONFallbacks(mux)
 }
 
 func (m *Manager) AuthBasePath() string {
@@ -195,17 +195,17 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		noStore(w)
 		if r.Header.Get("Authorization") != "" {
-			http.Error(w, "authorization header is not accepted on browser routes", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "authorization header is not accepted on browser routes")
 			return
 		}
 		session, claims, status, err := m.authenticate(r)
 		if err != nil {
-			http.Error(w, http.StatusText(status), status)
+			writeError(w, status, http.StatusText(status))
 			return
 		}
 		csrfValues := r.Header.Values(csrfHeaderName)
 		if !safeMethod(r.Method) && (len(csrfValues) != 1 || !equalSecret(session.CSRFToken, csrfValues[0])) {
-			http.Error(w, "CSRF validation failed", http.StatusForbidden)
+			writeError(w, http.StatusForbidden, "CSRF validation failed")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
@@ -219,22 +219,22 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := randomIdentifier()
 	if err != nil {
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	nonce, err := randomIdentifier()
 	if err != nil {
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	verifier, err := randomIdentifier()
 	if err != nil {
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	correlation, err := randomIdentifier()
 	if err != nil {
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	transaction := loginTransaction{
@@ -247,11 +247,11 @@ func (m *Manager) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		m.log.Error("BFF login start failed", "error", err)
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	http.SetCookie(w, secureCookie(m.loginCookieName(), correlation, m.config.LoginTTL))
-	http.Redirect(w, r, redirect, http.StatusFound)
+	writeRedirect(w, redirect, http.StatusFound)
 }
 
 func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +262,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, m.loginCookieName())
 	state := r.URL.Query().Get("state")
 	if state == "" {
-		http.Error(w, "invalid login callback", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "invalid login callback")
 		return
 	}
 	transaction, err := m.store.takeLogin(r.Context(), state)
@@ -270,7 +270,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	if err != nil || cookieErr != nil || transaction == nil || transaction.SchemaVersion != schemaVersion ||
 		transaction.Realm != m.config.Realm ||
 		!equalBytes(transaction.CorrelationHash, digest(correlation.Value)) {
-		http.Error(w, "invalid login callback", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "invalid login callback")
 		return
 	}
 	if providerError := r.URL.Query().Get("error"); providerError != "" {
@@ -279,7 +279,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, "invalid login callback", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "invalid login callback")
 		return
 	}
 	tokens, err := m.oidc.exchange(r.Context(), code, transaction.CodeVerifier)
@@ -318,12 +318,12 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID, err := randomIdentifier()
 	if err != nil {
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	csrf, err := randomIdentifier()
 	if err != nil {
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	session := browserSession{
@@ -336,18 +336,18 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := m.store.createSession(r.Context(), session); err != nil {
 		m.log.Error("BFF session creation failed", "error", err)
-		http.Error(w, "login unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "login unavailable")
 		return
 	}
 	http.SetCookie(w, secureCookie(m.sessionCookieName(), sessionID, m.config.SessionAbsoluteTTL))
-	http.Redirect(w, r, newURL(m.config.AppOrigin, transaction.ReturnTo), http.StatusFound)
+	writeRedirect(w, newURL(m.config.AppOrigin, transaction.ReturnTo), http.StatusFound)
 }
 
 func (m *Manager) session(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
 	session, _, status, err := m.authenticate(r)
 	if err != nil {
-		http.Error(w, http.StatusText(status), status)
+		writeError(w, status, http.StatusText(status))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -363,12 +363,12 @@ func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 	session, _, status, err := m.authenticate(r)
 	if err != nil {
 		clearCookie(w, m.sessionCookieName())
-		http.Error(w, http.StatusText(status), status)
+		writeError(w, status, http.StatusText(status))
 		return
 	}
 	csrfValues := r.Header.Values(csrfHeaderName)
 	if len(csrfValues) != 1 || !equalSecret(session.CSRFToken, csrfValues[0]) {
-		http.Error(w, "CSRF validation failed", http.StatusForbidden)
+		writeError(w, http.StatusForbidden, "CSRF validation failed")
 		return
 	}
 	if session.RefreshToken != "" {
@@ -381,7 +381,7 @@ func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {
 		SchemaVersion: schemaVersion, Realm: m.config.Realm, IDToken: session.IDToken, CreatedAt: m.now(),
 	})
 	if err != nil {
-		http.Error(w, "logout unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "logout unavailable")
 		return
 	}
 	clearCookie(w, m.sessionCookieName())
@@ -396,20 +396,20 @@ func (m *Manager) continueLogout(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
 	transaction, err := m.store.takeLogout(r.Context(), r.URL.Query().Get("ticket"))
 	if err != nil || transaction == nil || transaction.SchemaVersion != schemaVersion || transaction.Realm != m.config.Realm {
-		http.Error(w, "invalid logout transaction", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "invalid logout transaction")
 		return
 	}
 	redirect, err := m.oidc.providerLogoutURL(r.Context(), transaction.IDToken)
 	if err != nil {
-		http.Error(w, "logout unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "logout unavailable")
 		return
 	}
-	http.Redirect(w, r, redirect, http.StatusFound)
+	writeRedirect(w, redirect, http.StatusFound)
 }
 
 func (m *Manager) logoutCallback(w http.ResponseWriter, r *http.Request) {
 	noStore(w)
-	http.Redirect(w, r, strings.TrimRight(m.config.AppOrigin, "/")+"/auth/logout", http.StatusFound)
+	writeRedirect(w, strings.TrimRight(m.config.AppOrigin, "/")+"/auth/logout", http.StatusFound)
 }
 
 func (m *Manager) providerLogout(w http.ResponseWriter, r *http.Request) {
@@ -418,14 +418,14 @@ func (m *Manager) providerLogout(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, m.loginCookieName())
 	logout, err := url.Parse(m.config.StandaloneLogoutURI)
 	if err != nil {
-		http.Error(w, "logout unavailable", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "logout unavailable")
 		return
 	}
 	query := logout.Query()
 	query.Set("client_id", m.config.ClientID)
 	query.Set("return_to", m.config.PostLogoutRedirectURI)
 	logout.RawQuery = query.Encode()
-	http.Redirect(w, r, logout.String(), http.StatusFound)
+	writeRedirect(w, logout.String(), http.StatusFound)
 }
 
 func (m *Manager) authenticate(r *http.Request) (*browserSession, *auth.Claims, int, error) {
@@ -598,7 +598,7 @@ func (m *Manager) safeReturnTo(value string) string {
 }
 
 func (m *Manager) redirectLoginError(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, strings.TrimRight(m.config.AppOrigin, "/")+"/auth/error?reason=login_failed", http.StatusFound)
+	writeRedirect(w, strings.TrimRight(m.config.AppOrigin, "/")+"/auth/error?reason=login_failed", http.StatusFound)
 }
 
 func secureCookie(name, value string, maxAge time.Duration) *http.Cookie {
@@ -691,12 +691,18 @@ func (m *Manager) allowAuthAttempt(w http.ResponseWriter, r *http.Request) bool 
 		return true
 	}
 	w.Header().Set("Retry-After", "60")
-	http.Error(w, "too many authentication attempts", http.StatusTooManyRequests)
+	writeError(w, http.StatusTooManyRequests, "too many authentication attempts")
 	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	httpresponse.JSON(w, status, value)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	httpresponse.Error(w, status, message)
+}
+
+func writeRedirect(w http.ResponseWriter, location string, status int) {
+	httpresponse.Redirect(w, location, status)
 }

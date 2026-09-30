@@ -130,7 +130,7 @@ func (a *API) linkAccount(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeNoContent(w)
 }
 func (a *API) linkCurrentAccount(w http.ResponseWriter, r *http.Request) {
 	id, err := a.accountIDForClaims(r.Context())
@@ -514,7 +514,7 @@ func (a *API) cancelCurrentSubscription(w http.ResponseWriter, r *http.Request) 
 		writeDBError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeNoContent(w)
 }
 func (a *API) reactivateSubscription(w http.ResponseWriter, r *http.Request) {
 	a.setSubscriptionStatus(w, r, "active")
@@ -683,7 +683,7 @@ func (a *API) checkEntitlement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "feature unavailable")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeNoContent(w)
 }
 
 func (a *API) canAccessSubscription(r *http.Request, id uuid.UUID) bool {

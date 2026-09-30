@@ -234,7 +234,7 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeNoContent(w)
 }
 
 func refundPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
@@ -558,5 +558,5 @@ func (a *API) replayWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeNoContent(w)
 }

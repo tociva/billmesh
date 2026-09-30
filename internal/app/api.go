@@ -23,6 +23,7 @@ import (
 
 	apidocs "github.com/tociva/billmesh/api"
 	"github.com/tociva/billmesh/internal/auth"
+	"github.com/tociva/billmesh/internal/httpresponse"
 	"github.com/tociva/billmesh/internal/wallets"
 )
 
@@ -123,8 +124,9 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("GET /v1/admin/audit", a.requireAdmin("audit.read", "audit_log", a.listAudit))
 	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", a.requireAdmin("webhook.replay", "webhook_delivery", a.replayWebhook))
 	protected.HandleFunc("GET /v1/events", auth.Require("billing:read", a.events))
+	protectedAPI := httpresponse.JSONFallbacks(protected)
 	if a.auth != nil {
-		mux.Handle("/v1/", auth.MiddlewareWithHooks(a.auth, a.requestLimitHooks())(protected))
+		mux.Handle("/v1/", auth.MiddlewareWithHooks(a.auth, a.requestLimitHooks())(protectedAPI))
 	}
 	if a.browser != nil {
 		mux.Handle("/api/v1/auth/", a.browser.AuthHandler())
@@ -134,11 +136,11 @@ func (a *API) Handler() http.Handler {
 			if hooks.Authenticated != nil && !hooks.Authenticated(w, r, claims) {
 				return
 			}
-			protected.ServeHTTP(w, r)
+			protectedAPI.ServeHTTP(w, r)
 		})
 		mux.Handle("/api/v1/", a.browser.Middleware(http.StripPrefix("/api", browserProtected)))
 	}
-	handler := http.Handler(requestLog(a.log, recoverer(mux)))
+	handler := http.Handler(requestLog(a.log, recoverer(httpresponse.JSONFallbacks(mux))))
 	if a.browser != nil {
 		handler = a.browser.CORS(handler)
 	}
@@ -588,12 +590,13 @@ func rejectDuplicateJSONKeys(d *json.Decoder, depth int) error {
 	return err
 }
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpresponse.JSON(w, status, v)
 }
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	httpresponse.Error(w, status, message)
+}
+func writeNoContent(w http.ResponseWriter) {
+	httpresponse.NoContent(w)
 }
 func writeDBError(w http.ResponseWriter, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {

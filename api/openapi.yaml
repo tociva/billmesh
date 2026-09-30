@@ -61,7 +61,7 @@ paths:
           description: Allowed application-relative return path.
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/console/callback:
     get:
       operationId: completeConsoleBrowserLogin
@@ -74,7 +74,7 @@ paths:
         - { name: error, in: query, schema: { type: string } }
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/console/session:
     get:
       operationId: getConsoleBrowserSession
@@ -88,7 +88,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BrowserSession" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/console/logout:
     post:
       operationId: logoutConsoleBrowserSession
@@ -109,7 +109,7 @@ paths:
                 required: [logoutUrl]
                 properties:
                   logoutUrl: { type: string }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/console/logout/continue:
     get:
       operationId: continueConsoleBrowserLogout
@@ -120,7 +120,7 @@ paths:
         - { name: ticket, in: query, required: true, schema: { type: string } }
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/console/logout/provider:
     get:
       operationId: startStandaloneConsoleProviderLogout
@@ -129,7 +129,7 @@ paths:
       security: []
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/console/logout/callback:
     get:
       operationId: completeConsoleBrowserLogout
@@ -151,7 +151,7 @@ paths:
           description: Allowed application-relative return path.
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/admin/callback:
     get:
       operationId: completeAdminBrowserLogin
@@ -164,7 +164,7 @@ paths:
         - { name: error, in: query, schema: { type: string } }
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/admin/session:
     get:
       operationId: getAdminBrowserSession
@@ -178,7 +178,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BrowserSession" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/admin/logout:
     post:
       operationId: logoutAdminBrowserSession
@@ -199,7 +199,7 @@ paths:
                 required: [logoutUrl]
                 properties:
                   logoutUrl: { type: string }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/admin/logout/continue:
     get:
       operationId: continueAdminBrowserLogout
@@ -210,7 +210,7 @@ paths:
         - { name: ticket, in: query, required: true, schema: { type: string } }
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/admin/logout/provider:
     get:
       operationId: startStandaloneAdminProviderLogout
@@ -219,7 +219,7 @@ paths:
       security: []
       responses:
         "302": { $ref: "#/components/responses/Redirect" }
-        default: { $ref: "#/components/responses/PlainError" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/admin/logout/callback:
     get:
       operationId: completeAdminBrowserLogout
@@ -956,13 +956,8 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
-    PlainError:
-      description: Browser authentication request failed.
-      content:
-        text/plain:
-          schema: { type: string }
     Redirect:
-      description: Redirect to the identity provider or browser application.
+      description: Empty response redirecting to the identity provider or browser application.
       headers:
         Location:
           schema: { type: string, format: uri-reference }

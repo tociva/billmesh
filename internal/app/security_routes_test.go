@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,26 @@ import (
 type routeTestVerifier struct{}
 
 type routeTestBrowserAuth struct{}
+
+func assertRouteJSONError(t *testing.T, response *httptest.ResponseRecorder, status int) string {
+	t.Helper()
+	if response.Code != status {
+		t.Fatalf("want status %d, got %d: %s", status, response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error response: %v: %s", err, response.Body.String())
+	}
+	if body.Error == "" {
+		t.Fatal("error response has an empty error message")
+	}
+	return body.Error
+}
 
 func (routeTestBrowserAuth) Authenticate(*http.Request) (*auth.Claims, int, error) {
 	return &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook"}, 0, nil
@@ -84,18 +105,14 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 				}
 				resp := httptest.NewRecorder()
 				handler.ServeHTTP(resp, req)
-				if resp.Code != http.StatusUnauthorized {
-					t.Fatalf("token %q: want 401, got %d", token, resp.Code)
-				}
+				assertRouteJSONError(t, resp, http.StatusUnauthorized)
 			}
 			if permission != "" {
 				req := httptest.NewRequest(method, path, nil)
 				req.Header.Set("Authorization", "Bearer valid")
 				resp := httptest.NewRecorder()
 				handler.ServeHTTP(resp, req)
-				if resp.Code != http.StatusForbidden {
-					t.Fatalf("missing %s: want 403, got %d", permission, resp.Code)
-				}
+				assertRouteJSONError(t, resp, http.StatusForbidden)
 			}
 			authorized := "valid"
 			if permission != "" {
@@ -105,7 +122,7 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+authorized)
 			resp := httptest.NewRecorder()
 			handler.ServeHTTP(resp, req)
-			if resp.Code == http.StatusUnauthorized || resp.Code == http.StatusNotFound || (resp.Code == http.StatusForbidden && strings.TrimSpace(resp.Body.String()) == "forbidden") {
+			if resp.Code == http.StatusUnauthorized || resp.Code == http.StatusNotFound {
 				t.Fatalf("correct %s permission did not reach route handler: %d %q", permission, resp.Code, resp.Body.String())
 			}
 		})
@@ -115,6 +132,30 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("public health route returned %d", resp.Code)
 	}
+}
+
+func TestProtectedRouterNotFoundAndMethodErrorsAreJSON(t *testing.T) {
+	a := NewAPI(nil, routeTestVerifier{}, nil)
+	handler := a.Handler()
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		status int
+	}{
+		{http.MethodGet, "/v1/not-a-route", http.StatusNotFound},
+		{http.MethodDelete, "/v1/products", http.StatusMethodNotAllowed},
+	} {
+		request := httptest.NewRequest(tc.method, tc.path, nil)
+		request.Header.Set("Authorization", "Bearer valid")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		assertRouteJSONError(t, response, tc.status)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/healthz", nil))
+	assertRouteJSONError(t, response, http.StatusMethodNotAllowed)
 }
 
 func TestBrowserAndBearerSurfacesShareProtectedHandlersWithoutAuthAmbiguity(t *testing.T) {

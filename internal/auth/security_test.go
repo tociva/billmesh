@@ -158,6 +158,10 @@ func TestSecurityMiddlewareRejectsDuplicateAuthorizationBeforeHandler(t *testing
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 	require.Equal(t, http.StatusUnauthorized, resp.Code)
+	require.Equal(t, "application/json", resp.Header().Get("Content-Type"))
+	var body map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, "missing or ambiguous bearer token", body["error"])
 	require.Zero(t, calls.Load())
 }
 
