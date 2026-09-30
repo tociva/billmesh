@@ -110,6 +110,27 @@ func TestAdminRealmRequiresBillingAdminPermission(t *testing.T) {
 	require.NoError(t, manager.validateRealmClaims(&auth.Claims{Permissions: []string{"billing:admin"}}))
 }
 
+func TestBrowserSessionResponseIncludesPermissions(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	response := newBrowserSessionResponse(browserSession{
+		Subject:        "user-1",
+		Email:          "admin@example.test",
+		Name:           "Admin User",
+		OrgID:          "org-1",
+		App:            "daybook",
+		Environment:    "development",
+		Permissions:    []string{"billing:read", "billing:admin"},
+		CSRFToken:      "csrf-value",
+		AbsoluteExpiry: expiresAt,
+	})
+
+	require.True(t, response.Authenticated)
+	require.Equal(t, []string{"billing:read", "billing:admin"}, response.Permissions)
+	require.Equal(t, "user-1", response.User.Subject)
+	require.Equal(t, "org-1", response.Context.OrganizationID)
+	require.Equal(t, expiresAt, response.ExpiresAt)
+}
+
 func TestAuthAttemptLimiterIsClientScoped(t *testing.T) {
 	now := time.Now()
 	limiter := &attemptLimiter{entries: make(map[string]attemptCount), limit: 2, now: func() time.Time { return now }}

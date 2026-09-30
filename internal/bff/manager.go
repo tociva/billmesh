@@ -350,12 +350,7 @@ func (m *Manager) session(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, http.StatusText(status))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"authenticated": true,
-		"user":          map[string]string{"subject": session.Subject, "email": session.Email, "name": session.Name},
-		"context":       map[string]string{"organization_id": session.OrgID, "application": session.App, "environment": session.Environment},
-		"csrfToken":     session.CSRFToken, "expiresAt": session.AbsoluteExpiry,
-	})
+	writeJSON(w, http.StatusOK, newBrowserSessionResponse(*session))
 }
 
 func (m *Manager) logout(w http.ResponseWriter, r *http.Request) {

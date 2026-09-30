@@ -1315,7 +1315,7 @@ components:
         updated_at: { type: string, format: date-time }
     BrowserSession:
       type: object
-      required: [authenticated, user, context, csrfToken, expiresAt]
+      required: [authenticated, user, context, permissions, csrfToken, expiresAt]
       properties:
         authenticated: { type: boolean, const: true }
         user:
@@ -1332,6 +1332,9 @@ components:
             organization_id: { type: string }
             application: { type: string }
             environment: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
         csrfToken: { type: string, writeOnly: true }
         expiresAt: { type: string, format: date-time }
     Product:

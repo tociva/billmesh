@@ -51,6 +51,46 @@ type browserSession struct {
 	IDToken        string    `json:"id_token,omitempty"`
 }
 
+type browserSessionResponse struct {
+	Authenticated bool                          `json:"authenticated"`
+	User          browserSessionUserResponse    `json:"user"`
+	Context       browserSessionContextResponse `json:"context"`
+	Permissions   []string                      `json:"permissions"`
+	CSRFToken     string                        `json:"csrfToken"`
+	ExpiresAt     time.Time                     `json:"expiresAt"`
+}
+
+type browserSessionUserResponse struct {
+	Subject string `json:"subject"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+}
+
+type browserSessionContextResponse struct {
+	OrganizationID string `json:"organization_id"`
+	Application    string `json:"application"`
+	Environment    string `json:"environment"`
+}
+
+func newBrowserSessionResponse(session browserSession) browserSessionResponse {
+	return browserSessionResponse{
+		Authenticated: true,
+		User: browserSessionUserResponse{
+			Subject: session.Subject,
+			Email:   session.Email,
+			Name:    session.Name,
+		},
+		Context: browserSessionContextResponse{
+			OrganizationID: session.OrgID,
+			Application:    session.App,
+			Environment:    session.Environment,
+		},
+		Permissions: append([]string(nil), session.Permissions...),
+		CSRFToken:   session.CSRFToken,
+		ExpiresAt:   session.AbsoluteExpiry,
+	}
+}
+
 type logoutTransaction struct {
 	SchemaVersion int       `json:"schema_version"`
 	Realm         string    `json:"realm"`
