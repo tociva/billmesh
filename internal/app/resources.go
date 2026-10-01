@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -143,21 +144,20 @@ func (a *API) linkCurrentAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,created_at FROM products ORDER BY slug`)
+	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,active,version,created_at,updated_at FROM products WHERE active ORDER BY slug,id`)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
 	defer rows.Close()
-	items := []map[string]any{}
+	items := []productRecord{}
 	for rows.Next() {
-		var id uuid.UUID
-		var slug, name string
-		var created time.Time
-		if rows.Scan(&id, &slug, &name, &created) != nil {
-			continue
+		var item productRecord
+		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			writeDBError(w, err)
+			return
 		}
-		items = append(items, map[string]any{"id": id, "slug": slug, "name": name, "created_at": created})
+		items = append(items, item)
 	}
 	writeJSON(w, 200, items)
 }
@@ -182,8 +182,30 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 	if in.Currency == "" {
 		in.Currency = "INR"
 	}
-	if err := products.ValidatePlan(products.PlanInput{PriceMinor: in.PriceMinor, IncludedCredits: in.IncludedCredits, Currency: in.Currency}); err != nil {
+	if nestedProduct := r.PathValue("id"); nestedProduct != "" {
+		productID, err := uuid.Parse(nestedProduct)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid product id")
+			return
+		}
+		if in.ProductID != uuid.Nil && in.ProductID != productID {
+			writeError(w, http.StatusBadRequest, "product id does not match request path")
+			return
+		}
+		in.ProductID = productID
+	}
+	in.Slug = strings.TrimSpace(in.Slug)
+	in.Name = strings.TrimSpace(in.Name)
+	if err := products.ValidatePlan(products.PlanInput{PriceMinor: in.PriceMinor, IncludedCredits: in.IncludedCredits, Currency: in.Currency, BillingInterval: in.BillingInterval}); err != nil {
 		writeError(w, 400, err.Error())
+		return
+	}
+	if err := products.ValidatePlanSlug(in.Slug); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := products.ValidatePlanName(in.Name); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if in.ProductID == uuid.Nil || in.Slug == "" || in.Name == "" {
@@ -194,33 +216,60 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 	if in.Active != nil {
 		active = *in.Active
 	}
-	ent, _ := json.Marshal(in.Entitlements)
-	var id uuid.UUID
-	err := a.pool.QueryRow(r.Context(), `INSERT INTO plans(product_id,slug,name,price_minor,currency,included_credits,entitlements,active,billing_interval) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.ProductID, in.Slug, in.Name, in.PriceMinor, in.Currency, in.IncludedCredits, ent, active, in.BillingInterval).Scan(&id)
+	if in.Entitlements == nil {
+		in.Entitlements = map[string]any{}
+	}
+	var created planRecord
+	err := pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
+		var productSlug string
+		var productActive bool
+		if err := tx.QueryRow(r.Context(), `SELECT slug,active FROM products WHERE id=$1`, in.ProductID).Scan(&productSlug, &productActive); err != nil {
+			return err
+		}
+		if active && !productActive {
+			return catalogueValidationError{"active plans require an active product"}
+		}
+		row := tx.QueryRow(r.Context(), `INSERT INTO plans(product_id,slug,name,price_minor,currency,included_credits,entitlements,active,billing_interval)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			RETURNING id,product_id,$10::text,slug,name,price_minor,currency,included_credits,entitlements,billing_interval,active,version,created_at,updated_at`,
+			in.ProductID, in.Slug, in.Name, in.PriceMinor, in.Currency, in.IncludedCredits, in.Entitlements, active, in.BillingInterval, productSlug)
+		var err error
+		created, err = scanPlan(row)
+		if err != nil {
+			return err
+		}
+		return a.writeCatalogueAudit(r.Context(), tx, "plan.create", "plan", created.ID, nil, planState(created))
+	})
+	var validation catalogueValidationError
+	if errors.As(err, &validation) {
+		writeError(w, http.StatusConflict, validation.Error())
+		return
+	}
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": id, "slug": in.Slug})
+	writeJSON(w, http.StatusCreated, created)
 }
 func (a *API) listPlans(w http.ResponseWriter, r *http.Request) {
 	product := r.URL.Query().Get("product")
-	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.slug,p.name,p.price_minor,p.currency,p.included_credits,p.entitlements,p.billing_interval,pr.slug FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.active AND ($1='' OR pr.slug=$1) ORDER BY pr.slug,p.price_minor`, product)
+	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.price_minor,p.currency,p.included_credits,p.entitlements,
+		p.billing_interval,p.active,p.version,p.created_at,p.updated_at
+		FROM plans p JOIN products pr ON pr.id=p.product_id
+		WHERE p.active AND pr.active AND ($1='' OR pr.slug=$1) ORDER BY pr.slug,p.price_minor,p.slug,p.id`, product)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
 	defer rows.Close()
-	items := []map[string]any{}
+	items := []planRecord{}
 	for rows.Next() {
-		var id uuid.UUID
-		var slug, name, currency, interval, productSlug string
-		var price, credits int64
-		var ent []byte
-		if rows.Scan(&id, &slug, &name, &price, &currency, &credits, &ent, &interval, &productSlug) != nil {
-			continue
+		item, err := scanPlan(rows)
+		if err != nil {
+			writeDBError(w, err)
+			return
 		}
-		items = append(items, map[string]any{"id": id, "slug": slug, "name": name, "price_minor": price, "currency": currency, "included_credits": credits, "entitlements": json.RawMessage(ent), "billing_interval": interval, "product": productSlug})
+		items = append(items, item)
 	}
 	writeJSON(w, 200, items)
 }
@@ -231,34 +280,96 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name            string
-		PriceMinor      *int64 `json:"price_minor"`
-		IncludedCredits *int64 `json:"included_credits"`
-		Entitlements    map[string]any
-		Active          *bool
+		Name            *string        `json:"name"`
+		PriceMinor      *int64         `json:"price_minor"`
+		Currency        *string        `json:"currency"`
+		IncludedCredits *int64         `json:"included_credits"`
+		Entitlements    map[string]any `json:"entitlements"`
+		BillingInterval *string        `json:"billing_interval"`
+		Active          *bool          `json:"active"`
+		Version         *int64         `json:"version"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	if in.PriceMinor != nil && *in.PriceMinor < 0 {
-		writeError(w, 400, "price cannot be negative")
+	if strings.HasPrefix(r.URL.Path, "/v1/admin/") && (in.Version == nil || *in.Version < 1) {
+		writeError(w, http.StatusBadRequest, "version is required")
 		return
 	}
-	if in.IncludedCredits != nil && *in.IncludedCredits < 0 {
-		writeError(w, 400, "included credits cannot be negative")
+	var updated planRecord
+	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
+		row := tx.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.price_minor,p.currency,p.included_credits,
+			p.entitlements,p.billing_interval,p.active,p.version,p.created_at,p.updated_at
+			FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.id=$1 FOR UPDATE OF p`, id)
+		before, err := scanPlan(row)
+		if err != nil {
+			return err
+		}
+		if in.Version != nil && before.Version != *in.Version {
+			return errCatalogueVersionConflict
+		}
+		updated = before
+		if in.Name != nil {
+			updated.Name = strings.TrimSpace(*in.Name)
+		}
+		if in.PriceMinor != nil {
+			updated.PriceMinor = *in.PriceMinor
+		}
+		if in.Currency != nil {
+			updated.Currency = strings.TrimSpace(*in.Currency)
+		}
+		if in.IncludedCredits != nil {
+			updated.IncludedCredits = *in.IncludedCredits
+		}
+		if in.Entitlements != nil {
+			updated.Entitlements = in.Entitlements
+		}
+		if in.BillingInterval != nil {
+			updated.BillingInterval = *in.BillingInterval
+		}
+		if in.Active != nil {
+			updated.Active = *in.Active
+		}
+		if err := products.ValidatePlanName(updated.Name); err != nil {
+			return catalogueValidationError{err.Error()}
+		}
+		if err := products.ValidatePlan(products.PlanInput{PriceMinor: updated.PriceMinor, IncludedCredits: updated.IncludedCredits, Currency: updated.Currency, BillingInterval: updated.BillingInterval}); err != nil {
+			return catalogueValidationError{err.Error()}
+		}
+		if updated.Active {
+			var productActive bool
+			if err := tx.QueryRow(r.Context(), `SELECT active FROM products WHERE id=$1`, updated.ProductID).Scan(&productActive); err != nil {
+				return err
+			}
+			if !productActive {
+				return catalogueValidationError{"active plans require an active product"}
+			}
+		}
+		row = tx.QueryRow(r.Context(), `UPDATE plans SET name=$2,price_minor=$3,currency=$4,included_credits=$5,entitlements=$6,
+			billing_interval=$7,active=$8,version=version+1,updated_at=now() WHERE id=$1
+			RETURNING id,product_id,$9::text,slug,name,price_minor,currency,included_credits,entitlements,billing_interval,active,version,created_at,updated_at`,
+			id, updated.Name, updated.PriceMinor, updated.Currency, updated.IncludedCredits, updated.Entitlements,
+			updated.BillingInterval, updated.Active, before.Product)
+		updated, err = scanPlan(row)
+		if err != nil {
+			return err
+		}
+		return a.writeCatalogueAudit(r.Context(), tx, "plan.update", "plan", id, planState(before), planState(updated))
+	})
+	if errors.Is(err, errCatalogueVersionConflict) {
+		writeError(w, http.StatusConflict, "plan was modified by another request")
 		return
 	}
-	var ent any
-	if in.Entitlements != nil {
-		raw, _ := json.Marshal(in.Entitlements)
-		ent = raw
+	var validation catalogueValidationError
+	if errors.As(err, &validation) {
+		writeError(w, http.StatusBadRequest, validation.Error())
+		return
 	}
-	tag, err := a.pool.Exec(r.Context(), `UPDATE plans SET name=COALESCE(NULLIF($2,''),name),price_minor=COALESCE($3,price_minor),included_credits=COALESCE($4,included_credits),entitlements=COALESCE($5,entitlements),active=COALESCE($6,active) WHERE id=$1`, id, in.Name, in.PriceMinor, in.IncludedCredits, ent, in.Active)
-	if err != nil || tag.RowsAffected() != 1 {
+	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": id})
+	writeJSON(w, http.StatusOK, updated)
 }
 func (a *API) createCreditPack(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -320,8 +431,9 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 	var planID, productID uuid.UUID
 	var price, credits int64
 	var currency, interval string
-	var active bool
-	query := `SELECT p.id,p.product_id,p.price_minor,p.included_credits,p.currency,p.billing_interval,p.active FROM plans p JOIN products pr ON pr.id=p.product_id WHERE `
+	var entitlements map[string]any
+	var active, productActive bool
+	query := `SELECT p.id,p.product_id,p.price_minor,p.included_credits,p.currency,p.billing_interval,p.entitlements,p.active,pr.active FROM plans p JOIN products pr ON pr.id=p.product_id WHERE `
 	args := []any{}
 	if in.PlanID != uuid.Nil {
 		query += `p.id=$1`
@@ -330,11 +442,11 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 		query += `p.slug=$1 AND ($2='' OR pr.slug=$2)`
 		args = []any{in.Plan, in.Product}
 	}
-	if err := a.pool.QueryRow(r.Context(), query, args...).Scan(&planID, &productID, &price, &credits, &currency, &interval, &active); err != nil {
+	if err := a.pool.QueryRow(r.Context(), query, args...).Scan(&planID, &productID, &price, &credits, &currency, &interval, &entitlements, &active, &productActive); err != nil {
 		writeDBError(w, err)
 		return
 	}
-	if !active {
+	if !active || !productActive {
 		writeError(w, 409, "plan is inactive")
 		return
 	}
@@ -361,7 +473,8 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	var subscriptionID uuid.UUID
 	err := pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `INSERT INTO subscriptions(account_id,plan_id,product_id,status,current_period_start,current_period_end,price_minor,currency,billing_interval) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.AccountID, planID, productID, status, now, billingPeriod(now, interval), price, currency, interval).Scan(&subscriptionID); err != nil {
+		if err := tx.QueryRow(r.Context(), `INSERT INTO subscriptions(account_id,plan_id,product_id,status,current_period_start,current_period_end,price_minor,currency,billing_interval,included_credits,entitlements)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, in.AccountID, planID, productID, status, now, billingPeriod(now, interval), price, currency, interval, credits, entitlements).Scan(&subscriptionID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(r.Context(), `INSERT INTO subscription_history(subscription_id,status,plan_id,operation_ref) VALUES($1,$2,$3,$4)`, subscriptionID, status, planID, "subscription:create:"+subscriptionID.String()); err != nil {
@@ -473,8 +586,10 @@ func (a *API) changeSubscriptionPlan(w http.ResponseWriter, r *http.Request) {
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
 		var accountID uuid.UUID
 		var status string
-		if err := tx.QueryRow(r.Context(), `UPDATE subscriptions s SET plan_id=$2,version=version+1,updated_at=now(),price_minor=p.price_minor,currency=p.currency,billing_interval=p.billing_interval
-			FROM plans p WHERE s.id=$1 AND p.id=$2 AND p.active AND p.product_id=s.product_id RETURNING s.account_id,s.status`, id, in.PlanID).Scan(&accountID, &status); err != nil {
+		if err := tx.QueryRow(r.Context(), `UPDATE subscriptions s SET plan_id=$2,version=s.version+1,updated_at=now(),price_minor=p.price_minor,currency=p.currency,
+			billing_interval=p.billing_interval,included_credits=p.included_credits,entitlements=p.entitlements
+			FROM plans p JOIN products pr ON pr.id=p.product_id
+			WHERE s.id=$1 AND p.id=$2 AND p.active AND pr.active AND p.product_id=s.product_id RETURNING s.account_id,s.status`, id, in.PlanID).Scan(&accountID, &status); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(r.Context(), `INSERT INTO subscription_history(subscription_id,status,plan_id,operation_ref) VALUES($1,$2,$3,$4)`, id, status, in.PlanID, "subscription:change:"+uuid.NewString()); err != nil {
@@ -587,7 +702,7 @@ func (a *API) renewSubscription(w http.ResponseWriter, r *http.Request) {
 	var credits, price int64
 	var interval string
 	var end *time.Time
-	if err = a.pool.QueryRow(r.Context(), `SELECT s.account_id,s.plan_id,p.product_id,p.included_credits,s.price_minor,s.billing_interval,s.current_period_end,s.status FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.id=$1`, id).Scan(&accountID, &planID, &productID, &credits, &price, &interval, &end, &currentStatus); err != nil {
+	if err = a.pool.QueryRow(r.Context(), `SELECT s.account_id,s.plan_id,s.product_id,s.included_credits,s.price_minor,s.billing_interval,s.current_period_end,s.status FROM subscriptions s WHERE s.id=$1`, id).Scan(&accountID, &planID, &productID, &credits, &price, &interval, &end, &currentStatus); err != nil {
 		writeDBError(w, err)
 		return
 	}
@@ -655,7 +770,7 @@ func (a *API) getEntitlements(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "product not accessible")
 		return
 	}
-	err = a.pool.QueryRow(r.Context(), `SELECT p.entitlements,s.status FROM subscriptions s JOIN plans p ON p.id=s.plan_id JOIN products pr ON pr.id=p.product_id WHERE s.account_id=$1 AND pr.slug=$2 ORDER BY s.created_at DESC LIMIT 1`, accountID, product).Scan(&raw, &status)
+	err = a.pool.QueryRow(r.Context(), `SELECT s.entitlements,s.status FROM subscriptions s JOIN products pr ON pr.id=s.product_id WHERE s.account_id=$1 AND pr.slug=$2 ORDER BY s.created_at DESC LIMIT 1`, accountID, product).Scan(&raw, &status)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -678,7 +793,7 @@ func (a *API) checkEntitlement(w http.ResponseWriter, r *http.Request) {
 	}
 	var enabled bool
 	claims, _ := auth.FromContext(r.Context())
-	err = a.pool.QueryRow(r.Context(), `SELECT COALESCE((p.entitlements->$2)::boolean,false) FROM subscriptions s JOIN plans p ON p.id=s.plan_id JOIN products pr ON pr.id=p.product_id WHERE s.account_id=$1 AND s.status='active' AND pr.slug=$3 ORDER BY s.created_at DESC LIMIT 1`, account, feature, claims.App).Scan(&enabled)
+	err = a.pool.QueryRow(r.Context(), `SELECT COALESCE((s.entitlements->$2)::boolean,false) FROM subscriptions s JOIN products pr ON pr.id=s.product_id WHERE s.account_id=$1 AND s.status='active' AND pr.slug=$3 ORDER BY s.created_at DESC LIMIT 1`, account, feature, claims.App).Scan(&enabled)
 	if err != nil || !enabled {
 		writeError(w, 403, "feature unavailable")
 		return

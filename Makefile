@@ -1,8 +1,10 @@
 .PHONY: build run-api run-worker migrate db-bootstrap openapi-check test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
 
+INTEGRATION_DB_PORT ?= 5434
+export INTEGRATION_DB_PORT
 INTEGRATION_COMPOSE := docker compose -f deploy/compose.test.yml -f deploy/compose.integration.yml -p billmesh-integration
-INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_integration?sslmode=disable&search_path=billmesh
-INTEGRATION_RESTORE_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:5433/billmesh_restore?sslmode=disable&search_path=billmesh
+INTEGRATION_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:$(INTEGRATION_DB_PORT)/billmesh_integration?sslmode=disable&search_path=billmesh
+INTEGRATION_RESTORE_DATABASE_URL ?= postgres://billmesh:testpassword@127.0.0.1:$(INTEGRATION_DB_PORT)/billmesh_restore?sslmode=disable&search_path=billmesh
 E2E_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-test
 PERFORMANCE_COMPOSE := docker compose -f deploy/compose.test.yml -p billmesh-performance
 

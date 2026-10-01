@@ -85,11 +85,19 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("PATCH /v1/accounts/{id}", auth.Require("billing:write", a.updateAccount))
 	protected.HandleFunc("POST /v1/accounts/{id}/links", auth.Require("billing:write", a.linkAccount))
 	protected.HandleFunc("POST /v1/account-links", auth.Require("billing:write", a.linkCurrentAccount))
-	protected.HandleFunc("POST /v1/products", a.requireAdmin("product.create", "product", a.createProduct))
+	protected.HandleFunc("POST /v1/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
 	protected.HandleFunc("GET /v1/products", a.listProducts)
-	protected.HandleFunc("POST /v1/plans", a.requireAdmin("plan.create", "plan", a.createPlan))
+	protected.HandleFunc("POST /v1/plans", a.requireCatalogueAdmin("plan.create", "plan", a.createPlan))
 	protected.HandleFunc("GET /v1/plans", a.listPlans)
-	protected.HandleFunc("PATCH /v1/plans/{id}", a.requireAdmin("plan.update", "plan", a.updatePlan))
+	protected.HandleFunc("PATCH /v1/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
+	protected.HandleFunc("GET /v1/admin/products", a.requireCatalogueAdmin("product.list", "product", a.listAdminProducts))
+	protected.HandleFunc("POST /v1/admin/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
+	protected.HandleFunc("GET /v1/admin/products/{id}", a.requireCatalogueAdmin("product.read", "product", a.getAdminProduct))
+	protected.HandleFunc("PATCH /v1/admin/products/{id}", a.requireCatalogueAdmin("product.update", "product", a.updateAdminProduct))
+	protected.HandleFunc("GET /v1/admin/products/{id}/plans", a.requireCatalogueAdmin("plan.list", "plan", a.listAdminPlans))
+	protected.HandleFunc("POST /v1/admin/products/{id}/plans", a.requireCatalogueAdmin("plan.create", "plan", a.createPlan))
+	protected.HandleFunc("GET /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.read", "plan", a.getAdminPlan))
+	protected.HandleFunc("PATCH /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
 	protected.HandleFunc("POST /v1/credit-packs", a.requireAdmin("credit_pack.create", "credit_pack", a.createCreditPack))
 	protected.HandleFunc("POST /v1/subscriptions", auth.Require("billing:write", a.createSubscription))
 	protected.HandleFunc("GET /v1/subscriptions/current", auth.Require("billing:read", a.currentSubscription))
@@ -222,26 +230,6 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id, "name": in.Name, "external_ref": in.ExternalRef, "created_at": created})
-}
-
-func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Slug string `json:"slug"`
-		Name string `json:"name"`
-	}
-	if !decode(w, r, &in) {
-		return
-	}
-	if strings.TrimSpace(in.Slug) == "" || strings.TrimSpace(in.Name) == "" {
-		writeError(w, http.StatusBadRequest, "slug and name are required")
-		return
-	}
-	var id uuid.UUID
-	if err := a.pool.QueryRow(r.Context(), `INSERT INTO products(slug,name) VALUES($1,$2) RETURNING id`, in.Slug, in.Name).Scan(&id); err != nil {
-		writeDBError(w, err)
-		return
-	}
-	writeJSON(w, 201, map[string]any{"id": id, "slug": in.Slug, "name": in.Name})
 }
 
 func (a *API) createWallet(w http.ResponseWriter, r *http.Request) {

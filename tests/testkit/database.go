@@ -47,17 +47,20 @@ func ExerciseDatabaseContract(t *testing.T, tc PlanCase, table string) {
 		exerciseAuditTamperResistance(t, pool)
 		return
 	}
-	var exists bool
-	if err := pool.QueryRow(context.Background(), `SELECT to_regclass('public.'||$1) IS NOT NULL`, table).Scan(&exists); err != nil {
+	var schema string
+	if err := pool.QueryRow(context.Background(), `SELECT CASE
+		WHEN to_regclass($1) IS NOT NULL THEN current_schema()
+		WHEN to_regclass('public.'||$1) IS NOT NULL THEN 'public'
+		ELSE '' END`, table).Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	if !exists {
+	if schema == "" {
 		t.Fatalf("%s requires table %q", tc.ID, table)
 	}
 	text := strings.ToLower(tc.Description)
 	if strings.Contains(text, "duplicate") || strings.Contains(text, "deduplicate") {
 		var count int
-		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND tablename=$1 AND indexdef ILIKE '%UNIQUE%'`, table).Scan(&count); err != nil {
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_indexes WHERE schemaname=$2 AND tablename=$1 AND indexdef ILIKE '%UNIQUE%'`, table, schema).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count == 0 {

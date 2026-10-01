@@ -124,7 +124,8 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	clientID, clientSecret, ok := r.BasicAuth()
-	if !ok || clientID != "billmesh-web-test" || clientSecret != "test-secret" {
+	validClient := clientID == "billmesh-console-test" || clientID == "billmesh-admin-test"
+	if !ok || !validClient || clientSecret != "test-secret" {
 		http.Error(w, "invalid client", http.StatusUnauthorized)
 		return
 	}

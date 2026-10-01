@@ -56,7 +56,7 @@ func TestSecurityAuthenticationFloodDoesNotBlockValidTenant(t *testing.T) {
 	}
 }
 
-func TestSecurityMutationFloodIsTenantScoped(t *testing.T) {
+func TestCATSEC022MutationFloodIsTenantScopedAndStopsBeforeHandler(t *testing.T) {
 	a := NewAPI(nil, limitTestVerifier{}, nil)
 	a.ConfigureRequestLimits(30, 1, 10)
 	handler := a.Handler()
@@ -96,7 +96,7 @@ func TestSecurityMutationFloodIsTenantScoped(t *testing.T) {
 		}
 	}
 	if allowed != 10 || limited != 20 {
-		t.Fatalf("want 10 allowed and 20 throttled requests, got %d and %d", allowed, limited)
+		t.Fatalf("CATSEC-022: want 10 handler calls and 20 requests stopped before the handler, got %d and %d", allowed, limited)
 	}
 	if got := request("tenant-b").Code; got != http.StatusUnsupportedMediaType {
 		t.Fatalf("another tenant lost mutation capacity: %d", got)

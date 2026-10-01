@@ -210,13 +210,14 @@ make test-integration  # provisions, migrates, tests, and removes isolated Postg
 make test-e2e          # migrations + PostgreSQL + running API/worker E2E
 make test-performance  # provisions the isolated API/worker stack and runs benchmarks
 make test-clean        # remove test containers and volumes
+docker builder prune
 ```
 
 Integration, E2E, restore, and performance databases are disposable test infrastructure. Their Compose projects and volumes are removed automatically when each test command completes or is interrupted. Developers only configure and bootstrap `DB_NAME=billmesh`; never point test database URLs at development or production data.
 
 `make test-performance` is also self-contained. It starts an isolated Compose project, waits for the API health check, runs the benchmark container with the required service URLs, and removes its containers and volumes afterward.
 
-`make test-integration` is self-contained and uses the `billmesh-integration` Compose project with the database exposed only on local port `5433`. It always removes its containers and volume through a shell exit trap, including after failures or interruption. Override `INTEGRATION_DATABASE_URL` only when intentionally testing against another disposable PostgreSQL instance.
+`make test-integration` is self-contained and uses the `billmesh-integration` Compose project with a memory-backed disposable database exposed only on local port `5434`, avoiding the development database on port `5433`. It always removes its container through a shell exit trap, including after failures or interruption. Override `INTEGRATION_DB_PORT` if port `5434` is unavailable, or override `INTEGRATION_DATABASE_URL` only when intentionally testing against another disposable PostgreSQL instance.
 
 Tests are grouped under `tests/unit`, `tests/integration`, `tests/e2e`, and `tests/performance`, then by business category. Every checklist ID in `test-plan.md` is exposed as an individually named test or benchmark. The four cross-module business journeys live under `tests/e2e/journeys`.
 

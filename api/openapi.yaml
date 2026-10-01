@@ -310,7 +310,7 @@ paths:
     get:
       operationId: listProducts
       tags: [Catalogue]
-      summary: List products
+      summary: List active customer-visible products
       responses:
         "200":
           description: Products.
@@ -356,7 +356,11 @@ paths:
       x-required-permissions: [billing:admin]
       requestBody: { $ref: "#/components/requestBodies/CreatePlan" }
       responses:
-        "201": { $ref: "#/components/responses/IDWithSlug" }
+        "201":
+          description: Plan created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
         default: { $ref: "#/components/responses/Error" }
   /v1/plans/{id}:
     parameters:
@@ -368,7 +372,140 @@ paths:
       x-required-permissions: [billing:admin]
       requestBody: { $ref: "#/components/requestBodies/UpdatePlan" }
       responses:
-        "200": { $ref: "#/components/responses/IDOnly" }
+        "200":
+          description: Plan updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/products:
+    get:
+      operationId: listAdminProducts
+      tags: [Administration, Catalogue]
+      summary: List active and archived products
+      x-required-permissions: [billing:admin]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [all, active, archived], default: all }
+        - name: query
+          in: query
+          schema: { type: string, maxLength: 120 }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: Products visible to an administrator.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Product" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createAdminProduct
+      tags: [Administration, Catalogue]
+      summary: Create a product
+      x-required-permissions: [billing:admin]
+      requestBody: { $ref: "#/components/requestBodies/CreateProduct" }
+      responses:
+        "201":
+          description: Product created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/products/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getAdminProduct
+      tags: [Administration, Catalogue]
+      summary: Get active or archived product detail
+      x-required-permissions: [billing:admin]
+      responses:
+        "200":
+          description: Product detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateAdminProduct
+      tags: [Administration, Catalogue]
+      summary: Update, archive, or reactivate a product
+      x-required-permissions: [billing:admin]
+      requestBody: { $ref: "#/components/requestBodies/UpdateProduct" }
+      responses:
+        "200":
+          description: Product updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/products/{id}/plans:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listAdminProductPlans
+      tags: [Administration, Catalogue]
+      summary: List active and inactive plans for a product
+      x-required-permissions: [billing:admin]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [all, active, inactive], default: all }
+        - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Offset" }
+      responses:
+        "200":
+          description: Product plans.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Plan" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createAdminProductPlan
+      tags: [Administration, Catalogue]
+      summary: Create a plan for a product
+      x-required-permissions: [billing:admin]
+      requestBody: { $ref: "#/components/requestBodies/CreateNestedPlan" }
+      responses:
+        "201":
+          description: Plan created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/plans/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getAdminPlan
+      tags: [Administration, Catalogue]
+      summary: Get active or inactive plan detail
+      x-required-permissions: [billing:admin]
+      responses:
+        "200":
+          description: Plan detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateAdminPlan
+      tags: [Administration, Catalogue]
+      summary: Update, archive, or reactivate a plan
+      x-required-permissions: [billing:admin]
+      requestBody: { $ref: "#/components/requestBodies/UpdateAdminPlan" }
+      responses:
+        "200":
+          description: Plan updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Plan" }
         default: { $ref: "#/components/responses/Error" }
   /v1/credit-packs:
     post:
@@ -922,6 +1059,10 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
     ProductFilter:
       name: product
       in: query
@@ -1080,8 +1221,22 @@ components:
             additionalProperties: false
             required: [slug, name]
             properties:
-              slug: { type: string, minLength: 1 }
-              name: { type: string, minLength: 1 }
+              slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+              name: { type: string, minLength: 1, maxLength: 120 }
+              description: { type: string, maxLength: 2000 }
+    UpdateProduct:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [version]
+            properties:
+              name: { type: string, minLength: 1, maxLength: 120 }
+              description: { type: string, maxLength: 2000 }
+              active: { type: boolean }
+              version: { type: integer, format: int64, minimum: 1 }
     CreatePlan:
       required: true
       content:
@@ -1092,9 +1247,26 @@ components:
             required: [product_id, slug, name]
             properties:
               product_id: { $ref: "#/components/schemas/UUID" }
-              slug: { type: string, minLength: 1 }
-              name: { type: string, minLength: 1 }
-              currency: { type: string, default: INR }
+              slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+              name: { type: string, minLength: 1, maxLength: 120 }
+              currency: { type: string, pattern: "^[A-Z]{3}$", default: INR }
+              billing_interval: { type: string, enum: [monthly, annual], default: monthly }
+              price_minor: { type: integer, format: int64, minimum: 0 }
+              included_credits: { type: integer, format: int64, minimum: 0 }
+              entitlements: { type: object, additionalProperties: true }
+              active: { type: boolean, default: true }
+    CreateNestedPlan:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [slug, name]
+            properties:
+              slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+              name: { type: string, minLength: 1, maxLength: 120 }
+              currency: { type: string, pattern: "^[A-Z]{3}$", default: INR }
               billing_interval: { type: string, enum: [monthly, annual], default: monthly }
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
@@ -1108,11 +1280,31 @@ components:
             type: object
             additionalProperties: false
             properties:
-              name: { type: string }
+              name: { type: string, minLength: 1, maxLength: 120 }
               price_minor: { type: integer, format: int64, minimum: 0 }
+              currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
+              billing_interval: { type: string, enum: [monthly, annual] }
               active: { type: boolean }
+              version: { type: integer, format: int64, minimum: 1 }
+    UpdateAdminPlan:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [version]
+            properties:
+              name: { type: string, minLength: 1, maxLength: 120 }
+              price_minor: { type: integer, format: int64, minimum: 0 }
+              currency: { type: string, pattern: "^[A-Z]{3}$" }
+              included_credits: { type: integer, format: int64, minimum: 0 }
+              entitlements: { type: object, additionalProperties: true }
+              billing_interval: { type: string, enum: [monthly, annual] }
+              active: { type: boolean }
+              version: { type: integer, format: int64, minimum: 1 }
     CreateCreditPack:
       required: true
       content:
@@ -1339,17 +1531,22 @@ components:
         expiresAt: { type: string, format: date-time }
     Product:
       type: object
-      required: [id, slug, name]
+      required: [id, slug, name, description, active, version, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         slug: { type: string }
         name: { type: string }
+        description: { type: string }
+        active: { type: boolean }
+        version: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Plan:
       type: object
-      required: [id, slug, name, price_minor, currency, included_credits, entitlements, billing_interval, product]
+      required: [id, product_id, slug, name, price_minor, currency, included_credits, entitlements, billing_interval, product, active, version, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
+        product_id: { $ref: "#/components/schemas/UUID" }
         slug: { type: string }
         name: { type: string }
         price_minor: { type: integer, format: int64, minimum: 0 }
@@ -1358,6 +1555,10 @@ components:
         entitlements: { type: object, additionalProperties: true }
         billing_interval: { type: string, enum: [monthly, annual] }
         product: { type: string }
+        active: { type: boolean }
+        version: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Subscription:
       type: object
       required: [id, status]

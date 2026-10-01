@@ -261,7 +261,7 @@ func TestWRK012CommittedFinancialJobRemainsRecoverableBeforeAck(t *testing.T) {
 func TestFND012MigrationVersionTableIsPresentAndReadable(t *testing.T) {
 	ctx, pool, _, _ := reviewWallet(t, 0)
 	var version int64
-	require.NoError(t, pool.QueryRow(ctx, `SELECT max(version_id) FROM goose_db_version WHERE is_applied`).Scan(&version))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT max(version_id) FROM public.goose_db_version WHERE is_applied`).Scan(&version))
 	require.GreaterOrEqual(t, version, int64(3))
 }
 

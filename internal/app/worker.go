@@ -169,8 +169,8 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 			var periodEnd time.Time
 			var graceEnd *time.Time
 			var cancel bool
-			if err := tx.QueryRow(ctx, `SELECT account_id,product_id,plan_id,status,price_minor,p.included_credits,billing_interval,current_period_end,grace_period_end,cancel_at_period_end
-				FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.id=$1 FOR UPDATE OF s`, id).
+			if err := tx.QueryRow(ctx, `SELECT account_id,product_id,plan_id,status,price_minor,included_credits,billing_interval,current_period_end,grace_period_end,cancel_at_period_end
+				FROM subscriptions WHERE id=$1 FOR UPDATE`, id).
 				Scan(&accountID, &productID, &planID, &status, &price, &credits, &interval, &periodEnd, &graceEnd, &cancel); err != nil {
 				return err
 			}
