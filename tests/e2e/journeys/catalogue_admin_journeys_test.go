@@ -56,7 +56,7 @@ func TestJOURNEYPRD001Through004CatalogueLifecycleAndSubscriptionSnapshots(t *te
 	}, first)).ID
 
 	h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/plans/"+plan.ID, map[string]any{
-		"price_minor": 2500, "included_credits": 250,
+		"price_minor": 2500, "billing_model": "paid", "included_credits": 250,
 		"entitlements": map[string]any{"reports": false, "members": 10}, "version": plan.Version,
 	}, admin)
 
@@ -81,16 +81,10 @@ func TestJOURNEYPRD001Through004CatalogueLifecycleAndSubscriptionSnapshots(t *te
 
 	secondOrg := testkit.Unique("journey-second")
 	second := h.IssueToken(t, secondOrg, product.Slug, []string{"billing:read", "billing:write"}, nil)
-	secondAccount := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
 		"name": "Second Customer", "application": product.Slug, "organization_id": secondOrg,
-	}, second)).ID
-	secondSubscription := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{
-		"account_id": secondAccount, "plan_id": plan.ID, "payment_status": "verified",
-	}, second)).ID
+	}, second)
+	secondSubscription := testkit.ActivatePaidSubscription(t, h, product.Slug, plan.Slug, second)
 	if err := pool.QueryRow(context.Background(), `SELECT price_minor,included_credits,COALESCE((entitlements->>'reports')::boolean,false)
 		FROM billmesh.subscriptions WHERE id=$1`, secondSubscription).Scan(&price, &credits, &reports); err != nil {
 		t.Fatal(err)

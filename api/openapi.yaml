@@ -18,6 +18,7 @@ tags:
   - name: Accounts
   - name: Catalogue
   - name: Subscriptions
+  - name: Billing state
   - name: Entitlements
   - name: Wallets
   - name: Reservations
@@ -333,6 +334,25 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Product" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/catalog:
+    get:
+      operationId: getCatalogue
+      tags: [Catalogue]
+      summary: Get the authoritative customer catalogue
+      x-required-permissions: [billing:read]
+      parameters:
+        - { $ref: "#/components/parameters/ProductFilter" }
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Versioned product catalogue.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Catalogue" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/plans:
     get:
       operationId: listPlans
@@ -508,6 +528,22 @@ paths:
               schema: { $ref: "#/components/schemas/Plan" }
         default: { $ref: "#/components/responses/Error" }
   /v1/credit-packs:
+    get:
+      operationId: listCreditPacks
+      tags: [Catalogue]
+      summary: List active credit packs
+      x-required-permissions: [billing:read]
+      parameters:
+        - { $ref: "#/components/parameters/ProductFilter" }
+      responses:
+        "200":
+          description: Active credit packs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CreditPack" }
+        default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createCreditPack
       tags: [Catalogue]
@@ -545,6 +581,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Subscription" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/subscriptions/current/cancellation:
+    post:
+      operationId: requestCurrentSubscriptionCancellation
+      tags: [Subscriptions]
+      summary: Cancel the current subscription immediately or at period end
+      x-required-permissions: [billing:write]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { $ref: "#/components/requestBodies/Cancellation" }
+      responses:
+        "200":
+          description: Cancellation result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CancellationResult" }
         default: { $ref: "#/components/responses/Error" }
   /v1/subscriptions/{id}/change-plan:
     parameters:
@@ -606,6 +658,78 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Renewal" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/subscription-transitions:
+    post:
+      operationId: createSubscriptionTransition
+      tags: [Subscriptions]
+      summary: Select a plan and let Billmesh determine the required transition
+      x-required-permissions: [billing:write]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+        - { $ref: "#/components/parameters/IfMatch" }
+      requestBody: { $ref: "#/components/requestBodies/CreateSubscriptionTransition" }
+      responses:
+        "201":
+          description: Transition created.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionTransition" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/subscription-transitions/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getSubscriptionTransition
+      tags: [Subscriptions]
+      summary: Get a subscription transition
+      x-required-permissions: [billing:read]
+      responses:
+        "200":
+          description: Transition state.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionTransition" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/subscription-transitions/{id}/cancel:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: cancelSubscriptionTransition
+      tags: [Subscriptions]
+      summary: Cancel a pending subscription transition
+      x-required-permissions: [billing:write]
+      responses:
+        "200":
+          description: Cancelled transition.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionTransition" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/billing-snapshot:
+    get:
+      operationId: getBillingSnapshot
+      tags: [Billing state]
+      summary: Get the authoritative revisioned billing projection
+      x-required-permissions: [billing:read]
+      parameters:
+        - { $ref: "#/components/parameters/ProductFilter" }
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Authoritative billing snapshot.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingSnapshot" }
+        "304": { $ref: "#/components/responses/NotModified" }
         default: { $ref: "#/components/responses/Error" }
   /v1/entitlements:
     get:
@@ -953,6 +1077,42 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Webhook" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/webhooks/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    patch:
+      operationId: updateWebhook
+      tags: [Webhooks]
+      summary: Update or disable a webhook endpoint
+      x-required-permissions: [billing:write]
+      requestBody: { $ref: "#/components/requestBodies/UpdateWebhook" }
+      responses:
+        "200":
+          description: Updated webhook endpoint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteWebhook
+      tags: [Webhooks]
+      summary: Disable a webhook endpoint
+      x-required-permissions: [billing:write]
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/webhooks/{id}/rotate-secret:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: rotateWebhookSecret
+      tags: [Webhooks]
+      summary: Rotate a webhook signing secret
+      x-required-permissions: [billing:write]
+      requestBody: { $ref: "#/components/requestBodies/RotateWebhookSecret" }
+      responses:
+        "204": { $ref: "#/components/responses/NoContent" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/admin/adjustments:
     post:
       operationId: createAdminAdjustment
@@ -1068,10 +1228,30 @@ components:
       in: query
       schema: { type: string }
       description: Product slug. Defaults to the caller's application where applicable.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 200 }
+      description: Client-generated key scoped to the authenticated account and product.
+    IfMatch:
+      name: If-Match
+      in: header
+      schema: { type: string }
+      description: Optional billing snapshot ETag used for optimistic concurrency.
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      schema: { type: string }
+      description: Previously observed resource ETag.
     CSRFToken:
       name: X-CSRF-Token
       in: header
       required: true
+      schema: { type: string }
+  headers:
+    ETag:
+      description: Revision-backed entity tag.
       schema: { type: string }
   responses:
     Health:
@@ -1104,6 +1284,8 @@ components:
           schema: { type: string, format: uri-reference }
     NoContent:
       description: Operation completed successfully with no response body.
+    NotModified:
+      description: The supplied entity tag is current.
     Account:
       description: Billing account.
       content:
@@ -1251,13 +1433,20 @@ components:
               product_id: { $ref: "#/components/schemas/UUID" }
               slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
               name: { type: string, minLength: 1, maxLength: 120 }
+              description: { type: string, maxLength: 2000 }
               currency: { type: string, pattern: "^[A-Z]{3}$", default: INR }
               billing_interval: { type: string, enum: [monthly, annual], default: monthly }
+              billing_model: { type: string, enum: [free, paid] }
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               active: { type: boolean, default: true }
+              selectable: { type: boolean, default: true }
+              default_for_product: { type: boolean, default: false }
+              checkout_enabled: { type: boolean, default: true }
+              effective_from: { type: string, format: date-time }
+              effective_to: { type: [string, "null"], format: date-time }
     CreateNestedPlan:
       required: true
       content:
@@ -1269,13 +1458,20 @@ components:
             properties:
               slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
               name: { type: string, minLength: 1, maxLength: 120 }
+              description: { type: string, maxLength: 2000 }
               currency: { type: string, pattern: "^[A-Z]{3}$", default: INR }
               billing_interval: { type: string, enum: [monthly, annual], default: monthly }
+              billing_model: { type: string, enum: [free, paid] }
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               active: { type: boolean, default: true }
+              selectable: { type: boolean, default: true }
+              default_for_product: { type: boolean, default: false }
+              checkout_enabled: { type: boolean, default: true }
+              effective_from: { type: string, format: date-time }
+              effective_to: { type: [string, "null"], format: date-time }
     UpdatePlan:
       required: true
       content:
@@ -1285,13 +1481,20 @@ components:
             additionalProperties: false
             properties:
               name: { type: string, minLength: 1, maxLength: 120 }
+              description: { type: string, maxLength: 2000 }
               price_minor: { type: integer, format: int64, minimum: 0 }
               currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               billing_interval: { type: string, enum: [monthly, annual] }
+              billing_model: { type: string, enum: [free, paid] }
               active: { type: boolean }
+              selectable: { type: boolean }
+              default_for_product: { type: boolean }
+              checkout_enabled: { type: boolean }
+              effective_from: { type: string, format: date-time }
+              effective_to: { type: [string, "null"], format: date-time }
               version: { type: integer, format: int64, minimum: 1 }
     UpdateAdminPlan:
       required: true
@@ -1303,13 +1506,20 @@ components:
             required: [version]
             properties:
               name: { type: string, minLength: 1, maxLength: 120 }
+              description: { type: string, maxLength: 2000 }
               price_minor: { type: integer, format: int64, minimum: 0 }
               currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               billing_interval: { type: string, enum: [monthly, annual] }
+              billing_model: { type: string, enum: [free, paid] }
               active: { type: boolean }
+              selectable: { type: boolean }
+              default_for_product: { type: boolean }
+              checkout_enabled: { type: boolean }
+              effective_from: { type: string, format: date-time }
+              effective_to: { type: [string, "null"], format: date-time }
               version: { type: integer, format: int64, minimum: 1 }
     CreateCreditPack:
       required: true
@@ -1377,6 +1587,26 @@ components:
             properties:
               operation_ref: { type: string, description: Idempotency reference required for paid renewals. }
               payment_status: { type: string, enum: [verified] }
+    CreateSubscriptionTransition:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [plan_id]
+            properties:
+              plan_id: { $ref: "#/components/schemas/UUID" }
+              effective: { type: string, enum: [immediate, period_end] }
+    Cancellation:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              effective: { type: string, enum: [immediate, period_end], default: period_end }
     CreateWallet:
       required: true
       content:
@@ -1457,9 +1687,12 @@ components:
           schema:
             type: object
             additionalProperties: false
-            required: [credit_pack]
+            anyOf:
+              - required: [credit_pack_id]
+              - required: [credit_pack]
             properties:
               account_id: { $ref: "#/components/schemas/UUID" }
+              credit_pack_id: { $ref: "#/components/schemas/UUID" }
               credit_pack: { type: string, minLength: 1 }
               price_minor: { type: integer, format: int64, minimum: 0, description: Optional assertion; the server controls the price. }
               idempotency_key: { type: string, format: uuid, description: Existing internal payment ID to return. }
@@ -1475,6 +1708,38 @@ components:
               application: { type: string, minLength: 1 }
               target_url: { type: string, format: uri }
               secret: { type: string, minLength: 1, writeOnly: true }
+              previous_secret: { type: string, minLength: 1, writeOnly: true, description: Optional former secret accepted during a 24-hour migration window. }
+              api_version: { type: string, enum: ["1", "2"], default: "1" }
+              event_types:
+                type: array
+                uniqueItems: true
+                items: { type: string }
+    UpdateWebhook:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              target_url: { type: string, format: uri }
+              active: { type: boolean }
+              api_version: { type: string, enum: ["1", "2"] }
+              event_types:
+                type: array
+                uniqueItems: true
+                items: { type: string }
+    RotateWebhookSecret:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [secret]
+            properties:
+              secret: { type: string, minLength: 16, writeOnly: true }
+              grace_seconds: { type: integer, format: int64, minimum: 0, maximum: 604800, default: 86400 }
     AdminAdjustment:
       required: true
       content:
@@ -1592,22 +1857,77 @@ components:
         updated_at: { type: string, format: date-time }
     Plan:
       type: object
-      required: [id, product_id, slug, name, price_minor, currency, included_credits, entitlements, billing_interval, product, active, version, created_at, updated_at]
+      required: [id, product_id, slug, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, product, selectable, default_for_product, checkout_enabled, effective_from, active, version, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         product_id: { $ref: "#/components/schemas/UUID" }
         slug: { type: string }
         name: { type: string }
+        description: { type: string }
         price_minor: { type: integer, format: int64, minimum: 0 }
         currency: { type: string }
         included_credits: { type: integer, format: int64, minimum: 0 }
         entitlements: { type: object, additionalProperties: true }
         billing_interval: { type: string, enum: [monthly, annual] }
+        billing_model: { type: string, enum: [free, paid] }
         product: { type: string }
+        selectable: { type: boolean }
+        default_for_product: { type: boolean }
+        checkout_enabled: { type: boolean }
+        effective_from: { type: string, format: date-time }
+        effective_to: { type: [string, "null"], format: date-time }
         active: { type: boolean }
         version: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    CreditPack:
+      type: object
+      required: [id, name, credits, price_minor, currency]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        name: { type: string }
+        credits: { type: integer, format: int64, minimum: 1 }
+        price_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string }
+        validity_days: { type: [integer, "null"], minimum: 1 }
+    CataloguePlan:
+      type: object
+      required: [id, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, selectable, default_for_product, checkout_enabled, effective_from, version]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        name: { type: string }
+        description: { type: string }
+        price_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string }
+        included_credits: { type: integer, format: int64, minimum: 0 }
+        entitlements: { type: object, additionalProperties: true }
+        billing_interval: { type: string, enum: [monthly, annual] }
+        billing_model: { type: string, enum: [free, paid] }
+        selectable: { type: boolean, const: true }
+        default_for_product: { type: boolean }
+        checkout_enabled: { type: boolean }
+        effective_from: { type: string, format: date-time }
+        effective_to: { type: [string, "null"], format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
+    Catalogue:
+      type: object
+      required: [product, revision, plans, credit_packs]
+      properties:
+        product:
+          type: object
+          required: [id, slug, name, description]
+          properties:
+            id: { $ref: "#/components/schemas/UUID" }
+            slug: { type: string }
+            name: { type: string }
+            description: { type: string }
+        revision: { type: integer, format: int64, minimum: 1 }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/CataloguePlan" }
+        credit_packs:
+          type: array
+          items: { $ref: "#/components/schemas/CreditPack" }
     Subscription:
       type: object
       required: [id, status]
@@ -1618,6 +1938,67 @@ components:
         current_period_start: { type: [string, "null"], format: date-time }
         current_period_end: { type: [string, "null"], format: date-time }
         cancel_at_period_end: { type: boolean }
+    SubscriptionTransition:
+      type: object
+      required: [id, plan_id, plan_name, operation, effective, status, revision, snapshot_url]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        subscription_id: { type: [string, "null"], format: uuid }
+        plan_id: { $ref: "#/components/schemas/UUID" }
+        plan_name: { type: string }
+        operation: { type: string, enum: [activate, upgrade, downgrade, change, reactivate, renew] }
+        effective: { type: string, enum: [immediate, period_end] }
+        effective_at: { type: [string, "null"], format: date-time }
+        status: { type: string, enum: [requires_payment, processing, completed, failed, expired, cancelled] }
+        failure_code: { type: [string, "null"] }
+        payment_id: { type: [string, "null"], format: uuid }
+        revision: { type: integer, format: int64, minimum: 1 }
+        snapshot_url: { type: string, format: uri-reference }
+        checkout:
+          type: object
+          required: [provider, order_id, amount_minor, currency]
+          properties:
+            provider: { type: string, const: razorpay }
+            order_id: { type: [string, "null"] }
+            amount_minor: { type: integer, format: int64, minimum: 0 }
+            currency: { type: string }
+            expires_at: { type: [string, "null"], format: date-time }
+    CancellationResult:
+      type: object
+      required: [id, status, cancel_at_period_end, revision, duplicate]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        status: { type: string }
+        cancel_at_period_end: { type: boolean }
+        effective_at: { type: [string, "null"], format: date-time }
+        revision: { type: integer, format: int64, minimum: 1 }
+        duplicate: { type: boolean }
+    BillingSnapshot:
+      type: object
+      required: [revision, generated_at, effective_at, verified_at, expires_at, account, entitlements]
+      properties:
+        revision: { type: integer, format: int64, minimum: 1 }
+        generated_at: { type: string, format: date-time }
+        effective_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        account:
+          type: object
+          required: [id, name]
+          properties:
+            id: { $ref: "#/components/schemas/UUID" }
+            customer_id: { type: [string, "null"], format: uuid }
+            name: { type: string }
+        subscription:
+          type: [object, "null"]
+          additionalProperties: true
+        entitlements: { type: object, additionalProperties: true }
+        limits:
+          type: [object, "null"]
+          additionalProperties: true
+        pending_transition:
+          type: [object, "null"]
+          additionalProperties: true
     Renewal:
       type: object
       required: [id, status, current_period_end, duplicate]
@@ -1774,12 +2155,16 @@ components:
         created_at: { type: string, format: date-time }
     Webhook:
       type: object
-      required: [id, application, target_url]
+      required: [id, application, target_url, active, api_version, event_types]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         application: { type: string }
         target_url: { type: string, format: uri }
         active: { type: boolean }
+        api_version: { type: string, enum: ["1", "2"] }
+        event_types:
+          type: array
+          items: { type: string }
         created_at: { type: string, format: date-time }
     AuditEvent:
       type: object

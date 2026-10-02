@@ -16,7 +16,7 @@ func TestJourney1DaybookWithoutTaskmeshPremium(t *testing.T) {
 	org := testkit.Unique("journey-1")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "billing:link", "credits:reserve"}, nil)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey One", "external_ref": testkit.Unique("j1"), "application": "daybook", "organization_id": org}, token)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"product": "daybook", "plan": "daybook-paid", "payment_status": "verified"}, token)
+	testkit.ActivatePaidSubscription(t, h, "daybook", "daybook-paid", token)
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/account-links", map[string]any{"application": "taskmesh", "organization_id": testkit.Unique("journey-1-taskmesh")}, token)
 }
 
@@ -98,7 +98,7 @@ func TestJourney3IndependentTaskmeshSubscription(t *testing.T) {
 	}](t, accountRaw).ID
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "daybook", "organization_id": testkit.Unique("journey-3-daybook")}, token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "daybook", "plan": "daybook-free"}, token)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "taskmesh", "plan": "professional", "payment_status": "verified"}, token)
+	testkit.ActivatePaidSubscription(t, h, "taskmesh", "professional", token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"context": "standalone", "credits": 10}, token)
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/subscriptions/current/cancel", map[string]any{"immediate": true}, token)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"context": "daybook", "credits": 10}, token)

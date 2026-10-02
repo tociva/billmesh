@@ -27,7 +27,7 @@ func Database(t *testing.T) *pgxpool.Pool {
 
 func Truncate(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(context.Background(), `TRUNCATE audit_log,invoice_lines,invoices,webhook_deliveries,outbox_events,provider_events,payments,usage_events,credit_ledger,reservation_allocations,reservations,credit_grants,wallets,subscriptions,plans,products,account_links,billing_accounts CASCADE`)
+	_, err := pool.Exec(context.Background(), `TRUNCATE audit_log,invoice_lines,invoices,webhook_deliveries,outbox_events,provider_events,payments,usage_events,credit_ledger,reservation_allocations,reservations,credit_grants,wallets,subscription_transitions,subscriptions,billing_state_revisions,catalogue_revisions,plans,products,account_links,billing_accounts,billing_customers CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate database: %v", err)
 	}

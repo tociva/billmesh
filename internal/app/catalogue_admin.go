@@ -35,11 +35,18 @@ type planRecord struct {
 	Product         string         `json:"product"`
 	Slug            string         `json:"slug"`
 	Name            string         `json:"name"`
+	Description     string         `json:"description"`
 	PriceMinor      int64          `json:"price_minor"`
 	Currency        string         `json:"currency"`
 	IncludedCredits int64          `json:"included_credits"`
 	Entitlements    map[string]any `json:"entitlements"`
 	BillingInterval string         `json:"billing_interval"`
+	BillingModel    string         `json:"billing_model"`
+	Selectable      bool           `json:"selectable"`
+	Default         bool           `json:"default_for_product"`
+	CheckoutEnabled bool           `json:"checkout_enabled"`
+	EffectiveFrom   time.Time      `json:"effective_from"`
+	EffectiveTo     *time.Time     `json:"effective_to"`
 	Active          bool           `json:"active"`
 	Version         int64          `json:"version"`
 	CreatedAt       time.Time      `json:"created_at"`
@@ -76,10 +83,13 @@ func productState(value productRecord) map[string]any {
 
 func planState(value planRecord) map[string]any {
 	return map[string]any{
-		"id": value.ID, "product_id": value.ProductID, "slug": value.Slug, "name": value.Name,
+		"id": value.ID, "product_id": value.ProductID, "slug": value.Slug, "name": value.Name, "description": value.Description,
 		"price_minor": value.PriceMinor, "currency": value.Currency,
 		"included_credits": value.IncludedCredits, "entitlements": value.Entitlements,
-		"billing_interval": value.BillingInterval, "active": value.Active, "version": value.Version,
+		"billing_interval": value.BillingInterval, "billing_model": value.BillingModel,
+		"selectable": value.Selectable, "default_for_product": value.Default,
+		"checkout_enabled": value.CheckoutEnabled, "effective_from": value.EffectiveFrom,
+		"effective_to": value.EffectiveTo, "active": value.Active, "version": value.Version,
 	}
 }
 
@@ -398,8 +408,8 @@ func (a *API) listAdminPlans(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.price_minor,p.currency,p.included_credits,
-		p.entitlements,p.billing_interval,p.active,p.version,p.created_at,p.updated_at
+	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.description,p.price_minor,p.currency,p.included_credits,
+		p.entitlements,p.billing_interval,p.billing_model,p.selectable,p.default_for_product,p.checkout_enabled,p.effective_from,p.effective_to,p.active,p.version,p.created_at,p.updated_at
 		FROM plans p JOIN products pr ON pr.id=p.product_id
 		WHERE p.product_id=$1 AND ($2='all' OR ($2='active' AND p.active) OR ($2 IN ('archived','inactive') AND NOT p.active))
 		AND ($3='' OR p.slug ILIKE '%' || $3 || '%' OR p.name ILIKE '%' || $3 || '%' OR p.currency ILIKE '%' || $3 || '%')
@@ -429,8 +439,8 @@ func (a *API) getAdminPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid plan id")
 		return
 	}
-	row := a.pool.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.price_minor,p.currency,p.included_credits,
-		p.entitlements,p.billing_interval,p.active,p.version,p.created_at,p.updated_at
+	row := a.pool.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.description,p.price_minor,p.currency,p.included_credits,
+		p.entitlements,p.billing_interval,p.billing_model,p.selectable,p.default_for_product,p.checkout_enabled,p.effective_from,p.effective_to,p.active,p.version,p.created_at,p.updated_at
 		FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.id=$1`, id)
 	item, err := scanPlan(row)
 	if err != nil {
@@ -446,8 +456,9 @@ type rowScanner interface {
 
 func scanPlan(row rowScanner) (planRecord, error) {
 	var item planRecord
-	err := row.Scan(&item.ID, &item.ProductID, &item.Product, &item.Slug, &item.Name, &item.PriceMinor, &item.Currency,
-		&item.IncludedCredits, &item.Entitlements, &item.BillingInterval, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.ProductID, &item.Product, &item.Slug, &item.Name, &item.Description, &item.PriceMinor, &item.Currency,
+		&item.IncludedCredits, &item.Entitlements, &item.BillingInterval, &item.BillingModel, &item.Selectable, &item.Default,
+		&item.CheckoutEnabled, &item.EffectiveFrom, &item.EffectiveTo, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 

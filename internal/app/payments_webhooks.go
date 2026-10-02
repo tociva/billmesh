@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -23,6 +22,7 @@ var errConflictingProviderEvent = errors.New("conflicting provider event")
 func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		AccountID      uuid.UUID `json:"account_id"`
+		CreditPackID   uuid.UUID `json:"credit_pack_id"`
 		CreditPack     string    `json:"credit_pack"`
 		PriceMinor     *int64    `json:"price_minor"`
 		IdempotencyKey string    `json:"idempotency_key"`
@@ -60,11 +60,22 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	var packID, productID uuid.UUID
 	var credits, price int64
-	var currency string
-	if err := a.pool.QueryRow(r.Context(), `SELECT id,product_id,credits,price_minor,currency FROM credit_packs WHERE slug=$1 AND active`, in.CreditPack).Scan(&packID, &productID, &credits, &price, &currency); err != nil {
+	var currency, packSlug string
+	var err error
+	if in.CreditPackID != uuid.Nil {
+		err = a.pool.QueryRow(r.Context(), `SELECT id,product_id,slug,credits,price_minor,currency FROM credit_packs WHERE id=$1 AND active`, in.CreditPackID).
+			Scan(&packID, &productID, &packSlug, &credits, &price, &currency)
+	} else {
+		claims, _ := auth.FromContext(r.Context())
+		err = a.pool.QueryRow(r.Context(), `SELECT cp.id,cp.product_id,cp.slug,cp.credits,cp.price_minor,cp.currency FROM credit_packs cp
+			JOIN products p ON p.id=cp.product_id WHERE cp.slug=$1 AND cp.active AND p.slug=$2`, in.CreditPack, claims.App).
+			Scan(&packID, &productID, &packSlug, &credits, &price, &currency)
+	}
+	if err != nil {
 		writeError(w, 400, "unknown credit pack")
 		return
 	}
+	in.CreditPack = packSlug
 	if in.PriceMinor != nil && *in.PriceMinor != price {
 		writeError(w, 400, "price is controlled by the server")
 		return
@@ -73,33 +84,14 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "product not accessible")
 		return
 	}
-	providerOrder := map[string]any{"id": "order_" + uuid.NewString(), "status": "created", "amount": price, "currency": currency}
-	if a.providerBaseURL != "" {
-		raw, _ := json.Marshal(map[string]any{"amount": price, "currency": currency, "receipt": uuid.NewString()})
-		req, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, a.providerBaseURL+"/v1/orders", bytes.NewReader(raw))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := a.client.Do(req)
-		if err != nil {
-			writeError(w, 503, "payment provider unavailable")
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			writeError(w, 503, "payment provider temporarily unavailable")
-			return
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			writeError(w, 502, "payment provider rejected order")
-			return
-		}
-		if err = json.NewDecoder(resp.Body).Decode(&providerOrder); err != nil {
-			writeError(w, 502, "invalid provider response")
-			return
-		}
+	providerOrder, err := a.createProviderOrder(r.Context(), price, currency, uuid.NewString())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "payment provider unavailable")
+		return
 	}
 	orderID, _ := providerOrder["id"].(string)
 	var id uuid.UUID
-	err := a.pool.QueryRow(r.Context(), `INSERT INTO payments(account_id,provider,provider_order_id,status,amount_minor,currency,credit_pack_id,credits,operation_ref) VALUES($1,'razorpay',$2,'created',$3,$4,$5,$6,$7) RETURNING id`, in.AccountID, orderID, price, currency, packID, credits, "purchase:"+orderID).Scan(&id)
+	err = a.pool.QueryRow(r.Context(), `INSERT INTO payments(account_id,provider,provider_order_id,status,amount_minor,currency,credit_pack_id,credits,operation_ref) VALUES($1,'razorpay',$2,'created',$3,$4,$5,$6,$7) RETURNING id`, in.AccountID, orderID, price, currency, packID, credits, "purchase:"+orderID).Scan(&id)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -238,6 +230,17 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func refundPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
+	var purpose string
+	if err := tx.QueryRow(ctx, `SELECT purpose FROM payments WHERE provider='razorpay' AND provider_payment_id=$1`, providerPaymentID).Scan(&purpose); err != nil {
+		return err
+	}
+	if purpose == "subscription" {
+		return refundSubscriptionPayment(ctx, tx, providerPaymentID, providerRefundID, refundAmount)
+	}
+	return refundCreditPackPayment(ctx, tx, providerPaymentID, providerRefundID, refundAmount)
+}
+
+func refundCreditPackPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
 	if providerPaymentID == "" || providerRefundID == "" || refundAmount <= 0 {
 		return errors.New("refund event is missing payment, refund, or amount")
 	}
@@ -310,6 +313,17 @@ func refundPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRe
 	return appEvent(ctx, tx, "wallet", walletID, "payment.refunded", map[string]any{"payment_id": paymentID, "refund_id": refundID, "amount_minor": refundAmount, "credits_reversed": creditsToReverse})
 }
 func capturePayment(ctx context.Context, tx pgx.Tx, orderID, paymentID string) error {
+	var purpose string
+	if err := tx.QueryRow(ctx, `SELECT purpose FROM payments WHERE provider='razorpay' AND provider_order_id=$1`, orderID).Scan(&purpose); err != nil {
+		return err
+	}
+	if purpose == "subscription" {
+		return captureSubscriptionPayment(ctx, tx, orderID, paymentID)
+	}
+	return captureCreditPackPayment(ctx, tx, orderID, paymentID)
+}
+
+func captureCreditPackPayment(ctx context.Context, tx pgx.Tx, orderID, paymentID string) error {
 	var payment, account, pack, product uuid.UUID
 	var credits, amount int64
 	var currency string
@@ -357,6 +371,133 @@ func capturePayment(ctx context.Context, tx pgx.Tx, orderID, paymentID string) e
 	return appEvent(ctx, tx, "wallet", wallet, "payment.succeeded", map[string]any{"payment_id": payment, "credits": credits})
 }
 
+func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, orderID, providerPaymentID string) error {
+	var paymentID, accountID, transitionID uuid.UUID
+	var currentStatus, currency string
+	var existingPaymentID *string
+	var amount int64
+	if err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.transition_id,p.status,p.provider_payment_id,p.amount_minor,p.currency
+		FROM payments p WHERE p.provider='razorpay' AND p.provider_order_id=$1 AND p.purpose='subscription' FOR UPDATE`, orderID).
+		Scan(&paymentID, &accountID, &transitionID, &currentStatus, &existingPaymentID, &amount, &currency); err != nil {
+		return err
+	}
+	if currentStatus == "captured" || currentStatus == "refunded" {
+		if existingPaymentID == nil || *existingPaymentID != providerPaymentID {
+			return errConflictingProviderEvent
+		}
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE payments SET status='captured',provider_payment_id=$2,updated_at=now() WHERE id=$1`, paymentID, providerPaymentID); err != nil {
+		return err
+	}
+	var transitionStatus string
+	var checkoutExpires *time.Time
+	if err := tx.QueryRow(ctx, `SELECT status,checkout_expires_at FROM subscription_transitions WHERE id=$1 FOR UPDATE`, transitionID).
+		Scan(&transitionStatus, &checkoutExpires); err != nil {
+		return err
+	}
+	if transitionStatus != "requires_payment" && transitionStatus != "processing" {
+		return accountEvent(ctx, tx, accountID, "payment", paymentID, "payment.late_capture",
+			map[string]any{"payment_id": paymentID, "transition_id": transitionID, "reason": "transition_" + transitionStatus})
+	}
+	if checkoutExpires != nil && checkoutExpires.Before(time.Now().UTC()) {
+		if _, err := tx.Exec(ctx, `UPDATE subscription_transitions SET status='expired',failure_code='late_capture',updated_at=now() WHERE id=$1`, transitionID); err != nil {
+			return err
+		}
+		return accountEvent(ctx, tx, accountID, "payment", paymentID, "payment.late_capture",
+			map[string]any{"payment_id": paymentID, "transition_id": transitionID, "reason": "checkout_expired"})
+	}
+	if err := applySubscriptionTransition(ctx, tx, transitionID, providerPaymentID); err != nil {
+		return err
+	}
+	var subscriptionID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT subscription_id FROM subscription_transitions WHERE id=$1`, transitionID).Scan(&subscriptionID); err != nil {
+		return err
+	}
+	invoiceNumber := "INV-" + time.Now().UTC().Format("20060102") + "-" + paymentID.String()[:8]
+	operation := "payment:" + paymentID.String()
+	if _, err := tx.Exec(ctx, `INSERT INTO invoices(account_id,subscription_id,payment_id,billing_operation_ref,invoice_number,status,currency,
+		subtotal_minor,total_minor,finalized_at,paid_at) VALUES($1,$2,$3,$4,$5,'paid',$6,$7,$7,now(),now())
+		ON CONFLICT(billing_operation_ref) DO NOTHING`, accountID, subscriptionID, paymentID, operation, invoiceNumber, currency, amount); err != nil {
+		return err
+	}
+	return accountEvent(ctx, tx, accountID, "payment", paymentID, "payment.succeeded",
+		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "subscription_id": subscriptionID})
+}
+
+func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
+	if providerRefundID == "" || refundAmount <= 0 {
+		return errors.New("refund event is missing refund or amount")
+	}
+	var paymentID, accountID, transitionID, subscriptionID, productID uuid.UUID
+	var amount int64
+	var currency, status string
+	if err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.transition_id,t.subscription_id,t.product_id,p.amount_minor,p.currency,p.status
+		FROM payments p JOIN subscription_transitions t ON t.id=p.transition_id
+		WHERE p.provider='razorpay' AND p.provider_payment_id=$1 FOR UPDATE OF p,t`, providerPaymentID).
+		Scan(&paymentID, &accountID, &transitionID, &subscriptionID, &productID, &amount, &currency, &status); err != nil {
+		return err
+	}
+	if status != "captured" && status != "refunded" {
+		return errors.New("payment is not refundable")
+	}
+	var refunded int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount_minor),0) FROM refunds WHERE payment_id=$1`, paymentID).Scan(&refunded); err != nil {
+		return err
+	}
+	if refunded+refundAmount > amount {
+		return errors.New("refund exceeds captured amount")
+	}
+	var refundID uuid.UUID
+	if err := tx.QueryRow(ctx, `INSERT INTO refunds(payment_id,provider_refund_id,amount_minor,credits_reversed)
+		VALUES($1,$2,$3,0) ON CONFLICT(provider_refund_id) DO NOTHING RETURNING id`, paymentID, providerRefundID, refundAmount).Scan(&refundID); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	fullyRefunded := refunded+refundAmount == amount
+	if fullyRefunded {
+		var walletID, grantID uuid.UUID
+		var remaining int64
+		err := tx.QueryRow(ctx, `SELECT w.id,g.id,g.remaining FROM wallets w JOIN credit_grants g ON g.wallet_id=w.id
+			WHERE w.account_id=$1 AND w.product_id=$2 AND g.source='subscription' AND g.operation_ref LIKE $3
+			ORDER BY g.created_at DESC LIMIT 1 FOR UPDATE OF w,g`, accountID, productID, "subscription:"+subscriptionID.String()+":%").
+			Scan(&walletID, &grantID, &remaining)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil && remaining > 0 {
+			if _, err := tx.Exec(ctx, `UPDATE credit_grants SET remaining=0 WHERE id=$1`, grantID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE wallets SET available=available-$2 WHERE id=$1`, walletID, remaining); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE refunds SET credits_reversed=$2 WHERE id=$1`, refundID, remaining); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO credit_ledger(wallet_id,grant_id,operation_ref,kind,available_delta,reserved_delta)
+				VALUES($1,$2,$3,'refund',$4,0)`, walletID, grantID, "refund:"+providerRefundID, -remaining); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE subscriptions SET status='cancelled',cancelled_at=now(),cancel_at_period_end=false,
+			updated_at=now(),version=version+1 WHERE id=$1`, subscriptionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE payments SET status='refunded',updated_at=now() WHERE id=$1`, paymentID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO credit_notes(invoice_id,refund_id,credit_note_number,currency,amount_minor)
+		SELECT id,$2,$3,$4,$5 FROM invoices WHERE payment_id=$1 ON CONFLICT(refund_id) DO NOTHING`, paymentID, refundID,
+		"CN-"+time.Now().UTC().Format("20060102")+"-"+refundID.String()[:8], currency, refundAmount); err != nil {
+		return err
+	}
+	return accountEvent(ctx, tx, accountID, "subscription", subscriptionID, "payment.refunded",
+		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "refund_id": refundID, "amount_minor": refundAmount, "full": fullyRefunded})
+}
+
 func (a *API) listPayments(w http.ResponseWriter, r *http.Request) {
 	account, err := a.accountIDForClaims(r.Context())
 	if err != nil {
@@ -364,7 +505,11 @@ func (a *API) listPayments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	rows, err := a.pool.Query(r.Context(), `SELECT pay.id,pay.provider,pay.provider_order_id,pay.provider_payment_id,pay.status,pay.amount_minor,pay.currency,pay.created_at FROM payments pay JOIN credit_packs cp ON cp.id=pay.credit_pack_id JOIN products p ON p.id=cp.product_id WHERE pay.account_id=$1 AND (p.slug=$3 OR $4) ORDER BY pay.created_at DESC LIMIT $2`, account, parseLimit(r), claims.App, claims.Has("billing:link"))
+	rows, err := a.pool.Query(r.Context(), `SELECT pay.id,pay.provider,pay.provider_order_id,pay.provider_payment_id,pay.status,pay.amount_minor,pay.currency,pay.created_at
+		FROM payments pay LEFT JOIN credit_packs cp ON cp.id=pay.credit_pack_id
+		LEFT JOIN subscription_transitions st ON st.id=pay.transition_id
+		JOIN products p ON p.id=COALESCE(cp.product_id,st.product_id)
+		WHERE pay.account_id=$1 AND (p.slug=$3 OR $4) ORDER BY pay.created_at DESC LIMIT $2`, account, parseLimit(r), claims.App, claims.Has("billing:link"))
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -422,17 +567,32 @@ func (a *API) registerWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Application, TargetURL, Secret string `json:"-"`
+		Application    string   `json:"application"`
+		TargetURL      string   `json:"target_url"`
+		Secret         string   `json:"secret"`
+		PreviousSecret string   `json:"previous_secret"`
+		APIVersion     string   `json:"api_version"`
+		EventTypes     []string `json:"event_types"`
 	}
-	var raw map[string]string
-	if !decode(w, r, &raw) {
+	if !decode(w, r, &in) {
 		return
 	}
-	in.Application = raw["application"]
-	in.TargetURL = raw["target_url"]
-	in.Secret = raw["secret"]
 	if in.Application == "" || in.TargetURL == "" || in.Secret == "" {
 		writeError(w, 400, "application, target_url and secret are required")
+		return
+	}
+	if !canReadProductSlug(r, in.Application) {
+		writeError(w, http.StatusForbidden, "application not accessible")
+		return
+	}
+	if in.APIVersion == "" {
+		in.APIVersion = "1"
+	}
+	if in.EventTypes == nil {
+		in.EventTypes = []string{}
+	}
+	if in.APIVersion != "1" && in.APIVersion != "2" {
+		writeError(w, http.StatusBadRequest, "api_version must be 1 or 2")
 		return
 	}
 	if err := validateWebhookTarget(r.Context(), in.TargetURL, nil); err != nil {
@@ -440,12 +600,21 @@ func (a *API) registerWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id uuid.UUID
-	err = a.pool.QueryRow(r.Context(), `INSERT INTO webhook_endpoints(account_id,application,target_url,secret) VALUES($1,$2,$3,$4) ON CONFLICT(account_id,application) DO UPDATE SET target_url=excluded.target_url,secret=excluded.secret,active=true,updated_at=now() RETURNING id`, account, in.Application, in.TargetURL, in.Secret).Scan(&id)
+	var previousSecretExpiresAt *time.Time
+	if in.PreviousSecret != "" {
+		expires := time.Now().UTC().Add(24 * time.Hour)
+		previousSecretExpiresAt = &expires
+	}
+	err = a.pool.QueryRow(r.Context(), `INSERT INTO webhook_endpoints(account_id,application,target_url,secret,api_version,event_types,previous_secret,previous_secret_expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+		ON CONFLICT(account_id,application) DO UPDATE SET target_url=excluded.target_url,secret=excluded.secret,api_version=excluded.api_version,
+		event_types=excluded.event_types,previous_secret=excluded.previous_secret,previous_secret_expires_at=excluded.previous_secret_expires_at,
+		active=true,updated_at=now() RETURNING id`, account, in.Application, in.TargetURL, in.Secret, in.APIVersion, in.EventTypes,
+		in.PreviousSecret, previousSecretExpiresAt).Scan(&id)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": id, "application": in.Application, "target_url": in.TargetURL})
+	writeJSON(w, 201, map[string]any{"id": id, "application": in.Application, "target_url": in.TargetURL, "api_version": in.APIVersion, "event_types": in.EventTypes})
 }
 func (a *API) listWebhooks(w http.ResponseWriter, r *http.Request) {
 	account, err := a.accountIDForClaims(r.Context())
@@ -453,7 +622,7 @@ func (a *API) listWebhooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "account not found")
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT id,application,target_url,active,created_at FROM webhook_endpoints WHERE account_id=$1 ORDER BY application`, account)
+	rows, err := a.pool.Query(r.Context(), `SELECT id,application,target_url,active,api_version,event_types,created_at FROM webhook_endpoints WHERE account_id=$1 ORDER BY application`, account)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -462,15 +631,128 @@ func (a *API) listWebhooks(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id uuid.UUID
-		var application, target string
+		var application, target, apiVersion string
+		var eventTypes []string
 		var active bool
 		var created time.Time
-		if rows.Scan(&id, &application, &target, &active, &created) != nil {
+		if rows.Scan(&id, &application, &target, &active, &apiVersion, &eventTypes, &created) != nil {
 			continue
 		}
-		items = append(items, map[string]any{"id": id, "application": application, "target_url": target, "active": active, "created_at": created})
+		items = append(items, map[string]any{"id": id, "application": application, "target_url": target, "active": active, "api_version": apiVersion, "event_types": eventTypes, "created_at": created})
 	}
 	writeJSON(w, 200, items)
+}
+
+func (a *API) updateWebhook(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid webhook id")
+		return
+	}
+	account, err := a.accountIDForClaims(r.Context())
+	if err != nil {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	var in struct {
+		TargetURL  *string   `json:"target_url"`
+		Active     *bool     `json:"active"`
+		APIVersion *string   `json:"api_version"`
+		EventTypes *[]string `json:"event_types"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.TargetURL != nil {
+		if err := validateWebhookTarget(r.Context(), *in.TargetURL, nil); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid webhook destination")
+			return
+		}
+	}
+	if in.APIVersion != nil && *in.APIVersion != "1" && *in.APIVersion != "2" {
+		writeError(w, http.StatusBadRequest, "api_version must be 1 or 2")
+		return
+	}
+	var application, target, apiVersion string
+	var active bool
+	var eventTypes []string
+	err = a.pool.QueryRow(r.Context(), `UPDATE webhook_endpoints SET
+		target_url=COALESCE($3,target_url),active=COALESCE($4,active),api_version=COALESCE($5,api_version),
+		event_types=COALESCE($6,event_types),updated_at=now() WHERE id=$1 AND account_id=$2
+		RETURNING application,target_url,active,api_version,event_types`, id, account, in.TargetURL, in.Active, in.APIVersion, in.EventTypes).
+		Scan(&application, &target, &active, &apiVersion, &eventTypes)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "application": application, "target_url": target, "active": active,
+		"api_version": apiVersion, "event_types": eventTypes})
+}
+
+func (a *API) deleteWebhook(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid webhook id")
+		return
+	}
+	account, err := a.accountIDForClaims(r.Context())
+	if err != nil {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	tag, err := a.pool.Exec(r.Context(), `UPDATE webhook_endpoints SET active=false,updated_at=now() WHERE id=$1 AND account_id=$2`, id, account)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, "webhook not found")
+		return
+	}
+	writeNoContent(w)
+}
+
+func (a *API) rotateWebhookSecret(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid webhook id")
+		return
+	}
+	account, err := a.accountIDForClaims(r.Context())
+	if err != nil {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	var in struct {
+		Secret       string `json:"secret"`
+		GraceSeconds int64  `json:"grace_seconds"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if len(in.Secret) < 16 {
+		writeError(w, http.StatusBadRequest, "secret must contain at least 16 characters")
+		return
+	}
+	if in.GraceSeconds == 0 {
+		in.GraceSeconds = 86400
+	}
+	if in.GraceSeconds < 0 || in.GraceSeconds > 7*86400 {
+		writeError(w, http.StatusBadRequest, "grace_seconds must be between 0 and 604800")
+		return
+	}
+	tag, err := a.pool.Exec(r.Context(), `UPDATE webhook_endpoints SET previous_secret=secret,
+		previous_secret_expires_at=now()+($4::bigint * interval '1 second'),secret=$3,updated_at=now()
+		WHERE id=$1 AND account_id=$2`, id, account, in.Secret, in.GraceSeconds)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+	if tag.RowsAffected() != 1 {
+		writeError(w, http.StatusNotFound, "webhook not found")
+		return
+	}
+	writeNoContent(w)
 }
 
 func (a *API) adminAdjustment(w http.ResponseWriter, r *http.Request) {

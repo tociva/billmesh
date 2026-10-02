@@ -60,6 +60,10 @@ func (t *routeTraceTransport) RoundTrip(req *http.Request) (*http.Response, erro
 }
 
 func (h *HTTP) JSON(t *testing.T, method, path string, body any, token string) (int, []byte, http.Header) {
+	return h.JSONWithHeaders(t, method, path, body, token, nil)
+}
+
+func (h *HTTP) JSONWithHeaders(t *testing.T, method, path string, body any, token string, headers http.Header) (int, []byte, http.Header) {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -78,6 +82,11 @@ func (h *HTTP) JSON(t *testing.T, method, path string, body any, token string) (
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
 	}
 	resp, err := h.Client.Do(req)
 	if err != nil {
@@ -132,6 +141,12 @@ func (h *HTTP) IssueToken(t *testing.T, org, app string, permissions []string, o
 		t.Fatal("MOCK_SERVER_URL is required")
 	}
 	payload := map[string]any{"org_id": org, "app": app, "permissions": permissions}
+	if org != "" {
+		// Keep independent test organizations from accidentally sharing the fake
+		// issuer's default subject. Tests for customer-level behavior pass an
+		// explicit subject and therefore still exercise shared ownership.
+		payload["sub"] = "test:" + org
+	}
 	for k, v := range overrides {
 		payload[k] = v
 	}
@@ -335,6 +350,56 @@ func CreateFixtureSubscription(t *testing.T, h *HTTP, account, token string) str
 	return createFixtureSubscription(t, h, account, token)
 }
 
+// ActivatePaidSubscription exercises the public paid path: resolve the plan,
+// create a server-priced transition, and confirm it with a signed provider event.
+func ActivatePaidSubscription(t *testing.T, h *HTTP, product, planSlug, token string) string {
+	t.Helper()
+	plans := Decode[[]struct {
+		ID   string `json:"id"`
+		Slug string `json:"slug"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/plans?product="+url.QueryEscape(product), nil, token))
+	var planID string
+	for _, plan := range plans {
+		if plan.Slug == planSlug {
+			planID = plan.ID
+			break
+		}
+	}
+	if planID == "" {
+		t.Fatalf("paid plan %s/%s was not found", product, planSlug)
+	}
+	status, raw, _ := h.JSONWithHeaders(t, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": planID}, token,
+		http.Header{"Idempotency-Key": []string{Unique("paid-transition")}})
+	if status != http.StatusCreated {
+		t.Fatalf("create paid transition: got %d: %s", status, raw)
+	}
+	transition := Decode[struct {
+		ID       string `json:"id"`
+		Checkout struct {
+			OrderID     string `json:"order_id"`
+			AmountMinor int64  `json:"amount_minor"`
+			Currency    string `json:"currency"`
+		} `json:"checkout"`
+	}](t, raw)
+	if transition.Checkout.OrderID == "" {
+		t.Fatalf("paid transition did not return checkout: %s", raw)
+	}
+	if status := h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{
+		"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": transition.Checkout.OrderID,
+		"status": "captured", "amount_minor": transition.Checkout.AmountMinor, "currency": transition.Checkout.Currency,
+	}, "test-webhook-secret"); status != http.StatusNoContent {
+		t.Fatalf("capture paid transition: got %d", status)
+	}
+	completed := Decode[struct {
+		SubscriptionID string `json:"subscription_id"`
+		Status         string `json:"status"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscription-transitions/"+transition.ID, nil, token))
+	if completed.Status != "completed" || completed.SubscriptionID == "" {
+		t.Fatalf("paid transition did not complete: %+v", completed)
+	}
+	return completed.SubscriptionID
+}
+
 func CreateFundedWallet(t *testing.T, h *HTTP, account, token string) string {
 	t.Helper()
 	return createFundedWallet(t, h, account, token)
@@ -465,7 +530,7 @@ func ExercisePlanContract(t *testing.T, tc PlanCase) {
 			"product_id": product, "slug": strings.ToLower(tc.ID) + "-" + Unique("plan"),
 			"name": "Contract Plan", "price_minor": price, "currency": "INR",
 			"included_credits": 500, "billing_interval": interval, "active": active,
-			"entitlements": map[string]any{"workflow_execution": true, "workflow_limit": 500},
+			"entitlements": map[string]any{"workflow_execution": true},
 		}, token)
 		return Decode[struct {
 			ID string `json:"id"`

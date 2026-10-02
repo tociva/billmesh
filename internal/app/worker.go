@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,6 +51,9 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 func (w *Worker) process(ctx context.Context) error {
+	if err := w.processSubscriptionTransitions(ctx); err != nil {
+		return err
+	}
 	if err := w.processSubscriptions(ctx); err != nil {
 		return err
 	}
@@ -77,7 +81,14 @@ func (w *Worker) process(ctx context.Context) error {
 		}
 	}
 	return pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,d.target_url,e.event_type,e.payload,d.attempts,COALESCE(ep.secret,'') FROM webhook_deliveries d JOIN outbox_events e ON e.id=d.event_id LEFT JOIN webhook_endpoints ep ON ep.id=d.endpoint_id AND ep.active WHERE d.status IN ('pending','failed') AND d.next_attempt_at<=now() AND d.attempts<8 ORDER BY d.next_attempt_at FOR UPDATE OF d SKIP LOCKED LIMIT 20`)
+		rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,d.target_url,e.event_type,e.payload,d.attempts,COALESCE(ep.secret,''),
+			COALESCE(ep.previous_secret,''),ep.previous_secret_expires_at,COALESCE(ep.api_version,'1'),e.created_at,e.account_id,e.product_id,
+			e.billing_revision,e.aggregate_type,e.aggregate_id
+			FROM webhook_deliveries d JOIN outbox_events e ON e.id=d.event_id
+			LEFT JOIN webhook_endpoints ep ON ep.id=d.endpoint_id AND ep.active
+			WHERE d.status IN ('pending','failed') AND d.next_attempt_at<=now() AND d.attempts<8
+			AND (COALESCE(cardinality(ep.event_types),0)=0 OR e.event_type=ANY(ep.event_types))
+			ORDER BY d.next_attempt_at FOR UPDATE OF d SKIP LOCKED LIMIT 20`)
 		if err != nil {
 			return err
 		}
@@ -85,13 +96,23 @@ func (w *Worker) process(ctx context.Context) error {
 		type job struct {
 			id, eventID        uuid.UUID
 			url, event, secret string
+			previousSecret     string
+			previousExpires    *time.Time
+			apiVersion         string
 			payload            []byte
 			attempts           int
+			occurredAt         time.Time
+			accountID          *uuid.UUID
+			productID          *uuid.UUID
+			revision           *int64
+			aggregateType      string
+			aggregateID        uuid.UUID
 		}
 		var jobs []job
 		for rows.Next() {
 			var j job
-			if err := rows.Scan(&j.id, &j.eventID, &j.url, &j.event, &j.payload, &j.attempts, &j.secret); err != nil {
+			if err := rows.Scan(&j.id, &j.eventID, &j.url, &j.event, &j.payload, &j.attempts, &j.secret, &j.previousSecret, &j.previousExpires, &j.apiVersion,
+				&j.occurredAt, &j.accountID, &j.productID, &j.revision, &j.aggregateType, &j.aggregateID); err != nil {
 				return err
 			}
 			jobs = append(jobs, j)
@@ -102,18 +123,40 @@ func (w *Worker) process(ctx context.Context) error {
 			if j.secret == "" {
 				err = errors.New("webhook signing endpoint is unavailable")
 			}
+			body := j.payload
+			if j.apiVersion == "2" {
+				body, err = json.Marshal(map[string]any{
+					"specversion": "1.0", "schema_version": "2", "id": j.eventID, "type": j.event,
+					"occurred_at": j.occurredAt, "account_id": j.accountID, "product_id": j.productID,
+					"revision": j.revision, "aggregate": map[string]any{"type": j.aggregateType, "id": j.aggregateID},
+					"data": json.RawMessage(j.payload),
+				})
+			}
 			var req *http.Request
 			if err == nil {
-				req, err = http.NewRequestWithContext(ctx, http.MethodPost, j.url, bytes.NewReader(j.payload))
+				req, err = http.NewRequestWithContext(ctx, http.MethodPost, j.url, bytes.NewReader(body))
 			}
 			if err == nil {
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("X-Billmesh-Event-ID", j.eventID.String())
 				req.Header.Set("X-Billmesh-Event-Type", j.event)
+				req.Header.Set("X-Billmesh-Webhook-Version", j.apiVersion)
 				if j.secret != "" {
+					signedPayload := body
+					var timestamp string
+					if j.apiVersion == "2" {
+						timestamp = fmt.Sprint(time.Now().UTC().Unix())
+						req.Header.Set("X-Billmesh-Timestamp", timestamp)
+						signedPayload = append([]byte(timestamp+"."), body...)
+					}
 					mac := hmac.New(sha256.New, []byte(j.secret))
-					mac.Write(j.payload)
+					mac.Write(signedPayload)
 					req.Header.Set("X-Billmesh-Signature", hex.EncodeToString(mac.Sum(nil)))
+					if j.previousSecret != "" && j.previousExpires != nil && j.previousExpires.After(time.Now().UTC()) {
+						previousMAC := hmac.New(sha256.New, []byte(j.previousSecret))
+						previousMAC.Write(signedPayload)
+						req.Header.Set("X-Billmesh-Previous-Signature", hex.EncodeToString(previousMAC.Sum(nil)))
+					}
 				}
 				var resp *http.Response
 				resp, err = w.client.Do(req)
@@ -142,6 +185,37 @@ func (w *Worker) process(ctx context.Context) error {
 			WHERE published_at IS NULL AND NOT EXISTS(SELECT 1 FROM webhook_deliveries d WHERE d.event_id=e.id)`)
 		return err
 	})
+}
+
+func (w *Worker) processSubscriptionTransitions(ctx context.Context) error {
+	if _, err := w.pool.Exec(ctx, `UPDATE subscription_transitions SET status='expired',failure_code='checkout_expired',updated_at=now()
+		WHERE status='requires_payment' AND checkout_expires_at<=now()`); err != nil {
+		return err
+	}
+	rows, err := w.pool.Query(ctx, `SELECT id FROM subscription_transitions
+		WHERE status='processing' AND effective='period_end' AND effective_at<=now()
+		ORDER BY effective_at,id LIMIT 100`)
+	if err != nil {
+		return err
+	}
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if err := pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
+			return applySubscriptionTransition(ctx, tx, id, "")
+		}); err != nil && !errors.Is(err, errTransitionNotPayable) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *Worker) processSubscriptions(ctx context.Context) error {

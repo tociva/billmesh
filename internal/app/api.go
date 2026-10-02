@@ -87,6 +87,7 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/account-links", auth.Require("billing:write", a.linkCurrentAccount))
 	protected.HandleFunc("POST /v1/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
 	protected.HandleFunc("GET /v1/products", a.listProducts)
+	protected.HandleFunc("GET /v1/catalog", auth.Require("billing:read", a.catalogue))
 	protected.HandleFunc("POST /v1/plans", a.requireCatalogueAdmin("plan.create", "plan", a.createPlan))
 	protected.HandleFunc("GET /v1/plans", a.listPlans)
 	protected.HandleFunc("PATCH /v1/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
@@ -99,13 +100,19 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("GET /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.read", "plan", a.getAdminPlan))
 	protected.HandleFunc("PATCH /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
 	protected.HandleFunc("POST /v1/credit-packs", a.requireAdmin("credit_pack.create", "credit_pack", a.createCreditPack))
+	protected.HandleFunc("GET /v1/credit-packs", auth.Require("billing:read", a.listCreditPacks))
 	protected.HandleFunc("POST /v1/subscriptions", auth.Require("billing:write", a.createSubscription))
 	protected.HandleFunc("GET /v1/subscriptions/current", auth.Require("billing:read", a.currentSubscription))
+	protected.HandleFunc("POST /v1/subscriptions/current/cancellation", auth.Require("billing:write", a.requestCurrentCancellation))
 	protected.HandleFunc("POST /v1/subscriptions/{id}/change-plan", auth.Require("billing:write", a.changeSubscriptionPlan))
 	protected.HandleFunc("POST /v1/subscriptions/{id}/cancel", auth.Require("billing:write", a.cancelSubscription))
 	protected.HandleFunc("POST /v1/subscriptions/current/cancel", auth.Require("billing:write", a.cancelCurrentSubscription))
 	protected.HandleFunc("POST /v1/subscriptions/{id}/reactivate", auth.Require("billing:write", a.reactivateSubscription))
 	protected.HandleFunc("POST /v1/subscriptions/{id}/renew", auth.Require("billing:write", a.renewSubscription))
+	protected.HandleFunc("POST /v1/subscription-transitions", auth.Require("billing:write", a.createSubscriptionTransition))
+	protected.HandleFunc("GET /v1/subscription-transitions/{id}", auth.Require("billing:read", a.getSubscriptionTransition))
+	protected.HandleFunc("POST /v1/subscription-transitions/{id}/cancel", auth.Require("billing:write", a.cancelSubscriptionTransition))
+	protected.HandleFunc("GET /v1/billing-snapshot", auth.Require("billing:read", a.billingSnapshot))
 	protected.HandleFunc("GET /v1/entitlements", auth.Require("billing:read", a.getEntitlements))
 	protected.HandleFunc("GET /v1/entitlements/check", auth.Require("billing:read", a.checkEntitlement))
 	protected.HandleFunc("POST /v1/wallets", auth.Require("billing:write", a.createWallet))
@@ -127,6 +134,9 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("GET /v1/invoices", auth.Require("billing:read", a.listInvoices))
 	protected.HandleFunc("POST /v1/webhooks", auth.Require("billing:write", a.registerWebhook))
 	protected.HandleFunc("GET /v1/webhooks", auth.Require("billing:read", a.listWebhooks))
+	protected.HandleFunc("PATCH /v1/webhooks/{id}", auth.Require("billing:write", a.updateWebhook))
+	protected.HandleFunc("DELETE /v1/webhooks/{id}", auth.Require("billing:write", a.deleteWebhook))
+	protected.HandleFunc("POST /v1/webhooks/{id}/rotate-secret", auth.Require("billing:write", a.rotateWebhookSecret))
 	protected.HandleFunc("GET /v1/limits", auth.Require("billing:read", a.getLimits))
 	protected.HandleFunc("POST /v1/admin/adjustments", a.requireAdmin("credit.adjust", "wallet", a.adminAdjustment))
 	protected.HandleFunc("GET /v1/admin/audit", a.requireAdmin("audit.read", "audit_log", a.listAudit))
@@ -200,12 +210,26 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
+	issuer := claims.Issuer
+	if issuer == "" {
+		issuer = "unknown"
+	}
+	var customerID uuid.UUID
+	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_customers(issuer,external_subject)
+		VALUES($1,$2) ON CONFLICT(issuer,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, claims.Subject).Scan(&customerID); err != nil {
+		writeDBError(w, err)
+		return
+	}
 	var id uuid.UUID
 	var created time.Time
 	var name string
 	var ref *string
 	err = tx.QueryRow(r.Context(), `SELECT b.id,b.name,b.external_ref,b.created_at FROM account_links l JOIN billing_accounts b ON b.id=l.account_id WHERE l.application=$1 AND l.organization_id=$2 AND l.environment=$3`, in.Application, in.OrganizationID, environment).Scan(&id, &name, &ref, &created)
 	if err == nil {
+		if _, err = tx.Exec(r.Context(), `UPDATE billing_accounts SET customer_id=COALESCE(customer_id,$2),updated_at=now() WHERE id=$1`, id, customerID); err != nil {
+			writeDBError(w, err)
+			return
+		}
 		if err = tx.Commit(r.Context()); err != nil {
 			writeDBError(w, err)
 			return
@@ -217,7 +241,7 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_accounts(name,external_ref) VALUES($1,NULLIF($2,'')) RETURNING id,created_at`, in.Name, in.ExternalRef).Scan(&id, &created); err != nil {
+	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_accounts(name,external_ref,customer_id) VALUES($1,NULLIF($2,''),$3) RETURNING id,created_at`, in.Name, in.ExternalRef, customerID).Scan(&id, &created); err != nil {
 		writeDBError(w, err)
 		return
 	}

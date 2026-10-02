@@ -42,7 +42,7 @@ func cases(prefix, kind string) ([]PlanCase, error) {
 	if !ok {
 		return nil, fmt.Errorf("resolve testkit source path")
 	}
-	path := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "test-plan.md"))
+	path := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "docs", "test-plan.md"))
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open test plan: %w", err)

@@ -27,10 +27,7 @@ func TestSecuritySharedAccountProductBoundaries(t *testing.T) {
 	account := testkit.CreateFixtureAccount(t, h, org, linker)
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "taskmesh", "organization_id": org}, linker)
 	daybookSub := testkit.CreateFixtureSubscription(t, h, account, daybook)
-	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "taskmesh", "plan": "professional", "payment_status": "verified"}, taskmesh)
-	taskmeshSub := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, raw).ID
+	taskmeshSub := testkit.ActivatePaidSubscription(t, h, "taskmesh", "professional", taskmesh)
 	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current?product=daybook", nil, daybook)
 	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current?product=taskmesh", nil, taskmesh)
 	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current?product=taskmesh", nil, linker)
