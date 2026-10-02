@@ -15,12 +15,14 @@ import (
 )
 
 type productResponse struct {
-	ID          string `json:"id"`
-	Slug        string `json:"slug"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Active      bool   `json:"active"`
-	Version     int64  `json:"version"`
+	ID                       string         `json:"id"`
+	Slug                     string         `json:"slug"`
+	Name                     string         `json:"name"`
+	Description              string         `json:"description"`
+	EntitlementSchema        map[string]any `json:"entitlement_schema"`
+	EntitlementSchemaVersion int64          `json:"entitlement_schema_version"`
+	Active                   bool           `json:"active"`
+	Version                  int64          `json:"version"`
 }
 
 type planResponse struct {
@@ -43,6 +45,10 @@ func createAdminProduct(t *testing.T, h *testkit.HTTP, token, prefix string) pro
 	slug := testkit.Unique(prefix)
 	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products", map[string]any{
 		"slug": slug, "name": "Catalogue Product", "description": "Managed by Billmesh Admin",
+		"entitlement_schema": map[string]any{"fields": []any{
+			map[string]any{"key": "reports", "label": "Reports", "type": "boolean", "required": true, "default": false},
+			map[string]any{"key": "members", "label": "Maximum members", "type": "integer", "required": true, "default": 0, "minimum": 0},
+		}},
 	}, token)
 	return testkit.Decode[productResponse](t, raw)
 }
@@ -52,7 +58,7 @@ func createAdminPlan(t *testing.T, h *testkit.HTTP, token string, product produc
 	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
 		"slug": testkit.Unique("admin-plan"), "name": "Admin Plan", "price_minor": 9900,
 		"currency": "INR", "included_credits": 100, "billing_interval": "monthly",
-		"entitlements": map[string]any{"reports": true, "members": 5}, "active": active,
+		"entitlements": map[string]any{"reports": true, "members": 5}, "entitlement_schema_version": product.EntitlementSchemaVersion, "active": active,
 	}, token)
 	return testkit.Decode[planResponse](t, raw)
 }
@@ -64,7 +70,7 @@ func TestPRD001ThroughPRD015ProductAdminContract(t *testing.T) {
 	viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
 
 	product := createAdminProduct(t, h, admin, "catalogue")
-	if product.ID == "" || !product.Active || product.Version != 1 || product.Description == "" {
+	if product.ID == "" || !product.Active || product.Version != 1 || product.Description == "" || product.EntitlementSchemaVersion != 1 {
 		t.Fatalf("PRD-004: incomplete product response: %+v", product)
 	}
 
@@ -248,6 +254,19 @@ func TestPLAN027AndPLAN028PlanJSONContract(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	admin := h.IssueToken(t, testkit.Unique("plan-json"), "daybook", testkit.AllPermissions(), nil)
 	product := createAdminProduct(t, h, admin, "plan-json-product")
+	product = testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
+		"version": product.Version,
+		"entitlement_schema": map[string]any{"fields": []any{
+			map[string]any{"key": "enabled", "label": "Enabled", "type": "boolean", "required": true},
+			map[string]any{"key": "limit", "label": "Limit", "type": "integer", "required": true, "minimum": 0},
+			map[string]any{"key": "label", "label": "Label", "type": "string", "required": true},
+			map[string]any{"key": "nested", "label": "Nested settings", "type": "object", "required": true, "fields": []any{
+				map[string]any{"key": "mode", "label": "Mode", "type": "string", "required": true},
+			}},
+			map[string]any{"key": "regions", "label": "Regions", "type": "array", "required": true, "items": map[string]any{"type": "string"}},
+			map[string]any{"key": "unset", "label": "Unset value", "type": "string", "nullable": true},
+		}},
+	}, admin))
 
 	h.RequireStatus(t, http.StatusBadRequest, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
 		"slug": "unknown-json-field", "name": "Unknown JSON Field", "currency": "INR", "unexpected": true,
@@ -279,6 +298,7 @@ func TestPLAN027AndPLAN028PlanJSONContract(t *testing.T) {
 	}
 	created := testkit.Decode[planResponse](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
 		"slug": "json-entitlements", "name": "JSON Entitlements", "currency": "INR", "entitlements": wantEntitlements,
+		"entitlement_schema_version": product.EntitlementSchemaVersion,
 	}, admin))
 	if !equalJSON(created.Entitlements, wantEntitlements) {
 		t.Fatalf("PLAN-028 entitlement JSON changed: got %#v want %#v", created.Entitlements, wantEntitlements)
@@ -322,8 +342,13 @@ func TestCatalogueResponsesRemainValidJSON(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	admin := h.IssueToken(t, testkit.Unique("catalogue-json"), "daybook", testkit.AllPermissions(), nil)
 	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/products", nil, admin)
-	var products []productResponse
-	if err := json.Unmarshal(raw, &products); err != nil {
+	var page struct {
+		Items  []productResponse `json:"items"`
+		Total  int               `json:"total"`
+		Limit  int               `json:"limit"`
+		Offset int               `json:"offset"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
 		t.Fatalf("catalogue response is not JSON: %v", err)
 	}
 }

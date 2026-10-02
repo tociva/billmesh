@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -16,14 +17,16 @@ import (
 )
 
 type productRecord struct {
-	ID          uuid.UUID `json:"id"`
-	Slug        string    `json:"slug"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Active      bool      `json:"active"`
-	Version     int64     `json:"version"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                       uuid.UUID                  `json:"id"`
+	Slug                     string                     `json:"slug"`
+	Name                     string                     `json:"name"`
+	Description              string                     `json:"description"`
+	EntitlementSchema        products.EntitlementSchema `json:"entitlement_schema"`
+	EntitlementSchemaVersion int64                      `json:"entitlement_schema_version"`
+	Active                   bool                       `json:"active"`
+	Version                  int64                      `json:"version"`
+	CreatedAt                time.Time                  `json:"created_at"`
+	UpdatedAt                time.Time                  `json:"updated_at"`
 }
 
 type planRecord struct {
@@ -43,6 +46,13 @@ type planRecord struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
+type cataloguePageResponse[T any] struct {
+	Items  []T   `json:"items"`
+	Total  int64 `json:"total"`
+	Limit  int   `json:"limit"`
+	Offset int   `json:"offset"`
+}
+
 func (a *API) requireCatalogueAdmin(action, resourceType string, next http.HandlerFunc) http.HandlerFunc {
 	return a.requireAdmin(action, resourceType, func(w http.ResponseWriter, r *http.Request) {
 		claims, _ := auth.FromContext(r.Context())
@@ -58,7 +68,9 @@ func (a *API) requireCatalogueAdmin(action, resourceType string, next http.Handl
 func productState(value productRecord) map[string]any {
 	return map[string]any{
 		"id": value.ID, "slug": value.Slug, "name": value.Name,
-		"description": value.Description, "active": value.Active, "version": value.Version,
+		"description": value.Description, "entitlement_schema": value.EntitlementSchema,
+		"entitlement_schema_version": value.EntitlementSchemaVersion,
+		"active":                     value.Active, "version": value.Version,
 	}
 }
 
@@ -98,6 +110,30 @@ func catalogueStatus(r *http.Request) (string, bool) {
 	return status, status == "all" || status == "active" || status == "archived" || status == "inactive"
 }
 
+func catalogueQuery(r *http.Request) (string, bool) {
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	return query, len(query) <= 120
+}
+
+func catalogueSort(r *http.Request, allowed map[string]string, fallback string) (string, bool) {
+	sortKey := r.URL.Query().Get("sort")
+	if sortKey == "" {
+		sortKey = fallback
+	}
+	column, ok := allowed[sortKey]
+	if !ok {
+		return "", false
+	}
+	direction := strings.ToLower(r.URL.Query().Get("direction"))
+	if direction == "" {
+		direction = "asc"
+	}
+	if direction != "asc" && direction != "desc" {
+		return "", false
+	}
+	return column + " " + strings.ToUpper(direction), true
+}
+
 func (a *API) writeCatalogueAudit(ctx context.Context, tx pgx.Tx, action, resourceType string, resourceID uuid.UUID, before, after map[string]any) error {
 	claims, ok := auth.FromContext(ctx)
 	if !ok {
@@ -114,9 +150,10 @@ func (a *API) writeCatalogueAudit(ctx context.Context, tx pgx.Tx, action, resour
 
 func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Slug        string `json:"slug"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Slug              string                     `json:"slug"`
+		Name              string                     `json:"name"`
+		Description       string                     `json:"description"`
+		EntitlementSchema products.EntitlementSchema `json:"entitlement_schema"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -124,16 +161,23 @@ func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 	in.Slug = strings.TrimSpace(in.Slug)
 	in.Name = strings.TrimSpace(in.Name)
 	in.Description = strings.TrimSpace(in.Description)
+	if in.EntitlementSchema.Fields == nil {
+		in.EntitlementSchema.Fields = []products.EntitlementField{}
+	}
 	if err := products.ValidateProduct(in.Slug, in.Name, in.Description); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := products.ValidateEntitlementSchema(in.EntitlementSchema); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var created productRecord
 	err := pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `INSERT INTO products(slug,name,description)
-			VALUES($1,$2,$3) RETURNING id,slug,name,description,active,version,created_at,updated_at`,
-			in.Slug, in.Name, in.Description).Scan(&created.ID, &created.Slug, &created.Name, &created.Description,
-			&created.Active, &created.Version, &created.CreatedAt, &created.UpdatedAt); err != nil {
+		if err := tx.QueryRow(r.Context(), `INSERT INTO products(slug,name,description,entitlement_schema)
+			VALUES($1,$2,$3,$4) RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at`,
+			in.Slug, in.Name, in.Description, in.EntitlementSchema).Scan(&created.ID, &created.Slug, &created.Name, &created.Description,
+			&created.EntitlementSchema, &created.EntitlementSchemaVersion, &created.Active, &created.Version, &created.CreatedAt, &created.UpdatedAt); err != nil {
 			return err
 		}
 		return a.writeCatalogueAudit(r.Context(), tx, "product.create", "product", created.ID, nil, productState(created))
@@ -156,16 +200,30 @@ func (a *API) listAdminProducts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid product status")
 		return
 	}
-	query := strings.TrimSpace(r.URL.Query().Get("query"))
-	if len(query) > 120 {
+	query, valid := catalogueQuery(r)
+	if !valid {
 		writeError(w, http.StatusBadRequest, "query is too long")
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,active,version,created_at,updated_at
+	orderBy, valid := catalogueSort(r, map[string]string{
+		"slug": "slug", "name": "name", "status": "active", "created_at": "created_at", "updated_at": "updated_at",
+	}, "slug")
+	if !valid {
+		writeError(w, http.StatusBadRequest, "invalid product sort")
+		return
+	}
+	var total int64
+	if err := a.pool.QueryRow(r.Context(), `SELECT count(*) FROM products
+		WHERE ($1='' OR slug ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%')
+		AND ($2='all' OR ($2='active' AND active) OR ($2 IN ('archived','inactive') AND NOT active))`, query, status).Scan(&total); err != nil {
+		writeDBError(w, err)
+		return
+	}
+	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at
 		FROM products
-		WHERE ($1='' OR slug ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%')
+		WHERE ($1='' OR slug ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%')
 		AND ($2='all' OR ($2='active' AND active) OR ($2 IN ('archived','inactive') AND NOT active))
-		ORDER BY slug,id LIMIT $3 OFFSET $4`, query, status, limit, offset)
+		ORDER BY `+orderBy+`,id LIMIT $3 OFFSET $4`, query, status, limit, offset)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -174,13 +232,15 @@ func (a *API) listAdminProducts(w http.ResponseWriter, r *http.Request) {
 	items := []productRecord{}
 	for rows.Next() {
 		var item productRecord
-		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			writeDBError(w, err)
 			return
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, cataloguePageResponse[productRecord]{
+		Items: items, Total: total, Limit: limit, Offset: offset,
+	})
 }
 
 func (a *API) getAdminProduct(w http.ResponseWriter, r *http.Request) {
@@ -190,8 +250,8 @@ func (a *API) getAdminProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item productRecord
-	err = a.pool.QueryRow(r.Context(), `SELECT id,slug,name,description,active,version,created_at,updated_at FROM products WHERE id=$1`, id).
-		Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
+	err = a.pool.QueryRow(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at FROM products WHERE id=$1`, id).
+		Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -206,10 +266,11 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-		Active      *bool   `json:"active"`
-		Version     int64   `json:"version"`
+		Name              *string                     `json:"name"`
+		Description       *string                     `json:"description"`
+		EntitlementSchema *products.EntitlementSchema `json:"entitlement_schema"`
+		Active            *bool                       `json:"active"`
+		Version           int64                       `json:"version"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -221,8 +282,8 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 	var updated productRecord
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
 		var before productRecord
-		if err := tx.QueryRow(r.Context(), `SELECT id,slug,name,description,active,version,created_at,updated_at FROM products WHERE id=$1 FOR UPDATE`, id).
-			Scan(&before.ID, &before.Slug, &before.Name, &before.Description, &before.Active, &before.Version, &before.CreatedAt, &before.UpdatedAt); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at FROM products WHERE id=$1 FOR UPDATE`, id).
+			Scan(&before.ID, &before.Slug, &before.Name, &before.Description, &before.EntitlementSchema, &before.EntitlementSchemaVersion, &before.Active, &before.Version, &before.CreatedAt, &before.UpdatedAt); err != nil {
 			return err
 		}
 		if before.Version != in.Version {
@@ -231,6 +292,7 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		name := before.Name
 		description := before.Description
 		active := before.Active
+		entitlementSchema := before.EntitlementSchema
 		if in.Name != nil {
 			name = strings.TrimSpace(*in.Name)
 		}
@@ -240,16 +302,46 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		if in.Active != nil {
 			active = *in.Active
 		}
+		if in.EntitlementSchema != nil {
+			entitlementSchema = *in.EntitlementSchema
+			if entitlementSchema.Fields == nil {
+				entitlementSchema.Fields = []products.EntitlementField{}
+			}
+		}
 		if err := products.ValidateProduct(before.Slug, name, description); err != nil {
 			return catalogueValidationError{err.Error()}
 		}
-		if name == before.Name && description == before.Description && active == before.Active {
+		if err := products.ValidateEntitlementSchema(entitlementSchema); err != nil {
+			return catalogueValidationError{err.Error()}
+		}
+		schemaChanged := !reflect.DeepEqual(entitlementSchema, before.EntitlementSchema)
+		if schemaChanged {
+			rows, err := tx.Query(r.Context(), `SELECT entitlements FROM plans WHERE product_id=$1`, id)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var entitlements map[string]any
+				if err := rows.Scan(&entitlements); err != nil {
+					return err
+				}
+				if err := products.ValidateStoredEntitlements(entitlementSchema, entitlements); err != nil {
+					return catalogueValidationError{"schema is incompatible with an existing plan: " + err.Error()}
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+		}
+		if name == before.Name && description == before.Description && active == before.Active && !schemaChanged {
 			updated = before
 			return nil
 		}
-		if err := tx.QueryRow(r.Context(), `UPDATE products SET name=$2,description=$3,active=$4,version=version+1,updated_at=now()
-			WHERE id=$1 RETURNING id,slug,name,description,active,version,created_at,updated_at`, id, name, description, active).
-			Scan(&updated.ID, &updated.Slug, &updated.Name, &updated.Description, &updated.Active, &updated.Version, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
+		if err := tx.QueryRow(r.Context(), `UPDATE products SET name=$2,description=$3,active=$4,entitlement_schema=$5,
+			entitlement_schema_version=entitlement_schema_version+CASE WHEN $6 THEN 1 ELSE 0 END,version=version+1,updated_at=now()
+			WHERE id=$1 RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at`, id, name, description, active, entitlementSchema, schemaChanged).
+			Scan(&updated.ID, &updated.Slug, &updated.Name, &updated.Description, &updated.EntitlementSchema, &updated.EntitlementSchemaVersion, &updated.Active, &updated.Version, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
 			return err
 		}
 		return a.writeCatalogueAudit(r.Context(), tx, "product.update", "product", id, productState(before), productState(updated))
@@ -286,11 +378,32 @@ func (a *API) listAdminPlans(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid plan status")
 		return
 	}
+	query, valid := catalogueQuery(r)
+	if !valid {
+		writeError(w, http.StatusBadRequest, "query is too long")
+		return
+	}
+	orderBy, valid := catalogueSort(r, map[string]string{
+		"slug": "p.slug", "name": "p.name", "price": "p.price_minor", "status": "p.active", "created_at": "p.created_at", "updated_at": "p.updated_at",
+	}, "price")
+	if !valid {
+		writeError(w, http.StatusBadRequest, "invalid plan sort")
+		return
+	}
+	var total int64
+	if err := a.pool.QueryRow(r.Context(), `SELECT count(*) FROM plans p
+		WHERE p.product_id=$1
+		AND ($2='all' OR ($2='active' AND p.active) OR ($2 IN ('archived','inactive') AND NOT p.active))
+		AND ($3='' OR p.slug ILIKE '%' || $3 || '%' OR p.name ILIKE '%' || $3 || '%' OR p.currency ILIKE '%' || $3 || '%')`, productID, status, query).Scan(&total); err != nil {
+		writeDBError(w, err)
+		return
+	}
 	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.price_minor,p.currency,p.included_credits,
 		p.entitlements,p.billing_interval,p.active,p.version,p.created_at,p.updated_at
 		FROM plans p JOIN products pr ON pr.id=p.product_id
 		WHERE p.product_id=$1 AND ($2='all' OR ($2='active' AND p.active) OR ($2 IN ('archived','inactive') AND NOT p.active))
-		ORDER BY p.price_minor,p.slug,p.id LIMIT $3 OFFSET $4`, productID, status, limit, offset)
+		AND ($3='' OR p.slug ILIKE '%' || $3 || '%' OR p.name ILIKE '%' || $3 || '%' OR p.currency ILIKE '%' || $3 || '%')
+		ORDER BY `+orderBy+`,p.slug,p.id LIMIT $4 OFFSET $5`, productID, status, query, limit, offset)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -305,7 +418,9 @@ func (a *API) listAdminPlans(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, http.StatusOK, items)
+	writeJSON(w, http.StatusOK, cataloguePageResponse[planRecord]{
+		Items: items, Total: total, Limit: limit, Offset: offset,
+	})
 }
 
 func (a *API) getAdminPlan(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +452,12 @@ func scanPlan(row rowScanner) (planRecord, error) {
 }
 
 var errCatalogueVersionConflict = errors.New("catalogue version conflict")
+var errEntitlementSchemaVersionConflict = errors.New("entitlement schema version conflict")
 
 type catalogueValidationError struct{ message string }
 
 func (e catalogueValidationError) Error() string { return e.message }
+
+type entitlementValidationError struct{ message string }
+
+func (e entitlementValidationError) Error() string { return e.message }

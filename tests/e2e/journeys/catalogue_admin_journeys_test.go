@@ -14,9 +14,10 @@ import (
 )
 
 type catalogueProduct struct {
-	ID      string `json:"id"`
-	Slug    string `json:"slug"`
-	Version int64  `json:"version"`
+	ID                       string `json:"id"`
+	Slug                     string `json:"slug"`
+	Version                  int64  `json:"version"`
+	EntitlementSchemaVersion int64  `json:"entitlement_schema_version"`
 }
 
 type cataloguePlan struct {
@@ -30,10 +31,15 @@ func TestJOURNEYPRD001Through004CatalogueLifecycleAndSubscriptionSnapshots(t *te
 	admin := h.IssueToken(t, testkit.Unique("catalogue-admin"), "daybook", testkit.AllPermissions(), nil)
 	product := testkit.Decode[catalogueProduct](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products", map[string]any{
 		"slug": testkit.Unique("journey-product"), "name": "Journey Product", "description": "Lifecycle coverage",
+		"entitlement_schema": map[string]any{"fields": []any{
+			map[string]any{"key": "reports", "label": "Reports", "type": "boolean", "required": true},
+			map[string]any{"key": "members", "label": "Maximum members", "type": "integer", "required": true, "minimum": 0},
+		}},
 	}, admin))
 	plan := testkit.Decode[cataloguePlan](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
 		"slug": testkit.Unique("journey-plan"), "name": "Journey Plan", "currency": "INR", "billing_interval": "monthly",
 		"price_minor": 0, "included_credits": 100, "entitlements": map[string]any{"reports": true, "members": 5},
+		"entitlement_schema_version": product.EntitlementSchemaVersion,
 	}, admin))
 
 	firstOrg := testkit.Unique("journey-first")

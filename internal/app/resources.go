@@ -144,7 +144,7 @@ func (a *API) linkCurrentAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,active,version,created_at,updated_at FROM products WHERE active ORDER BY slug,id`)
+	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at FROM products WHERE active ORDER BY slug,id`)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -153,7 +153,7 @@ func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
 	items := []productRecord{}
 	for rows.Next() {
 		var item productRecord
-		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			writeDBError(w, err)
 			return
 		}
@@ -171,6 +171,7 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 		PriceMinor      int64          `json:"price_minor"`
 		IncludedCredits int64          `json:"included_credits"`
 		Entitlements    map[string]any `json:"entitlements"`
+		SchemaVersion   *int64         `json:"entitlement_schema_version"`
 		Active          *bool          `json:"active"`
 	}
 	if !decode(w, r, &in) {
@@ -223,9 +224,19 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 	err := pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
 		var productSlug string
 		var productActive bool
-		if err := tx.QueryRow(r.Context(), `SELECT slug,active FROM products WHERE id=$1`, in.ProductID).Scan(&productSlug, &productActive); err != nil {
+		var entitlementSchema products.EntitlementSchema
+		var entitlementSchemaVersion int64
+		if err := tx.QueryRow(r.Context(), `SELECT slug,active,entitlement_schema,entitlement_schema_version FROM products WHERE id=$1 FOR SHARE`, in.ProductID).Scan(&productSlug, &productActive, &entitlementSchema, &entitlementSchemaVersion); err != nil {
 			return err
 		}
+		if in.SchemaVersion != nil && *in.SchemaVersion != entitlementSchemaVersion {
+			return errEntitlementSchemaVersionConflict
+		}
+		validatedEntitlements, err := products.ValidateEntitlements(entitlementSchema, in.Entitlements)
+		if err != nil {
+			return entitlementValidationError{err.Error()}
+		}
+		in.Entitlements = validatedEntitlements
 		if active && !productActive {
 			return catalogueValidationError{"active plans require an active product"}
 		}
@@ -233,7 +244,6 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
 			RETURNING id,product_id,$10::text,slug,name,price_minor,currency,included_credits,entitlements,billing_interval,active,version,created_at,updated_at`,
 			in.ProductID, in.Slug, in.Name, in.PriceMinor, in.Currency, in.IncludedCredits, in.Entitlements, active, in.BillingInterval, productSlug)
-		var err error
 		created, err = scanPlan(row)
 		if err != nil {
 			return err
@@ -241,6 +251,15 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 		return a.writeCatalogueAudit(r.Context(), tx, "plan.create", "plan", created.ID, nil, planState(created))
 	})
 	var validation catalogueValidationError
+	var entitlementValidation entitlementValidationError
+	if errors.Is(err, errEntitlementSchemaVersionConflict) {
+		writeError(w, http.StatusConflict, "entitlement schema was modified; reload the product")
+		return
+	}
+	if errors.As(err, &entitlementValidation) {
+		writeError(w, http.StatusBadRequest, entitlementValidation.Error())
+		return
+	}
 	if errors.As(err, &validation) {
 		writeError(w, http.StatusConflict, validation.Error())
 		return
@@ -285,6 +304,7 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 		Currency        *string        `json:"currency"`
 		IncludedCredits *int64         `json:"included_credits"`
 		Entitlements    map[string]any `json:"entitlements"`
+		SchemaVersion   *int64         `json:"entitlement_schema_version"`
 		BillingInterval *string        `json:"billing_interval"`
 		Active          *bool          `json:"active"`
 		Version         *int64         `json:"version"`
@@ -322,7 +342,19 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 			updated.IncludedCredits = *in.IncludedCredits
 		}
 		if in.Entitlements != nil {
-			updated.Entitlements = in.Entitlements
+			var entitlementSchema products.EntitlementSchema
+			var entitlementSchemaVersion int64
+			if err := tx.QueryRow(r.Context(), `SELECT entitlement_schema,entitlement_schema_version FROM products WHERE id=$1 FOR SHARE`, before.ProductID).Scan(&entitlementSchema, &entitlementSchemaVersion); err != nil {
+				return err
+			}
+			if in.SchemaVersion != nil && *in.SchemaVersion != entitlementSchemaVersion {
+				return errEntitlementSchemaVersionConflict
+			}
+			validatedEntitlements, err := products.ValidateEntitlements(entitlementSchema, in.Entitlements)
+			if err != nil {
+				return catalogueValidationError{err.Error()}
+			}
+			updated.Entitlements = validatedEntitlements
 		}
 		if in.BillingInterval != nil {
 			updated.BillingInterval = *in.BillingInterval
@@ -358,6 +390,10 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, errCatalogueVersionConflict) {
 		writeError(w, http.StatusConflict, "plan was modified by another request")
+		return
+	}
+	if errors.Is(err, errEntitlementSchemaVersionConflict) {
+		writeError(w, http.StatusConflict, "entitlement schema was modified; reload the product")
 		return
 	}
 	var validation catalogueValidationError

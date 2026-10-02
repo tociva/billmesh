@@ -1224,6 +1224,7 @@ components:
               slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
               name: { type: string, minLength: 1, maxLength: 120 }
               description: { type: string, maxLength: 2000 }
+              entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
     UpdateProduct:
       required: true
       content:
@@ -1235,6 +1236,7 @@ components:
             properties:
               name: { type: string, minLength: 1, maxLength: 120 }
               description: { type: string, maxLength: 2000 }
+              entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
               active: { type: boolean }
               version: { type: integer, format: int64, minimum: 1 }
     CreatePlan:
@@ -1254,6 +1256,7 @@ components:
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
+              entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               active: { type: boolean, default: true }
     CreateNestedPlan:
       required: true
@@ -1271,6 +1274,7 @@ components:
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
+              entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               active: { type: boolean, default: true }
     UpdatePlan:
       required: true
@@ -1285,6 +1289,7 @@ components:
               currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
+              entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               billing_interval: { type: string, enum: [monthly, annual] }
               active: { type: boolean }
               version: { type: integer, format: int64, minimum: 1 }
@@ -1302,6 +1307,7 @@ components:
               currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
               entitlements: { type: object, additionalProperties: true }
+              entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               billing_interval: { type: string, enum: [monthly, annual] }
               active: { type: boolean }
               version: { type: integer, format: int64, minimum: 1 }
@@ -1529,14 +1535,57 @@ components:
           items: { type: string }
         csrfToken: { type: string, writeOnly: true }
         expiresAt: { type: string, format: date-time }
+    EntitlementOption:
+      type: object
+      additionalProperties: false
+      required: [label, value]
+      properties:
+        label: { type: string, minLength: 1, maxLength: 120 }
+        value: { type: string, minLength: 1 }
+    EntitlementField:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        key: { type: string, pattern: "^[a-z][a-z0-9_]{0,62}$" }
+        label: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 500 }
+        type: { type: string, enum: [boolean, integer, number, string, select, object, array] }
+        required: { type: boolean, default: false }
+        nullable: { type: boolean, default: false }
+        default: {}
+        minimum: { type: number }
+        maximum: { type: number }
+        min_length: { type: integer, minimum: 0 }
+        max_length: { type: integer, minimum: 0 }
+        min_items: { type: integer, minimum: 0 }
+        max_items: { type: integer, minimum: 0 }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/EntitlementOption" }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/EntitlementField" }
+        items: { $ref: "#/components/schemas/EntitlementField" }
+    EntitlementSchema:
+      type: object
+      additionalProperties: false
+      required: [fields]
+      properties:
+        fields:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/EntitlementField" }
     Product:
       type: object
-      required: [id, slug, name, description, active, version, created_at, updated_at]
+      required: [id, slug, name, description, entitlement_schema, entitlement_schema_version, active, version, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         slug: { type: string }
         name: { type: string }
         description: { type: string }
+        entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
+        entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
         active: { type: boolean }
         version: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
