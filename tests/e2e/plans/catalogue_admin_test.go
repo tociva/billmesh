@@ -21,8 +21,99 @@ type productResponse struct {
 	Description              string         `json:"description"`
 	EntitlementSchema        map[string]any `json:"entitlement_schema"`
 	EntitlementSchemaVersion int64          `json:"entitlement_schema_version"`
+	BillingPolicy            map[string]any `json:"billing_policy"`
+	BillingPolicyVersion     int64          `json:"billing_policy_version"`
 	Active                   bool           `json:"active"`
 	Version                  int64          `json:"version"`
+}
+
+func TestProductBillingPolicyContractAndVersioning(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	admin := h.IssueToken(t, testkit.Unique("policy-admin"), "daybook", testkit.AllPermissions(), nil)
+
+	metadataRaw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/product-policy-metadata", nil, admin)
+	metadata := testkit.Decode[struct {
+		SchemaVersion int            `json:"schema_version"`
+		Defaults      map[string]any `json:"defaults"`
+		Options       map[string]any `json:"options"`
+	}](t, metadataRaw)
+	if metadata.SchemaVersion != 1 || len(metadata.Options) == 0 {
+		t.Fatalf("incomplete policy metadata: %+v", metadata)
+	}
+	policy := metadata.Defaults
+	policy["customer"].(map[string]any)["free_allowance"] = float64(2)
+	policy["catalogue"].(map[string]any)["access"] = "public"
+	policy["projection"].(map[string]any)["fresh_seconds"] = float64(120)
+
+	product := testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products", map[string]any{
+		"slug": testkit.Unique("policy-product"), "name": "Policy product", "billing_policy": policy,
+	}, admin))
+	if product.BillingPolicyVersion != 1 || product.BillingPolicy["customer"].(map[string]any)["free_allowance"] != float64(2) {
+		t.Fatalf("policy was not materialized: %+v", product)
+	}
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/public/catalog?product="+product.Slug, nil, "")
+
+	policy["projection"].(map[string]any)["fresh_seconds"] = float64(180)
+	updated := testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
+		"version": product.Version, "billing_policy": policy,
+	}, admin))
+	if updated.BillingPolicyVersion != 2 {
+		t.Fatalf("policy version = %d, want 2", updated.BillingPolicyVersion)
+	}
+
+	nameOnly := testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
+		"version": updated.Version, "name": "Renamed policy product",
+	}, admin))
+	if nameOnly.BillingPolicyVersion != updated.BillingPolicyVersion {
+		t.Fatalf("non-policy edit changed policy version: %d -> %d", updated.BillingPolicyVersion, nameOnly.BillingPolicyVersion)
+	}
+
+	policy["customer"].(map[string]any)["free_allowance"] = float64(-1)
+	h.RequireStatus(t, http.StatusBadRequest, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
+		"version": nameOnly.Version, "billing_policy": policy,
+	}, admin)
+}
+
+func TestAutomaticDefaultPlanOnboardingUsesProductPolicy(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	admin := h.IssueToken(t, testkit.Unique("onboarding-admin"), "daybook", testkit.AllPermissions(), nil)
+	metadata := testkit.Decode[struct {
+		Defaults map[string]any `json:"defaults"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/product-policy-metadata", nil, admin))
+	policy := metadata.Defaults
+	policy["onboarding"].(map[string]any)["initial_plan"] = "automatic_default"
+	policy["onboarding"].(map[string]any)["allow_without_subscription"] = false
+	policy["onboarding"].(map[string]any)["ineligible_action"] = "reject"
+	policy["catalogue"].(map[string]any)["required_before_account"] = true
+
+	product := testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products", map[string]any{
+		"slug": testkit.Unique("automatic-product"), "name": "Automatic product", "billing_policy": policy,
+	}, admin))
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
+		"slug": testkit.Unique("automatic-free"), "name": "Automatic Free", "billing_model": "free", "price_minor": 0,
+		"currency": "INR", "included_credits": 10, "billing_interval": "monthly", "entitlements": map[string]any{},
+		"entitlement_schema_version": product.EntitlementSchemaVersion, "default_for_product": true,
+	}, admin)
+
+	org := testkit.Unique("automatic-org")
+	consumer := h.IssueToken(t, org, product.Slug, []string{"billing:read", "billing:write"}, map[string]any{"sub": testkit.Unique("automatic-customer")})
+	accountBody := map[string]any{
+		"name": "Automatic account", "application": product.Slug, "organization_id": org,
+	}
+	h.RequireStatus(t, http.StatusPreconditionRequired, http.MethodPost, "/v1/accounts", accountBody, consumer)
+	status, _, catalogueHeaders := h.JSON(t, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, consumer)
+	if status != http.StatusOK || catalogueHeaders.Get("ETag") == "" {
+		t.Fatalf("catalogue prerequisite returned status %d without an ETag", status)
+	}
+	status, raw, _ := h.JSONWithHeaders(t, http.MethodPost, "/v1/accounts", accountBody, consumer,
+		http.Header{"If-Match": []string{catalogueHeaders.Get("ETag")}})
+	if status != http.StatusCreated {
+		t.Fatalf("policy-compliant account creation returned %d: %s", status, raw)
+	}
+	snapshot := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot?product="+product.Slug, nil, consumer)
+	if !strings.Contains(string(snapshot), `"status":"active"`) || !strings.Contains(string(snapshot), `"billing_model":"free"`) {
+		t.Fatalf("automatic onboarding did not activate the default Free plan: %s", snapshot)
+	}
 }
 
 type planResponse struct {
@@ -316,6 +407,14 @@ func TestPRD020AndPLAN021ArchivedProductBlocksNewBusiness(t *testing.T) {
 	admin := h.IssueToken(t, testkit.Unique("archive-admin"), "daybook", testkit.AllPermissions(), nil)
 	product := createAdminProduct(t, h, admin, "archived-business")
 	plan := createAdminPlan(t, h, admin, product, true)
+	org := testkit.Unique("archived-customer")
+	customer := h.IssueToken(t, org, product.Slug, []string{"billing:read", "billing:write"}, nil)
+	account := testkit.Decode[struct {
+		ID string `json:"id"`
+	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
+		"name": "Archived Product Customer", "application": product.Slug, "organization_id": org,
+	}, customer)).ID
+
 	archived := testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
 		"active": false, "version": product.Version,
 	}, admin))
@@ -326,13 +425,6 @@ func TestPRD020AndPLAN021ArchivedProductBlocksNewBusiness(t *testing.T) {
 		"slug": testkit.Unique("blocked-plan"), "name": "Blocked Plan", "currency": "INR", "active": true,
 	}, admin)
 
-	org := testkit.Unique("archived-customer")
-	customer := h.IssueToken(t, org, product.Slug, []string{"billing:read", "billing:write"}, nil)
-	account := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "Archived Product Customer", "application": product.Slug, "organization_id": org,
-	}, customer)).ID
 	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/subscriptions", map[string]any{
 		"account_id": account, "plan_id": plan.ID, "payment_status": "verified",
 	}, customer)

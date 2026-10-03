@@ -56,8 +56,8 @@ func TestOpenAPIDocumentDescribesEveryRegisteredRoute(t *testing.T) {
 			want[route] = true
 		}
 	}
-	if len(want) != 80 {
-		t.Fatalf("discovered %d registered routes, want 80", len(want))
+	if len(want) != 82 {
+		t.Fatalf("discovered %d registered routes, want 82", len(want))
 	}
 
 	verbs := map[string]bool{"get": true, "post": true, "put": true, "patch": true, "delete": true, "head": true, "options": true, "trace": true}

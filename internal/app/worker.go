@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/tociva/billmesh/internal/products"
 	"github.com/tociva/billmesh/internal/wallets"
 )
 
@@ -243,9 +244,12 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 			var periodEnd time.Time
 			var graceEnd *time.Time
 			var cancel bool
-			if err := tx.QueryRow(ctx, `SELECT account_id,product_id,plan_id,status,price_minor,included_credits,billing_interval,current_period_end,grace_period_end,cancel_at_period_end
-				FROM subscriptions WHERE id=$1 FOR UPDATE`, id).
-				Scan(&accountID, &productID, &planID, &status, &price, &credits, &interval, &periodEnd, &graceEnd, &cancel); err != nil {
+			var policy products.BillingPolicy
+			var policyVersion int64
+			if err := tx.QueryRow(ctx, `SELECT s.account_id,s.product_id,s.plan_id,s.status,s.price_minor,s.included_credits,s.billing_interval,
+				s.current_period_end,s.grace_period_end,s.cancel_at_period_end,p.billing_policy,p.billing_policy_version
+				FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=$1 FOR UPDATE OF s`, id).
+				Scan(&accountID, &productID, &planID, &status, &price, &credits, &interval, &periodEnd, &graceEnd, &cancel, &policy, &policyVersion); err != nil {
 				return err
 			}
 			now := time.Now().UTC()
@@ -253,10 +257,7 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 				if graceEnd == nil || graceEnd.After(now) {
 					return nil
 				}
-				if _, err := tx.Exec(ctx, `UPDATE subscriptions SET status='expired',updated_at=now(),version=version+1 WHERE id=$1`, id); err != nil {
-					return err
-				}
-				return accountEvent(ctx, tx, accountID, "subscription", id, "subscription.expired", map[string]any{"subscription_id": id})
+				return expireSubscriptionByPolicy(ctx, tx, id, accountID, productID, periodEnd, policy, policyVersion)
 			}
 			if periodEnd.After(now) {
 				return nil
@@ -268,11 +269,16 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 				return accountEvent(ctx, tx, accountID, "subscription", id, "subscription.cancelled", map[string]any{"subscription_id": id})
 			}
 			if price > 0 {
-				grace := now.Add(72 * time.Hour)
-				if _, err := tx.Exec(ctx, `UPDATE subscriptions SET status='past_due',grace_period_end=$2,updated_at=now(),version=version+1 WHERE id=$1`, id, grace); err != nil {
-					return err
+				if policy.Lifecycle.Dunning == "grace_period" && policy.Lifecycle.GracePeriodDays > 0 {
+					grace := now.Add(time.Duration(policy.Lifecycle.GracePeriodDays) * 24 * time.Hour)
+					if _, err := tx.Exec(ctx, `UPDATE subscriptions SET status='past_due',grace_period_end=$2,updated_at=now(),version=version+1 WHERE id=$1`, id, grace); err != nil {
+						return err
+					}
+					return accountEvent(ctx, tx, accountID, "subscription", id, "subscription.past_due", map[string]any{
+						"subscription_id": id, "grace_period_end": grace, "policy_version": policyVersion,
+					})
 				}
-				return accountEvent(ctx, tx, accountID, "subscription", id, "subscription.past_due", map[string]any{"subscription_id": id, "grace_period_end": grace})
+				return expireSubscriptionByPolicy(ctx, tx, id, accountID, productID, periodEnd, policy, policyVersion)
 			}
 			next := billingPeriod(periodEnd, interval)
 			if _, err := tx.Exec(ctx, `UPDATE subscriptions SET current_period_start=$2,current_period_end=$3,updated_at=now(),version=version+1 WHERE id=$1`, id, periodEnd, next); err != nil {
@@ -292,6 +298,45 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func expireSubscriptionByPolicy(ctx context.Context, tx pgx.Tx, subscriptionID, accountID, productID uuid.UUID, periodEnd time.Time, policy products.BillingPolicy, policyVersion int64) error {
+	if policy.Lifecycle.Expiration == "downgrade_to_default" {
+		var plan transitionPlan
+		err := tx.QueryRow(ctx, `SELECT id,version,name,description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,checkout_enabled
+			FROM plans WHERE product_id=$1 AND active AND selectable AND default_for_product AND billing_model='free'
+			AND effective_from<=now() AND (effective_to IS NULL OR effective_to>now())`, productID).
+			Scan(&plan.ID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor, &plan.Currency,
+				&plan.BillingInterval, &plan.IncludedCredits, &plan.Entitlements, &plan.CheckoutEnabled)
+		if err == nil {
+			eligible, eligibilityErr := freePlanEligible(ctx, tx, accountID, productID, policy.Customer.FreeAllowance)
+			if eligibilityErr != nil {
+				return eligibilityErr
+			}
+			if eligible {
+				transitionID := uuid.New()
+				digest := sha256.Sum256([]byte("expiration:" + subscriptionID.String() + ":" + periodEnd.UTC().Format(time.RFC3339Nano)))
+				if _, err := tx.Exec(ctx, `INSERT INTO subscription_transitions(id,account_id,product_id,subscription_id,target_plan_id,target_plan_version,
+					target_plan_name,target_plan_description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,
+					operation,effective,status,idempotency_key,request_hash,effective_at,billing_policy,billing_policy_version)
+					VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'downgrade','immediate','processing',$15,$16,now(),$17,$18)
+					ON CONFLICT(account_id,product_id,idempotency_key) DO NOTHING`, transitionID, accountID, productID, subscriptionID, plan.ID,
+					plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency, plan.BillingInterval,
+					plan.IncludedCredits, plan.Entitlements, "expiration:"+periodEnd.UTC().Format(time.RFC3339Nano), hex.EncodeToString(digest[:]), policy, policyVersion); err != nil {
+					return err
+				}
+				return applySubscriptionTransition(ctx, tx, transitionID, "")
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE subscriptions SET status='expired',grace_period_end=NULL,updated_at=now(),version=version+1 WHERE id=$1`, subscriptionID); err != nil {
+		return err
+	}
+	return accountEvent(ctx, tx, accountID, "subscription", subscriptionID, "subscription.expired", map[string]any{
+		"subscription_id": subscriptionID, "policy_version": policyVersion, "expiration_policy": policy.Lifecycle.Expiration,
+	})
 }
 
 func (w *Worker) expireCredits(ctx context.Context) error {

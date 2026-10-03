@@ -24,6 +24,7 @@ import (
 	apidocs "github.com/tociva/billmesh/api"
 	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/httpresponse"
+	"github.com/tociva/billmesh/internal/products"
 	"github.com/tociva/billmesh/internal/wallets"
 )
 
@@ -78,6 +79,7 @@ func (a *API) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", a.ready)
 	mux.HandleFunc("POST /v1/payments/webhook", a.paymentWebhook)
+	mux.HandleFunc("GET /v1/public/catalog", a.publicCatalogue)
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/accounts", auth.Require("billing:write", a.createAccount))
 	protected.HandleFunc("GET /v1/accounts/current", auth.Require("billing:read", a.getCurrentAccount))
@@ -92,6 +94,7 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("GET /v1/plans", a.listPlans)
 	protected.HandleFunc("PATCH /v1/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
 	protected.HandleFunc("GET /v1/admin/products", a.requireCatalogueAdmin("product.list", "product", a.listAdminProducts))
+	protected.HandleFunc("GET /v1/admin/product-policy-metadata", a.requireCatalogueAdmin("product.read", "product", a.productPolicyMetadata))
 	protected.HandleFunc("POST /v1/admin/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
 	protected.HandleFunc("GET /v1/admin/products/{id}", a.requireCatalogueAdmin("product.read", "product", a.getAdminProduct))
 	protected.HandleFunc("PATCH /v1/admin/products/{id}", a.requireCatalogueAdmin("product.update", "product", a.updateAdminProduct))
@@ -204,19 +207,49 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	if environment == "" {
 		environment = "production"
 	}
+	policy := products.DefaultBillingPolicy()
+	var productID uuid.UUID
+	var policyVersion, catalogueRevision int64
+	if err = tx.QueryRow(r.Context(), `SELECT p.id,p.billing_policy,p.billing_policy_version,COALESCE(cr.revision,1)
+		FROM products p LEFT JOIN catalogue_revisions cr ON cr.product_id=p.id WHERE p.slug=$1 AND p.active`, in.Application).
+		Scan(&productID, &policy, &policyVersion, &catalogueRevision); err != nil {
+		writeError(w, http.StatusBadRequest, "application does not identify an active billing product")
+		return
+	}
+	if policy.Catalogue.RequiredBeforeAccount && r.Header.Get("If-Match") != catalogueETag(catalogueRevision) {
+		writeError(w, http.StatusPreconditionRequired, "the current catalogue ETag is required by product policy")
+		return
+	}
+	issuer := claims.Issuer
+	subject := claims.Subject
+	switch policy.Customer.Scope {
+	case "organization":
+		issuer = "urn:billmesh:organization:" + in.Application + ":" + environment
+		subject = in.OrganizationID
+	case "external_customer":
+		issuer = "urn:billmesh:external-customer:" + in.Application + ":" + environment
+		subject = strings.TrimSpace(claims.BillingCustomerID)
+		if subject == "" {
+			writeError(w, http.StatusForbidden, "billing_customer_id claim is required by product policy")
+			return
+		}
+	}
+	if issuer == "" {
+		issuer = "unknown"
+	}
+	if subject == "" {
+		writeError(w, http.StatusForbidden, "stable customer identity is required by product policy")
+		return
+	}
 	// Serialize this identity key so a repeated create returns the same account.
 	identityKey := in.Application + ":" + in.OrganizationID + ":" + environment
 	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, identityKey); err != nil {
 		writeDBError(w, err)
 		return
 	}
-	issuer := claims.Issuer
-	if issuer == "" {
-		issuer = "unknown"
-	}
 	var customerID uuid.UUID
 	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_customers(issuer,external_subject)
-		VALUES($1,$2) ON CONFLICT(issuer,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, claims.Subject).Scan(&customerID); err != nil {
+		VALUES($1,$2) ON CONFLICT(issuer,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, subject).Scan(&customerID); err != nil {
 		writeDBError(w, err)
 		return
 	}
@@ -228,6 +261,10 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if _, err = tx.Exec(r.Context(), `UPDATE billing_accounts SET customer_id=COALESCE(customer_id,$2),updated_at=now() WHERE id=$1`, id, customerID); err != nil {
 			writeDBError(w, err)
+			return
+		}
+		if err = ensureProductOnboarding(r.Context(), tx, id, productID, policy, policyVersion); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		if err = tx.Commit(r.Context()); err != nil {
@@ -247,6 +284,10 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id,environment) VALUES($1,$2,$3,$4)`, id, in.Application, in.OrganizationID, environment); err != nil {
 		writeDBError(w, err)
+		return
+	}
+	if err = ensureProductOnboarding(r.Context(), tx, id, productID, policy, policyVersion); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
@@ -606,6 +647,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 func writeError(w http.ResponseWriter, status int, message string) {
 	httpresponse.Error(w, status, message)
+}
+func writeCodedError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]any{"error": message, "code": code})
 }
 func writeNoContent(w http.ResponseWriter) {
 	httpresponse.NoContent(w)

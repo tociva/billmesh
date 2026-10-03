@@ -23,6 +23,8 @@ type productRecord struct {
 	Description              string                     `json:"description"`
 	EntitlementSchema        products.EntitlementSchema `json:"entitlement_schema"`
 	EntitlementSchemaVersion int64                      `json:"entitlement_schema_version"`
+	BillingPolicy            products.BillingPolicy     `json:"billing_policy"`
+	BillingPolicyVersion     int64                      `json:"billing_policy_version"`
 	Active                   bool                       `json:"active"`
 	Version                  int64                      `json:"version"`
 	CreatedAt                time.Time                  `json:"created_at"`
@@ -77,7 +79,8 @@ func productState(value productRecord) map[string]any {
 		"id": value.ID, "slug": value.Slug, "name": value.Name,
 		"description": value.Description, "entitlement_schema": value.EntitlementSchema,
 		"entitlement_schema_version": value.EntitlementSchemaVersion,
-		"active":                     value.Active, "version": value.Version,
+		"billing_policy":             value.BillingPolicy, "billing_policy_version": value.BillingPolicyVersion,
+		"active": value.Active, "version": value.Version,
 	}
 }
 
@@ -164,6 +167,7 @@ func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 		Name              string                     `json:"name"`
 		Description       string                     `json:"description"`
 		EntitlementSchema products.EntitlementSchema `json:"entitlement_schema"`
+		BillingPolicy     *products.BillingPolicy    `json:"billing_policy"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -182,12 +186,21 @@ func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	billingPolicy := products.DefaultBillingPolicy()
+	if in.BillingPolicy != nil {
+		billingPolicy = *in.BillingPolicy
+	}
+	if err := products.ValidateBillingPolicy(billingPolicy); err != nil {
+		writeCodedError(w, http.StatusBadRequest, "invalid_billing_policy", err.Error())
+		return
+	}
 	var created productRecord
 	err := pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(r.Context(), `INSERT INTO products(slug,name,description,entitlement_schema)
-			VALUES($1,$2,$3,$4) RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at`,
-			in.Slug, in.Name, in.Description, in.EntitlementSchema).Scan(&created.ID, &created.Slug, &created.Name, &created.Description,
-			&created.EntitlementSchema, &created.EntitlementSchemaVersion, &created.Active, &created.Version, &created.CreatedAt, &created.UpdatedAt); err != nil {
+		if err := tx.QueryRow(r.Context(), `INSERT INTO products(slug,name,description,entitlement_schema,billing_policy)
+			VALUES($1,$2,$3,$4,$5) RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at`,
+			in.Slug, in.Name, in.Description, in.EntitlementSchema, billingPolicy).Scan(&created.ID, &created.Slug, &created.Name, &created.Description,
+			&created.EntitlementSchema, &created.EntitlementSchemaVersion, &created.BillingPolicy, &created.BillingPolicyVersion,
+			&created.Active, &created.Version, &created.CreatedAt, &created.UpdatedAt); err != nil {
 			return err
 		}
 		return a.writeCatalogueAudit(r.Context(), tx, "product.create", "product", created.ID, nil, productState(created))
@@ -229,7 +242,7 @@ func (a *API) listAdminProducts(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at
+	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at
 		FROM products
 		WHERE ($1='' OR slug ILIKE '%' || $1 || '%' OR name ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%')
 		AND ($2='all' OR ($2='active' AND active) OR ($2 IN ('archived','inactive') AND NOT active))
@@ -242,7 +255,8 @@ func (a *API) listAdminProducts(w http.ResponseWriter, r *http.Request) {
 	items := []productRecord{}
 	for rows.Next() {
 		var item productRecord
-		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion,
+			&item.BillingPolicy, &item.BillingPolicyVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			writeDBError(w, err)
 			return
 		}
@@ -260,8 +274,9 @@ func (a *API) getAdminProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item productRecord
-	err = a.pool.QueryRow(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at FROM products WHERE id=$1`, id).
-		Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
+	err = a.pool.QueryRow(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at FROM products WHERE id=$1`, id).
+		Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion,
+			&item.BillingPolicy, &item.BillingPolicyVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -279,6 +294,7 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		Name              *string                     `json:"name"`
 		Description       *string                     `json:"description"`
 		EntitlementSchema *products.EntitlementSchema `json:"entitlement_schema"`
+		BillingPolicy     *products.BillingPolicy     `json:"billing_policy"`
 		Active            *bool                       `json:"active"`
 		Version           int64                       `json:"version"`
 	}
@@ -289,11 +305,18 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "version is required")
 		return
 	}
+	if in.BillingPolicy != nil {
+		if err := products.ValidateBillingPolicy(*in.BillingPolicy); err != nil {
+			writeCodedError(w, http.StatusBadRequest, "invalid_billing_policy", err.Error())
+			return
+		}
+	}
 	var updated productRecord
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
 		var before productRecord
-		if err := tx.QueryRow(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at FROM products WHERE id=$1 FOR UPDATE`, id).
-			Scan(&before.ID, &before.Slug, &before.Name, &before.Description, &before.EntitlementSchema, &before.EntitlementSchemaVersion, &before.Active, &before.Version, &before.CreatedAt, &before.UpdatedAt); err != nil {
+		if err := tx.QueryRow(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at FROM products WHERE id=$1 FOR UPDATE`, id).
+			Scan(&before.ID, &before.Slug, &before.Name, &before.Description, &before.EntitlementSchema, &before.EntitlementSchemaVersion,
+				&before.BillingPolicy, &before.BillingPolicyVersion, &before.Active, &before.Version, &before.CreatedAt, &before.UpdatedAt); err != nil {
 			return err
 		}
 		if before.Version != in.Version {
@@ -303,6 +326,7 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		description := before.Description
 		active := before.Active
 		entitlementSchema := before.EntitlementSchema
+		billingPolicy := before.BillingPolicy
 		if in.Name != nil {
 			name = strings.TrimSpace(*in.Name)
 		}
@@ -318,13 +342,20 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 				entitlementSchema.Fields = []products.EntitlementField{}
 			}
 		}
+		if in.BillingPolicy != nil {
+			billingPolicy = *in.BillingPolicy
+		}
 		if err := products.ValidateProduct(before.Slug, name, description); err != nil {
 			return catalogueValidationError{err.Error()}
 		}
 		if err := products.ValidateEntitlementSchema(entitlementSchema); err != nil {
 			return catalogueValidationError{err.Error()}
 		}
+		if err := products.ValidateBillingPolicy(billingPolicy); err != nil {
+			return catalogueValidationError{err.Error()}
+		}
 		schemaChanged := !reflect.DeepEqual(entitlementSchema, before.EntitlementSchema)
+		policyChanged := !reflect.DeepEqual(billingPolicy, before.BillingPolicy)
 		if schemaChanged {
 			rows, err := tx.Query(r.Context(), `SELECT entitlements FROM plans WHERE product_id=$1`, id)
 			if err != nil {
@@ -344,14 +375,17 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		if name == before.Name && description == before.Description && active == before.Active && !schemaChanged {
+		if name == before.Name && description == before.Description && active == before.Active && !schemaChanged && !policyChanged {
 			updated = before
 			return nil
 		}
 		if err := tx.QueryRow(r.Context(), `UPDATE products SET name=$2,description=$3,active=$4,entitlement_schema=$5,
-			entitlement_schema_version=entitlement_schema_version+CASE WHEN $6 THEN 1 ELSE 0 END,version=version+1,updated_at=now()
-			WHERE id=$1 RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at`, id, name, description, active, entitlementSchema, schemaChanged).
-			Scan(&updated.ID, &updated.Slug, &updated.Name, &updated.Description, &updated.EntitlementSchema, &updated.EntitlementSchemaVersion, &updated.Active, &updated.Version, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
+			entitlement_schema_version=entitlement_schema_version+CASE WHEN $6 THEN 1 ELSE 0 END,billing_policy=$7,
+			billing_policy_version=billing_policy_version+CASE WHEN $8 THEN 1 ELSE 0 END,version=version+1,updated_at=now()
+			WHERE id=$1 RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at`,
+			id, name, description, active, entitlementSchema, schemaChanged, billingPolicy, policyChanged).
+			Scan(&updated.ID, &updated.Slug, &updated.Name, &updated.Description, &updated.EntitlementSchema, &updated.EntitlementSchemaVersion,
+				&updated.BillingPolicy, &updated.BillingPolicyVersion, &updated.Active, &updated.Version, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
 			return err
 		}
 		return a.writeCatalogueAudit(r.Context(), tx, "product.update", "product", id, productState(before), productState(updated))
@@ -370,6 +404,10 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func (a *API) productPolicyMetadata(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, products.BillingPolicyContract())
 }
 
 func (a *API) listAdminPlans(w http.ResponseWriter, r *http.Request) {

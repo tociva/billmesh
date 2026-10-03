@@ -235,6 +235,8 @@ paths:
       tags: [Accounts]
       summary: Create or return a billing account for an identity
       x-required-permissions: [billing:write]
+      parameters:
+        - { $ref: "#/components/parameters/IfMatch" }
       requestBody: { $ref: "#/components/requestBodies/CreateAccount" }
       responses:
         "200": { $ref: "#/components/responses/Account" }
@@ -353,6 +355,28 @@ paths:
               schema: { $ref: "#/components/schemas/Catalogue" }
         "304": { $ref: "#/components/responses/NotModified" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/public/catalog:
+    get:
+      operationId: getPublicCatalogue
+      tags: [Catalogue]
+      summary: Get a product catalogue whose billing policy permits public access
+      security: []
+      parameters:
+        - name: product
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+        - { $ref: "#/components/parameters/IfNoneMatch" }
+      responses:
+        "200":
+          description: Public versioned product catalogue.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Catalogue" }
+        "304": { $ref: "#/components/responses/NotModified" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/plans:
     get:
       operationId: listPlans
@@ -434,6 +458,19 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Product" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/product-policy-metadata:
+    get:
+      operationId: getProductPolicyMetadata
+      tags: [Administration, Catalogue]
+      summary: Get product billing-policy defaults, options, and constraints
+      x-required-permissions: [billing:admin]
+      responses:
+        "200":
+          description: Billing-policy form metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingPolicyMetadata" }
         default: { $ref: "#/components/responses/Error" }
   /v1/admin/products/{id}:
     parameters:
@@ -1407,6 +1444,7 @@ components:
               name: { type: string, minLength: 1, maxLength: 120 }
               description: { type: string, maxLength: 2000 }
               entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
+              billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
     UpdateProduct:
       required: true
       content:
@@ -1419,6 +1457,7 @@ components:
               name: { type: string, minLength: 1, maxLength: 120 }
               description: { type: string, maxLength: 2000 }
               entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
+              billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
               active: { type: boolean }
               version: { type: integer, format: int64, minimum: 1 }
     CreatePlan:
@@ -1598,6 +1637,8 @@ components:
             properties:
               plan_id: { $ref: "#/components/schemas/UUID" }
               effective: { type: string, enum: [immediate, period_end] }
+              success_url: { type: string, format: uri }
+              cancel_url: { type: string, format: uri }
     Cancellation:
       required: true
       content:
@@ -1606,7 +1647,7 @@ components:
             type: object
             additionalProperties: false
             properties:
-              effective: { type: string, enum: [immediate, period_end], default: period_end }
+              effective: { type: string, enum: [immediate, period_end, withdraw] }
     CreateWallet:
       required: true
       content:
@@ -1762,6 +1803,7 @@ components:
       required: [error]
       properties:
         error: { type: string }
+        code: { type: string, description: Stable machine-readable reason code when available. }
     IDOnly:
       type: object
       required: [id]
@@ -1841,9 +1883,106 @@ components:
           type: array
           maxItems: 100
           items: { $ref: "#/components/schemas/EntitlementField" }
+    BillingPolicy:
+      type: object
+      additionalProperties: false
+      required: [schema_version, customer, onboarding, catalogue, lifecycle, projection, checkout]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        customer:
+          type: object
+          additionalProperties: false
+          required: [scope, free_allowance, ownership_change, ownership_transfer, ineligible_owner_action]
+          properties:
+            scope: { type: string, enum: [identity, organization, external_customer] }
+            free_allowance: { type: integer, minimum: 0, maximum: 1000000 }
+            ownership_change: { type: string, enum: [retain, reevaluate] }
+            ownership_transfer: { type: string, enum: [unsupported, retain, preauthorized_recheck] }
+            ineligible_owner_action: { type: string, enum: [reject, require_paid_checkout] }
+        onboarding:
+          type: object
+          additionalProperties: false
+          required: [allow_without_subscription, initial_plan, ineligible_action, deletion_retention]
+          properties:
+            allow_without_subscription: { type: boolean }
+            initial_plan: { type: string, enum: [automatic_default, explicit_transition] }
+            ineligible_action: { type: string, enum: [reject, restricted, require_paid_checkout] }
+            deletion_retention: { type: string, enum: [retain, anonymize] }
+        catalogue:
+          type: object
+          additionalProperties: false
+          required: [access, required_before_account, presentation_fields, trial_enabled, trial_days, trial_conversion]
+          properties:
+            access: { type: string, enum: [public, application_token] }
+            required_before_account: { type: boolean }
+            presentation_fields:
+              type: array
+              uniqueItems: true
+              items: { type: string, enum: [description, price, entitlements, availability, effective_dates] }
+            trial_enabled: { type: boolean }
+            trial_days: { type: integer, minimum: 0, maximum: 3650 }
+            trial_conversion: { type: string, enum: [expire, require_checkout, automatic_mandate] }
+        lifecycle:
+          type: object
+          additionalProperties: false
+          required: [free_to_paid, paid_to_paid, downgrade, cancellation_default, allow_immediate_cancel, immediate_cancel_refund, allow_cancellation_withdraw, reactivation, over_limit, renewal, grace_period_days, dunning, expiration, refund_entitlements, chargeback_entitlements]
+          properties:
+            free_to_paid: { type: string, const: immediate_after_capture }
+            paid_to_paid: { type: string, enum: [checkout, mandate_proration, period_end] }
+            downgrade: { type: string, const: period_end }
+            cancellation_default: { type: string, enum: [period_end, immediate] }
+            allow_immediate_cancel: { type: boolean }
+            immediate_cancel_refund: { type: string, enum: [none, prorated, full] }
+            allow_cancellation_withdraw: { type: boolean }
+            reactivation: { type: string, enum: [resume, new_transition] }
+            over_limit: { type: string, enum: [block_new, grace_period, reject_transition] }
+            renewal: { type: string, enum: [provider_event, manual] }
+            grace_period_days: { type: integer, minimum: 0, maximum: 365 }
+            dunning: { type: string, enum: [none, grace_period] }
+            expiration: { type: string, enum: [cancel, downgrade_to_default] }
+            refund_entitlements: { type: string, enum: [retain, revoke] }
+            chargeback_entitlements: { type: string, enum: [retain, revoke] }
+        projection:
+          type: object
+          additionalProperties: false
+          required: [fresh_seconds, degraded_seconds, fail_closed_operations, refresh_seconds, reconciliation_seconds]
+          properties:
+            fresh_seconds: { type: integer, minimum: 0, maximum: 2592000 }
+            degraded_seconds: { type: integer, minimum: 0, maximum: 2592000 }
+            fail_closed_operations:
+              type: array
+              uniqueItems: true
+              items: { type: string, enum: [account_create, subscription_change, credit_purchase, resource_create, limit_increase] }
+            refresh_seconds: { type: integer, minimum: 1, maximum: 2592000 }
+            reconciliation_seconds: { type: integer, minimum: 1, maximum: 2592000 }
+        checkout:
+          type: object
+          additionalProperties: false
+          required: [allowed_redirect_origins, presentation, recurring_mandate, confirmation]
+          properties:
+            allowed_redirect_origins:
+              type: array
+              maxItems: 50
+              uniqueItems: true
+              items: { type: string, format: uri }
+            presentation: { type: string, enum: [inline, modal, provider_hosted] }
+            recurring_mandate: { type: boolean }
+            confirmation: { type: string, enum: [webhook, poll_and_webhook] }
+    BillingPolicyMetadata:
+      type: object
+      required: [schema_version, defaults, options, constraints]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        defaults: { $ref: "#/components/schemas/BillingPolicy" }
+        options:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        constraints: { type: object, additionalProperties: true }
     Product:
       type: object
-      required: [id, slug, name, description, entitlement_schema, entitlement_schema_version, active, version, created_at, updated_at]
+      required: [id, slug, name, description, entitlement_schema, entitlement_schema_version, billing_policy, billing_policy_version, active, version, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         slug: { type: string }
@@ -1851,6 +1990,8 @@ components:
         description: { type: string }
         entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
         entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
+        billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
+        billing_policy_version: { type: integer, format: int64, minimum: 1 }
         active: { type: boolean }
         version: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
@@ -1915,12 +2056,14 @@ components:
       properties:
         product:
           type: object
-          required: [id, slug, name, description]
+          required: [id, slug, name, description, billing_policy, billing_policy_version]
           properties:
             id: { $ref: "#/components/schemas/UUID" }
             slug: { type: string }
             name: { type: string }
             description: { type: string }
+            billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
+            billing_policy_version: { type: integer, format: int64, minimum: 1 }
         revision: { type: integer, format: int64, minimum: 1 }
         plans:
           type: array
@@ -1940,7 +2083,7 @@ components:
         cancel_at_period_end: { type: boolean }
     SubscriptionTransition:
       type: object
-      required: [id, plan_id, plan_name, operation, effective, status, revision, snapshot_url]
+      required: [id, plan_id, plan_name, operation, effective, status, billing_policy_version, revision, snapshot_url]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         subscription_id: { type: [string, "null"], format: uuid }
@@ -1950,6 +2093,7 @@ components:
         effective: { type: string, enum: [immediate, period_end] }
         effective_at: { type: [string, "null"], format: date-time }
         status: { type: string, enum: [requires_payment, processing, completed, failed, expired, cancelled] }
+        billing_policy_version: { type: integer, format: int64, minimum: 1 }
         failure_code: { type: [string, "null"] }
         payment_id: { type: [string, "null"], format: uuid }
         revision: { type: integer, format: int64, minimum: 1 }
@@ -1963,6 +2107,8 @@ components:
             amount_minor: { type: integer, format: int64, minimum: 0 }
             currency: { type: string }
             expires_at: { type: [string, "null"], format: date-time }
+            success_url: { type: [string, "null"], format: uri }
+            cancel_url: { type: [string, "null"], format: uri }
     CancellationResult:
       type: object
       required: [id, status, cancel_at_period_end, revision, duplicate]
@@ -1975,13 +2121,20 @@ components:
         duplicate: { type: boolean }
     BillingSnapshot:
       type: object
-      required: [revision, generated_at, effective_at, verified_at, expires_at, account, entitlements]
+      required: [revision, generated_at, effective_at, verified_at, expires_at, product_policy, account, entitlements]
       properties:
         revision: { type: integer, format: int64, minimum: 1 }
         generated_at: { type: string, format: date-time }
         effective_at: { type: string, format: date-time }
         verified_at: { type: string, format: date-time }
         expires_at: { type: string, format: date-time }
+        degraded_until: { type: [string, "null"], format: date-time }
+        product_policy:
+          type: object
+          required: [version, policy]
+          properties:
+            version: { type: integer, format: int64, minimum: 1 }
+            policy: { $ref: "#/components/schemas/BillingPolicy" }
         account:
           type: object
           required: [id, name]

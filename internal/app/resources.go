@@ -144,7 +144,7 @@ func (a *API) linkCurrentAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,active,version,created_at,updated_at FROM products WHERE active ORDER BY slug,id`)
+	rows, err := a.pool.Query(r.Context(), `SELECT id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at FROM products WHERE active ORDER BY slug,id`)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -153,7 +153,8 @@ func (a *API) listProducts(w http.ResponseWriter, r *http.Request) {
 	items := []productRecord{}
 	for rows.Next() {
 		var item productRecord
-		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Slug, &item.Name, &item.Description, &item.EntitlementSchema, &item.EntitlementSchemaVersion,
+			&item.BillingPolicy, &item.BillingPolicyVersion, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			writeDBError(w, err)
 			return
 		}
@@ -571,9 +572,11 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 	var planVersion int64
 	var currency, interval, planName, planDescription, billingModel string
 	var entitlements map[string]any
+	var billingPolicy products.BillingPolicy
+	var billingPolicyVersion int64
 	var active, productActive, selectable bool
 	query := `SELECT p.id,p.product_id,p.price_minor,p.included_credits,p.currency,p.billing_interval,p.entitlements,p.active,pr.active,p.selectable,
-		p.version,p.name,p.description,p.billing_model FROM plans p JOIN products pr ON pr.id=p.product_id WHERE `
+		p.version,p.name,p.description,p.billing_model,pr.billing_policy,pr.billing_policy_version FROM plans p JOIN products pr ON pr.id=p.product_id WHERE `
 	args := []any{}
 	if in.PlanID != uuid.Nil {
 		query += `p.id=$1`
@@ -583,7 +586,7 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 		args = []any{in.Plan, in.Product}
 	}
 	if err := a.pool.QueryRow(r.Context(), query, args...).Scan(&planID, &productID, &price, &credits, &currency, &interval, &entitlements, &active, &productActive,
-		&selectable, &planVersion, &planName, &planDescription, &billingModel); err != nil {
+		&selectable, &planVersion, &planName, &planDescription, &billingModel, &billingPolicy, &billingPolicyVersion); err != nil {
 		writeDBError(w, err)
 		return
 	}
@@ -601,18 +604,12 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if billingModel == "free" {
-		var freeAlreadyUsed bool
-		if err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(
-			SELECT 1 FROM billing_accounts current
-			JOIN billing_accounts other ON other.customer_id=current.customer_id AND other.id<>current.id
-			JOIN subscriptions s ON s.account_id=other.id
-			WHERE current.id=$1 AND current.customer_id IS NOT NULL AND s.billing_model='free'
-			AND s.status IN ('pending','active','past_due')
-		)`, in.AccountID).Scan(&freeAlreadyUsed); err != nil {
+		eligible, err := freePlanEligible(r.Context(), a.pool, in.AccountID, productID, billingPolicy.Customer.FreeAllowance)
+		if err != nil {
 			writeDBError(w, err)
 			return
 		}
-		if freeAlreadyUsed {
+		if !eligible {
 			writeError(w, http.StatusConflict, "free plan eligibility has already been used")
 			return
 		}
@@ -649,7 +646,7 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 					return err
 				}
 			}
-			eligible, err := freePlanEligible(r.Context(), tx, in.AccountID)
+			eligible, err := freePlanEligible(r.Context(), tx, in.AccountID, productID, billingPolicy.Customer.FreeAllowance)
 			if err != nil {
 				return err
 			}
@@ -658,9 +655,9 @@ func (a *API) createSubscription(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := tx.QueryRow(r.Context(), `INSERT INTO subscriptions(account_id,plan_id,product_id,status,current_period_start,current_period_end,price_minor,currency,billing_interval,included_credits,entitlements,
-			plan_version,plan_name,plan_description,billing_model)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, in.AccountID, planID, productID, status, now,
-			billingPeriod(now, interval), price, currency, interval, credits, entitlements, planVersion, planName, planDescription, billingModel).Scan(&subscriptionID); err != nil {
+			plan_version,plan_name,plan_description,billing_model,billing_policy,billing_policy_version)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`, in.AccountID, planID, productID, status, now,
+			billingPeriod(now, interval), price, currency, interval, credits, entitlements, planVersion, planName, planDescription, billingModel, billingPolicy, billingPolicyVersion).Scan(&subscriptionID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(r.Context(), `INSERT INTO subscription_history(subscription_id,status,plan_id,operation_ref) VALUES($1,$2,$3,$4)`, subscriptionID, status, planID, "subscription:create:"+subscriptionID.String()); err != nil {

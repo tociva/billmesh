@@ -21,12 +21,13 @@ import (
 )
 
 type Claims struct {
-	Permissions jwt.ClaimStrings `json:"permissions"`
-	Scope       jwt.ClaimStrings `json:"scope"`
-	Scopes      jwt.ClaimStrings `json:"scp"`
-	OrgID       string           `json:"org_id"`
-	App         string           `json:"app"`
-	Environment string           `json:"environment"`
+	Permissions       jwt.ClaimStrings `json:"permissions"`
+	Scope             jwt.ClaimStrings `json:"scope"`
+	Scopes            jwt.ClaimStrings `json:"scp"`
+	OrgID             string           `json:"org_id"`
+	App               string           `json:"app"`
+	Environment       string           `json:"environment"`
+	BillingCustomerID string           `json:"billing_customer_id"`
 	jwt.RegisteredClaims
 }
 

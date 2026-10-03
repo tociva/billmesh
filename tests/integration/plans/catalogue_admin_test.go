@@ -96,7 +96,7 @@ func TestSubscriptionCommercialSnapshotColumnsExistAndPreserveJSON(t *testing.T)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT 125::bigint, COALESCE(('{"reports":true}'::jsonb->>'reports')::boolean,false)`).Scan(&includedCredits, &reports))
 	require.Equal(t, int64(125), includedCredits)
 	require.True(t, reports)
-	for _, column := range []string{"included_credits", "entitlements"} {
+	for _, column := range []string{"included_credits", "entitlements", "billing_policy", "billing_policy_version"} {
 		var exists bool
 		require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(
 			SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='subscriptions' AND column_name=$1

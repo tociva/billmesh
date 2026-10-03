@@ -13,7 +13,10 @@ import (
 
 type catalogueResponse struct {
 	Revision int64 `json:"revision"`
-	Plans    []struct {
+	Product  struct {
+		BillingPolicyVersion int64 `json:"billing_policy_version"`
+	} `json:"product"`
+	Plans []struct {
 		ID           string `json:"id"`
 		BillingModel string `json:"billing_model"`
 		PriceMinor   int64  `json:"price_minor"`
@@ -22,10 +25,11 @@ type catalogueResponse struct {
 }
 
 type transitionResponse struct {
-	ID             string `json:"id"`
-	SubscriptionID string `json:"subscription_id"`
-	Status         string `json:"status"`
-	Checkout       *struct {
+	ID                   string `json:"id"`
+	SubscriptionID       string `json:"subscription_id"`
+	Status               string `json:"status"`
+	BillingPolicyVersion int64  `json:"billing_policy_version"`
+	Checkout             *struct {
 		OrderID     string `json:"order_id"`
 		AmountMinor int64  `json:"amount_minor"`
 		Currency    string `json:"currency"`
@@ -33,16 +37,20 @@ type transitionResponse struct {
 }
 
 type snapshotResponse struct {
-	Revision          int64 `json:"revision"`
+	Revision      int64 `json:"revision"`
+	ProductPolicy struct {
+		Version int64 `json:"version"`
+	} `json:"product_policy"`
 	PendingTransition *struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 	} `json:"pending_transition"`
 	Subscription *struct {
-		ID                string `json:"id"`
-		Status            string `json:"status"`
-		CancelAtPeriodEnd bool   `json:"cancel_at_period_end"`
-		EffectivePlan     struct {
+		ID                   string `json:"id"`
+		Status               string `json:"status"`
+		CancelAtPeriodEnd    bool   `json:"cancel_at_period_end"`
+		BillingPolicyVersion int64  `json:"billing_policy_version"`
+		EffectivePlan        struct {
 			ID           string `json:"id"`
 			BillingModel string `json:"billing_model"`
 		} `json:"effective_plan"`
@@ -68,6 +76,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 		t.Fatalf("catalogue exposed a plan slug instead of an opaque plan id: %s", catalogueRaw)
 	}
 	catalogue := testkit.Decode[catalogueResponse](t, catalogueRaw)
+	if catalogue.Product.BillingPolicyVersion < 1 {
+		t.Fatalf("catalogue omitted the product billing policy version: %s", catalogueRaw)
+	}
 	var paidPlan string
 	for _, plan := range catalogue.Plans {
 		if plan.BillingModel == "paid" && plan.PriceMinor > 0 {
@@ -94,6 +105,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	if transition.Status != "requires_payment" || transition.Checkout == nil || transition.Checkout.OrderID == "" {
 		t.Fatalf("paid transition did not create a server-priced checkout: %s", transitionRaw)
 	}
+	if transition.BillingPolicyVersion != catalogue.Product.BillingPolicyVersion {
+		t.Fatalf("transition policy version = %d, catalogue policy version = %d", transition.BillingPolicyVersion, catalogue.Product.BillingPolicyVersion)
+	}
 
 	status, replayRaw, _ := h.JSONWithHeaders(t, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": paidPlan}, token, headers)
 	if status != http.StatusOK || testkit.Decode[transitionResponse](t, replayRaw).ID != transition.ID {
@@ -107,6 +121,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	snapshot := testkit.Decode[snapshotResponse](t, snapshotRaw)
 	if snapshot.Subscription != nil || snapshot.PendingTransition == nil || snapshot.PendingTransition.ID != transition.ID {
 		t.Fatalf("snapshot did not expose the pending transition without granting a subscription: %s", snapshotRaw)
+	}
+	if snapshot.ProductPolicy.Version != catalogue.Product.BillingPolicyVersion {
+		t.Fatalf("snapshot policy version = %d, want %d", snapshot.ProductPolicy.Version, catalogue.Product.BillingPolicyVersion)
 	}
 	oldETag := snapshotHeaders.Get("ETag")
 	status, _, _ = h.JSONWithHeaders(t, http.MethodGet, "/v1/billing-snapshot?product=daybook", nil, token, http.Header{"If-None-Match": []string{oldETag}})
@@ -134,6 +151,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	active := testkit.Decode[snapshotResponse](t, activeRaw)
 	if active.Subscription == nil || active.Subscription.Status != "active" || active.Subscription.EffectivePlan.BillingModel != "paid" {
 		t.Fatalf("snapshot does not contain the verified paid subscription: %s", activeRaw)
+	}
+	if active.Subscription.BillingPolicyVersion != catalogue.Product.BillingPolicyVersion {
+		t.Fatalf("subscription policy version = %d, want %d", active.Subscription.BillingPolicyVersion, catalogue.Product.BillingPolicyVersion)
 	}
 
 	badReq, err := http.NewRequest(http.MethodPost, h.BaseURL+"/v1/subscriptions/current/cancellation", strings.NewReader(`{"effective":`))

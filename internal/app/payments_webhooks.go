@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/tociva/billmesh/internal/auth"
+	"github.com/tociva/billmesh/internal/products"
 )
 
 var errConflictingProviderEvent = errors.New("conflicting provider event")
@@ -390,10 +391,11 @@ func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, orderID, provide
 	if _, err := tx.Exec(ctx, `UPDATE payments SET status='captured',provider_payment_id=$2,updated_at=now() WHERE id=$1`, paymentID, providerPaymentID); err != nil {
 		return err
 	}
-	var transitionStatus string
-	var checkoutExpires *time.Time
-	if err := tx.QueryRow(ctx, `SELECT status,checkout_expires_at FROM subscription_transitions WHERE id=$1 FOR UPDATE`, transitionID).
-		Scan(&transitionStatus, &checkoutExpires); err != nil {
+	var transitionStatus, effective string
+	var checkoutExpires, effectiveAt *time.Time
+	var existingSubscriptionID *uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT status,checkout_expires_at,effective,effective_at,subscription_id FROM subscription_transitions WHERE id=$1 FOR UPDATE`, transitionID).
+		Scan(&transitionStatus, &checkoutExpires, &effective, &effectiveAt, &existingSubscriptionID); err != nil {
 		return err
 	}
 	if transitionStatus != "requires_payment" && transitionStatus != "processing" {
@@ -407,7 +409,15 @@ func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, orderID, provide
 		return accountEvent(ctx, tx, accountID, "payment", paymentID, "payment.late_capture",
 			map[string]any{"payment_id": paymentID, "transition_id": transitionID, "reason": "checkout_expired"})
 	}
-	if err := applySubscriptionTransition(ctx, tx, transitionID, providerPaymentID); err != nil {
+	deferred := effective == "period_end" && effectiveAt != nil && effectiveAt.After(time.Now().UTC())
+	if deferred {
+		if existingSubscriptionID == nil {
+			return errors.New("a deferred paid transition requires an existing subscription")
+		}
+		if _, err := tx.Exec(ctx, `UPDATE subscription_transitions SET status='processing',failure_code=NULL,updated_at=now() WHERE id=$1`, transitionID); err != nil {
+			return err
+		}
+	} else if err := applySubscriptionTransition(ctx, tx, transitionID, providerPaymentID); err != nil {
 		return err
 	}
 	var subscriptionID uuid.UUID
@@ -422,7 +432,7 @@ func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, orderID, provide
 		return err
 	}
 	return accountEvent(ctx, tx, accountID, "payment", paymentID, "payment.succeeded",
-		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "subscription_id": subscriptionID})
+		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "subscription_id": subscriptionID, "deferred": deferred})
 }
 
 func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
@@ -432,10 +442,12 @@ func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID
 	var paymentID, accountID, transitionID, subscriptionID, productID uuid.UUID
 	var amount int64
 	var currency, status string
-	if err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.transition_id,t.subscription_id,t.product_id,p.amount_minor,p.currency,p.status
+	var policy products.BillingPolicy
+	if err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.transition_id,t.subscription_id,t.product_id,p.amount_minor,p.currency,p.status,s.billing_policy
 		FROM payments p JOIN subscription_transitions t ON t.id=p.transition_id
+		JOIN subscriptions s ON s.id=t.subscription_id
 		WHERE p.provider='razorpay' AND p.provider_payment_id=$1 FOR UPDATE OF p,t`, providerPaymentID).
-		Scan(&paymentID, &accountID, &transitionID, &subscriptionID, &productID, &amount, &currency, &status); err != nil {
+		Scan(&paymentID, &accountID, &transitionID, &subscriptionID, &productID, &amount, &currency, &status, &policy); err != nil {
 		return err
 	}
 	if status != "captured" && status != "refunded" {
@@ -456,7 +468,7 @@ func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID
 		return err
 	}
 	fullyRefunded := refunded+refundAmount == amount
-	if fullyRefunded {
+	if fullyRefunded && policy.Lifecycle.RefundEntitlements == "revoke" {
 		var walletID, grantID uuid.UUID
 		var remaining int64
 		err := tx.QueryRow(ctx, `SELECT w.id,g.id,g.remaining FROM wallets w JOIN credit_grants g ON g.wallet_id=w.id
@@ -485,6 +497,8 @@ func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID
 			updated_at=now(),version=version+1 WHERE id=$1`, subscriptionID); err != nil {
 			return err
 		}
+	}
+	if fullyRefunded {
 		if _, err := tx.Exec(ctx, `UPDATE payments SET status='refunded',updated_at=now() WHERE id=$1`, paymentID); err != nil {
 			return err
 		}
@@ -495,7 +509,8 @@ func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID
 		return err
 	}
 	return accountEvent(ctx, tx, accountID, "subscription", subscriptionID, "payment.refunded",
-		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "refund_id": refundID, "amount_minor": refundAmount, "full": fullyRefunded})
+		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "refund_id": refundID, "amount_minor": refundAmount,
+			"full": fullyRefunded, "entitlement_policy": policy.Lifecycle.RefundEntitlements})
 }
 
 func (a *API) listPayments(w http.ResponseWriter, r *http.Request) {

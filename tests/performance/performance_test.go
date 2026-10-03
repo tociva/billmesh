@@ -165,14 +165,15 @@ func benchmarkSSEConnections(b *testing.B, f *fixture, slow bool) {
 	b.ResetTimer()
 	var wg sync.WaitGroup
 	errCh := make(chan error, count)
-	for range count {
+	for i := range count {
+		token := f.tokens[i%len(f.tokens)]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
 			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, f.base+"/v1/events", nil)
-			req.Header.Set("Authorization", "Bearer "+f.token)
+			req.Header.Set("Authorization", "Bearer "+token)
 			resp, err := f.client.Do(req)
 			if err != nil {
 				errCh <- err
