@@ -98,11 +98,6 @@ CREATE TABLE threshold_notifications (
 CREATE INDEX usage_events_filter_idx ON usage_events(wallet_id, meter, occurred_at);
 CREATE INDEX subscriptions_account_status_idx ON subscriptions(account_id, status);
 
-INSERT INTO products(slug, name) VALUES
-  ('daybook', 'Daybook'),
-  ('taskmesh', 'Taskmesh')
-ON CONFLICT(slug) DO NOTHING;
-
 -- +goose Down
 DROP INDEX subscriptions_account_status_idx;
 DROP INDEX usage_events_filter_idx;
