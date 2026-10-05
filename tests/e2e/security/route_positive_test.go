@@ -16,7 +16,7 @@ func TestSecurityRemainingProtectedRoutesHaveOwningClientSuccess(t *testing.T) {
 	token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
 	account := testkit.CreateFixtureAccount(t, h, org, token)
 	wallet := testkit.CreateFundedWallet(t, h, account, token)
-	subscription := testkit.CreateFixtureSubscription(t, h, account, token)
+	testkit.CreateFixtureSubscription(t, h, account, token)
 
 	h.RequireStatus(t, http.StatusNoContent, http.MethodGet, "/v1/entitlements/check?feature=workflow_execution", nil, token)
 	ledger := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/wallets/"+wallet+"/ledger", nil, token)
@@ -33,17 +33,8 @@ func TestSecurityRemainingProtectedRoutesHaveOwningClientSuccess(t *testing.T) {
 		t.Fatalf("reservation release returned the wrong resource: %s", released)
 	}
 
-	renewed := h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/"+subscription+"/renew", map[string]any{"operation_ref": testkit.Unique("route-renew")}, token)
-	if !strings.Contains(string(renewed), subscription) {
-		t.Fatalf("subscription renewal returned the wrong resource: %s", renewed)
-	}
-	changed := h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{"plan": "daybook-paid", "payment_status": "verified"}, token)
-	if !strings.Contains(string(changed), subscription) {
-		t.Fatalf("subscription plan change returned the wrong resource: %s", changed)
-	}
-	h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, token)
-	reactivated := h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/"+subscription+"/reactivate", nil, token)
-	if !strings.Contains(string(reactivated), `"status":"active"`) {
-		t.Fatalf("reactivation did not restore active status: %s", reactivated)
+	snapshot := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, token)
+	if !strings.Contains(string(snapshot), `"status":"active"`) {
+		t.Fatalf("billing snapshot omitted the active subscription: %s", snapshot)
 	}
 }

@@ -76,14 +76,14 @@ func newFixture(b *testing.B) *fixture {
 	f := &fixture{base: base, mock: mock, database: database, client: &http.Client{Transport: transport, Timeout: 10 * time.Second}}
 	b.Cleanup(transport.CloseIdleConnections)
 	f.token = f.issueToken(b, "performance-0")
-	f.account = f.create(b, http.MethodPost, "/v1/accounts", map[string]any{"name": "Performance Account", "external_ref": f.unique("account"), "application": "daybook", "organization_id": "performance-0"})
+	f.account = f.create(b, http.MethodPost, "/v1/accounts", map[string]any{"name": "Performance Account", "external_ref": f.unique("account")})
 	product := f.productID(b, "daybook")
 	for i := range 8 {
 		account := f.account
 		if i > 0 {
 			org := fmt.Sprintf("performance-%d", i)
 			f.token = f.issueToken(b, org)
-			account = f.create(b, http.MethodPost, "/v1/accounts", map[string]any{"name": fmt.Sprintf("Performance Account %d", i+1), "external_ref": f.unique("account"), "application": "daybook", "organization_id": org})
+			account = f.create(b, http.MethodPost, "/v1/accounts", map[string]any{"name": fmt.Sprintf("Performance Account %d", i+1), "external_ref": f.unique("account")})
 		}
 		wallet := f.create(b, http.MethodPost, "/v1/wallets", map[string]any{"account_id": account, "product_id": product})
 		f.require(b, http.StatusOK, http.MethodPost, "/v1/wallets/"+wallet+"/grants", map[string]any{"source": "performance", "operation_ref": f.unique("grant"), "amount": int64(1_000_000_000)})
@@ -203,7 +203,7 @@ func benchmarkSlowWebhookIsolation(b *testing.B, f *fixture) {
 	b.Cleanup(func() {
 		_ = f.expectMock(http.StatusNoContent, "/test/receiver-delay", map[string]any{"milliseconds": 0})
 	})
-	f.require(b, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": "https://mock-external:8090/receivers/daybook", "secret": "performance-secret"})
+	f.require(b, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": "https://mock-external:8090/receivers/daybook", "secret": "performance-secret-0123456789abcdef"})
 	benchmarkRequests(b, false, func() error {
 		if err := f.expect(http.StatusOK, http.MethodPost, "/v1/wallets/"+f.wallets[0]+"/grants", map[string]any{"source": "performance", "operation_ref": f.unique("webhook"), "amount": 1}); err != nil {
 			return err
@@ -280,7 +280,14 @@ func benchmarkRequests(b *testing.B, parallel bool, operation func() error) {
 }
 
 func (f *fixture) issueToken(b *testing.B, org string) string {
-	raw, _ := json.Marshal(map[string]any{"org_id": org, "app": "daybook", "permissions": []string{"billing:read", "billing:write", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"}})
+	raw, _ := json.Marshal(map[string]any{
+		"sub":         "performance:" + org,
+		"org_id":      org,
+		"app":         "daybook",
+		"environment": "production",
+		"actor_type":  "user",
+		"permissions": []string{"billing:read", "billing:write", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"},
+	})
 	resp, err := f.client.Post(f.mock+"/test/token", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		b.Fatal(err)
@@ -296,21 +303,23 @@ func (f *fixture) issueToken(b *testing.B, org string) string {
 }
 
 func (f *fixture) productID(b *testing.B, slug string) string {
-	status, raw, err := f.request(http.MethodGet, "/v1/products", nil)
+	status, raw, err := f.request(http.MethodGet, "/v1/catalog?product="+slug, nil)
 	if err != nil || status != http.StatusOK {
-		b.Fatalf("list products: status=%d err=%v", status, err)
+		b.Fatalf("get product catalogue: status=%d err=%v body=%s", status, err, raw)
 	}
-	var products []struct{ ID, Slug string }
-	if json.Unmarshal(raw, &products) != nil {
-		b.Fatal("decode products")
+	var catalogue struct {
+		Product struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"product"`
 	}
-	for _, product := range products {
-		if product.Slug == slug {
-			return product.ID
-		}
+	if err := json.Unmarshal(raw, &catalogue); err != nil {
+		b.Fatalf("decode product catalogue: %v", err)
 	}
-	b.Fatalf("product %s not found", slug)
-	return ""
+	if catalogue.Product.ID == "" || catalogue.Product.Slug != slug {
+		b.Fatalf("product %s not found in catalogue: %s", slug, raw)
+	}
+	return catalogue.Product.ID
 }
 
 func (f *fixture) create(b *testing.B, method, path string, body any) string {

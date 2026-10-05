@@ -11,6 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,10 +25,13 @@ import (
 )
 
 type Worker struct {
-	pool     *pgxpool.Pool
-	client   *http.Client
-	interval time.Duration
-	log      *slog.Logger
+	pool            *pgxpool.Pool
+	client          *http.Client
+	interval        time.Duration
+	log             *slog.Logger
+	providerBaseURL string
+	providerKey     string
+	providerSecret  string
 }
 
 func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, log *slog.Logger) *Worker {
@@ -35,7 +41,9 @@ func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, 
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Worker{pool: pool, client: client, interval: interval, log: log}
+	return &Worker{pool: pool, client: client, interval: interval, log: log,
+		providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"),
+		providerKey:     strings.TrimSpace(os.Getenv("RAZORPAY_KEY_ID")), providerSecret: strings.TrimSpace(os.Getenv("RAZORPAY_KEY_SECRET"))}
 }
 func (w *Worker) Run(ctx context.Context) error {
 	ticker := time.NewTicker(w.interval)
@@ -52,6 +60,13 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 func (w *Worker) process(ctx context.Context) error {
+	if _, err := w.pool.Exec(ctx, `UPDATE account_ownership_transfers SET status='expired',updated_at=now()
+		WHERE status IN ('authorized','requires_paid_transition') AND expires_at<=now()`); err != nil {
+		return err
+	}
+	if err := w.reconcileProviderPayments(ctx); err != nil {
+		w.log.Error("provider payment reconciliation", "error", err)
+	}
 	if err := w.processSubscriptionTransitions(ctx); err != nil {
 		return err
 	}
@@ -126,12 +141,17 @@ func (w *Worker) process(ctx context.Context) error {
 			}
 			body := j.payload
 			if j.apiVersion == "2" {
-				body, err = json.Marshal(map[string]any{
+				var marshalErr error
+				body, marshalErr = json.Marshal(map[string]any{
 					"specversion": "1.0", "schema_version": "2", "id": j.eventID, "type": j.event,
 					"occurred_at": j.occurredAt, "account_id": j.accountID, "product_id": j.productID,
 					"revision": j.revision, "aggregate": map[string]any{"type": j.aggregateType, "id": j.aggregateID},
-					"data": json.RawMessage(j.payload),
+					"snapshot_url": "/v1/billing-snapshot",
+					"data":         json.RawMessage(j.payload),
 				})
+				if marshalErr != nil {
+					err = marshalErr
+				}
 			}
 			var req *http.Request
 			if err == nil {
@@ -177,6 +197,9 @@ func (w *Worker) process(ctx context.Context) error {
 			} else {
 				delay := time.Duration(1<<min(j.attempts, 8)) * time.Second
 				_, err = tx.Exec(ctx, `UPDATE webhook_deliveries SET status='failed',attempts=attempts+1,next_attempt_at=now()+$2::interval,last_error=$3 WHERE id=$1`, j.id, delay.String(), err.Error())
+				if j.attempts+1 >= 8 {
+					w.log.Error("webhook delivery exhausted", "delivery_id", j.id, "event_id", j.eventID, "event_type", j.event)
+				}
 			}
 			if err != nil {
 				return err
@@ -186,6 +209,117 @@ func (w *Worker) process(ctx context.Context) error {
 			WHERE published_at IS NULL AND NOT EXISTS(SELECT 1 FROM webhook_deliveries d WHERE d.event_id=e.id)`)
 		return err
 	})
+}
+
+func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
+	if w.providerBaseURL == "" || w.providerKey == "" || w.providerSecret == "" {
+		return nil
+	}
+	rows, err := w.pool.Query(ctx, `SELECT pay.id,pay.provider_order_id,pay.amount_minor,pay.currency
+		FROM payments pay
+		LEFT JOIN credit_packs cp ON cp.id=pay.credit_pack_id
+		LEFT JOIN subscription_transitions st ON st.id=pay.transition_id
+		JOIN products pr ON pr.id=COALESCE(cp.product_id,st.product_id)
+		WHERE pay.provider='razorpay' AND pay.status IN ('created','authorized')
+		AND COALESCE(pay.last_reconciled_at,pay.created_at) <= now() -
+			(COALESCE((pr.billing_policy->'projection'->>'reconciliation_seconds')::integer,300) * interval '1 second')
+		ORDER BY COALESCE(pay.last_reconciled_at,pay.created_at),pay.id LIMIT 100`)
+	if err != nil {
+		return err
+	}
+	type candidate struct {
+		id       uuid.UUID
+		orderID  string
+		amount   int64
+		currency string
+	}
+	items := make([]candidate, 0, 100)
+	for rows.Next() {
+		var item candidate
+		if err := rows.Scan(&item.id, &item.orderID, &item.amount, &item.currency); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, item := range items {
+		if _, err := w.pool.Exec(ctx, `UPDATE payments SET last_reconciled_at=now() WHERE id=$1`, item.id); err != nil {
+			return err
+		}
+		paymentID, found, err := w.fetchCapturedProviderPayment(ctx, item.orderID, item.amount, item.currency)
+		if err != nil {
+			w.log.Warn("provider order reconciliation failed", "payment_id", item.id, "order_id", item.orderID, "error", err)
+			continue
+		}
+		if !found {
+			continue
+		}
+		if err := pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
+			providerEventID := "reconciliation:" + paymentID
+			payload, err := json.Marshal(map[string]any{"payment_id": paymentID, "order_id": item.orderID, "status": "captured", "amount": item.amount, "currency": item.currency})
+			if err != nil {
+				return err
+			}
+			var eventID uuid.UUID
+			err = tx.QueryRow(ctx, `INSERT INTO provider_events(provider,provider_event_id,event_type,payload)
+				VALUES('razorpay',$1,'payment.reconciled',$2) ON CONFLICT(provider,provider_event_id) DO UPDATE
+				SET provider_event_id=excluded.provider_event_id RETURNING id`, providerEventID, payload).Scan(&eventID)
+			if err != nil {
+				return err
+			}
+			if err := capturePayment(ctx, tx, item.orderID, paymentID); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE provider_events SET processed_at=COALESCE(processed_at,now()) WHERE id=$1`, eventID)
+			return err
+		}); err != nil && !errors.Is(err, errConflictingProviderEvent) {
+			w.log.Error("provider payment reconciliation apply failed", "payment_id", item.id, "order_id", item.orderID, "error", err)
+		}
+	}
+	return nil
+}
+
+func (w *Worker) fetchCapturedProviderPayment(ctx context.Context, orderID string, expectedAmount int64, expectedCurrency string) (string, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.providerBaseURL+"/v1/orders/"+url.PathEscape(orderID)+"/payments", nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.SetBasicAuth(w.providerKey, w.providerSecret)
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", false, fmt.Errorf("provider returned status %d", resp.StatusCode)
+	}
+	var result struct {
+		Items []struct {
+			ID       string `json:"id"`
+			OrderID  string `json:"order_id"`
+			Status   string `json:"status"`
+			Amount   int64  `json:"amount"`
+			Currency string `json:"currency"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", false, err
+	}
+	for _, payment := range result.Items {
+		if payment.Status != "captured" {
+			continue
+		}
+		if payment.ID == "" || payment.OrderID != orderID || payment.Amount != expectedAmount || payment.Currency != expectedCurrency {
+			return "", false, errors.New("captured provider payment does not match the Billmesh order")
+		}
+		return payment.ID, true, nil
+	}
+	return "", false, nil
 }
 
 func (w *Worker) processSubscriptionTransitions(ctx context.Context) error {
@@ -303,12 +437,22 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 func expireSubscriptionByPolicy(ctx context.Context, tx pgx.Tx, subscriptionID, accountID, productID uuid.UUID, periodEnd time.Time, policy products.BillingPolicy, policyVersion int64) error {
 	if policy.Lifecycle.Expiration == "downgrade_to_default" {
 		var plan transitionPlan
-		err := tx.QueryRow(ctx, `SELECT id,version,name,description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,checkout_enabled
-			FROM plans WHERE product_id=$1 AND active AND selectable AND default_for_product AND billing_model='free'
+		err := tx.QueryRow(ctx, `SELECT p.id,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,p.billing_interval,p.included_credits,
+			p.entitlements,pr.entitlement_schema_version,pr.entitlement_schema,p.checkout_enabled
+			FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.product_id=$1 AND p.active AND p.selectable AND p.default_for_product AND p.billing_model='free'
 			AND effective_from<=now() AND (effective_to IS NULL OR effective_to>now())`, productID).
 			Scan(&plan.ID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor, &plan.Currency,
-				&plan.BillingInterval, &plan.IncludedCredits, &plan.Entitlements, &plan.CheckoutEnabled)
+				&plan.BillingInterval, &plan.IncludedCredits, &plan.Entitlements, &plan.EntitlementSchemaVersion, &plan.EntitlementSchema, &plan.CheckoutEnabled)
 		if err == nil {
+			var customerID *uuid.UUID
+			if err := tx.QueryRow(ctx, `SELECT customer_id FROM billing_accounts WHERE id=$1`, accountID).Scan(&customerID); err != nil {
+				return err
+			}
+			if customerID != nil {
+				if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "free-customer:"+customerID.String()); err != nil {
+					return err
+				}
+			}
 			eligible, eligibilityErr := freePlanEligible(ctx, tx, accountID, productID, policy.Customer.FreeAllowance)
 			if eligibilityErr != nil {
 				return eligibilityErr
@@ -318,11 +462,12 @@ func expireSubscriptionByPolicy(ctx context.Context, tx pgx.Tx, subscriptionID, 
 				digest := sha256.Sum256([]byte("expiration:" + subscriptionID.String() + ":" + periodEnd.UTC().Format(time.RFC3339Nano)))
 				if _, err := tx.Exec(ctx, `INSERT INTO subscription_transitions(id,account_id,product_id,subscription_id,target_plan_id,target_plan_version,
 					target_plan_name,target_plan_description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,
-					operation,effective,status,idempotency_key,request_hash,effective_at,billing_policy,billing_policy_version)
-					VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'downgrade','immediate','processing',$15,$16,now(),$17,$18)
+					entitlement_schema_version,entitlement_schema,operation,effective,status,idempotency_key,request_hash,effective_at,billing_policy,billing_policy_version)
+					VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'downgrade','immediate','processing',$17,$18,now(),$19,$20)
 					ON CONFLICT(account_id,product_id,idempotency_key) DO NOTHING`, transitionID, accountID, productID, subscriptionID, plan.ID,
 					plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency, plan.BillingInterval,
-					plan.IncludedCredits, plan.Entitlements, "expiration:"+periodEnd.UTC().Format(time.RFC3339Nano), hex.EncodeToString(digest[:]), policy, policyVersion); err != nil {
+					plan.IncludedCredits, plan.Entitlements, plan.EntitlementSchemaVersion, plan.EntitlementSchema,
+					"expiration:"+periodEnd.UTC().Format(time.RFC3339Nano), hex.EncodeToString(digest[:]), policy, policyVersion); err != nil {
 					return err
 				}
 				return applySubscriptionTransition(ctx, tx, transitionID, "")

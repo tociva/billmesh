@@ -89,7 +89,7 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("incomplete safe session projection: %+v", projection)
 	}
 
-	productsRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/products", nil)
+	productsRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/catalog", nil)
 	productsRequest.Header.Set("Origin", consoleOrigin)
 	productsRequest.AddCookie(sessionCookie)
 	productsResponse, err := client.Do(productsRequest)
@@ -131,7 +131,7 @@ func TestBrowserBFFAuthorizationCodeSessionAndCSRF(t *testing.T) {
 		t.Fatalf("mutation with CSRF should reach existing handler: want 400, got %d", mutationResponse.StatusCode)
 	}
 
-	foreignRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/products", nil)
+	foreignRequest, _ := http.NewRequest(http.MethodGet, apiOrigin+"/api/v1/catalog", nil)
 	foreignRequest.Header.Set("Origin", "https://untrusted.example")
 	foreignRequest.AddCookie(sessionCookie)
 	foreignResponse, err := client.Do(foreignRequest)
@@ -179,7 +179,7 @@ func TestBrowserBFFRejectsUnsafeReturnTargetsAndBearerConfusion(t *testing.T) {
 	if login.StatusCode != http.StatusFound {
 		t.Fatalf("login: want 302, got %d", login.StatusCode)
 	}
-	request, _ := http.NewRequest(http.MethodGet, "http://api:8080/api/v1/products", nil)
+	request, _ := http.NewRequest(http.MethodGet, "http://api:8080/api/v1/catalog", nil)
 	request.Header.Set("Origin", "https://console.test")
 	request.Header.Set("Authorization", "Bearer not-accepted-here")
 	response, err := client.Do(request)

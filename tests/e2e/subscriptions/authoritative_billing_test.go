@@ -30,9 +30,11 @@ type transitionResponse struct {
 	Status               string `json:"status"`
 	BillingPolicyVersion int64  `json:"billing_policy_version"`
 	Checkout             *struct {
-		OrderID     string `json:"order_id"`
-		AmountMinor int64  `json:"amount_minor"`
-		Currency    string `json:"currency"`
+		ClientConfig struct {
+			OrderID     string `json:"order_id"`
+			AmountMinor int64  `json:"amount_minor"`
+			Currency    string `json:"currency"`
+		} `json:"client_config"`
 	} `json:"checkout"`
 }
 
@@ -62,7 +64,7 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	org := testkit.Unique("authoritative-paid")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, map[string]any{"sub": testkit.Unique("paid-customer")})
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "Authoritative Paid", "application": "daybook", "organization_id": org,
+		"name": "Authoritative Paid", "external_ref": testkit.Unique("authoritative-paid"),
 	}, token)
 
 	status, catalogueRaw, catalogueHeaders := h.JSON(t, http.MethodGet, "/v1/catalog?product=daybook", nil, token)
@@ -91,9 +93,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	}
 
 	// A caller assertion is not payment verification.
-	h.RequireStatus(t, http.StatusPaymentRequired, http.MethodPost, "/v1/subscriptions", map[string]any{
+	h.RequireStatusWithHeaders(t, http.StatusBadRequest, http.MethodPost, "/v1/subscription-transitions", map[string]any{
 		"plan_id": paidPlan, "payment_status": "verified",
-	}, token)
+	}, token, http.Header{"Idempotency-Key": []string{testkit.Unique("untrusted-payment-assertion")}})
 
 	key := testkit.Unique("paid-transition")
 	headers := http.Header{"Idempotency-Key": []string{key}}
@@ -102,7 +104,7 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 		t.Fatalf("create transition returned %d: %s", status, transitionRaw)
 	}
 	transition := testkit.Decode[transitionResponse](t, transitionRaw)
-	if transition.Status != "requires_payment" || transition.Checkout == nil || transition.Checkout.OrderID == "" {
+	if transition.Status != "requires_payment" || transition.Checkout == nil || transition.Checkout.ClientConfig.OrderID == "" {
 		t.Fatalf("paid transition did not create a server-priced checkout: %s", transitionRaw)
 	}
 	if transition.BillingPolicyVersion != catalogue.Product.BillingPolicyVersion {
@@ -133,8 +135,8 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 
 	if status := h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{
 		"id": testkit.Unique("paid-event"), "type": "payment.captured", "payment_id": testkit.Unique("provider-payment"),
-		"order_id": transition.Checkout.OrderID, "status": "captured", "amount_minor": transition.Checkout.AmountMinor,
-		"currency": transition.Checkout.Currency,
+		"order_id": transition.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": transition.Checkout.ClientConfig.AmountMinor,
+		"currency": transition.Checkout.ClientConfig.Currency,
 	}, "test-webhook-secret"); status != http.StatusNoContent {
 		t.Fatalf("verified payment capture returned %d", status)
 	}
@@ -197,7 +199,7 @@ func TestFreeEligibilityIsCustomerScoped(t *testing.T) {
 		org := testkit.Unique("free-org")
 		token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, map[string]any{"sub": sharedSubject})
 		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-			"name": "Free Eligibility", "application": "daybook", "organization_id": org,
+			"name": "Free Eligibility", "external_ref": testkit.Unique("free-eligibility"),
 		}, token)
 		if freePlan == "" {
 			catalogue := testkit.Decode[catalogueResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token))
@@ -227,7 +229,7 @@ func TestTransitionCancellationAndWebhookManagement(t *testing.T) {
 	org := testkit.Unique("transition-cancel")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, nil)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "Transition Cancellation", "application": "daybook", "organization_id": org,
+		"name": "Transition Cancellation", "external_ref": testkit.Unique("transition-cancel"),
 	}, token)
 	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/credit-packs?product=daybook", nil, token)
 
@@ -253,13 +255,14 @@ func TestTransitionCancellationAndWebhookManagement(t *testing.T) {
 		t.Fatalf("create cancellable transition returned %d: %s", status, transitionRaw)
 	}
 	transition := testkit.Decode[transitionResponse](t, transitionRaw)
-	cancelledRaw := h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/subscription-transitions/"+transition.ID+"/cancel", nil, token)
+	cancelledRaw := h.RequireStatusWithHeaders(t, http.StatusOK, http.MethodPost, "/v1/subscription-transitions/"+transition.ID+"/cancel", nil, token,
+		http.Header{"Idempotency-Key": []string{testkit.Unique("cancel-transition")}})
 	if testkit.Decode[transitionResponse](t, cancelledRaw).Status != "cancelled" {
 		t.Fatalf("transition was not cancelled: %s", cancelledRaw)
 	}
 
 	webhookRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{
-		"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "initial-secret-123", "api_version": "2",
+		"target_url": h.MockURL + "/receivers/daybook", "secret": "initial-secret-0123456789abcdef012345", "api_version": "2",
 	}, token)
 	webhookID := testkit.Decode[struct {
 		ID string `json:"id"`
@@ -268,7 +271,7 @@ func TestTransitionCancellationAndWebhookManagement(t *testing.T) {
 		"event_types": []string{"subscription.transition_completed"}, "active": true,
 	}, token)
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/webhooks/"+webhookID+"/rotate-secret", map[string]any{
-		"secret": "rotated-secret-456", "grace_seconds": 60,
+		"secret": "rotated-secret-0123456789abcdef012345", "grace_seconds": 60,
 	}, token)
 	h.RequireStatus(t, http.StatusNoContent, http.MethodDelete, "/v1/webhooks/"+webhookID, nil, token)
 }

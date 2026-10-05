@@ -108,6 +108,15 @@ func (h *HTTP) RequireStatus(t *testing.T, want int, method, path string, body a
 	}
 	return raw
 }
+
+func (h *HTTP) RequireStatusWithHeaders(t *testing.T, want int, method, path string, body any, token string, headers http.Header) []byte {
+	t.Helper()
+	status, raw, _ := h.JSONWithHeaders(t, method, path, body, token, headers)
+	if status != want {
+		t.Fatalf("%s %s: want status %d, got %d: %s", method, path, want, status, raw)
+	}
+	return raw
+}
 func (h *HTTP) SignedWebhook(t *testing.T, path string, body any, secret string) int {
 	t.Helper()
 	raw, err := json.Marshal(body)
@@ -140,7 +149,7 @@ func (h *HTTP) IssueToken(t *testing.T, org, app string, permissions []string, o
 	if h.MockURL == "" {
 		t.Fatal("MOCK_SERVER_URL is required")
 	}
-	payload := map[string]any{"org_id": org, "app": app, "permissions": permissions}
+	payload := map[string]any{"org_id": org, "app": app, "environment": "production", "actor_type": "user", "permissions": permissions}
 	if org != "" {
 		// Keep independent test organizations from accidentally sharing the fake
 		// issuer's default subject. Tests for customer-level behavior pass an
@@ -231,6 +240,22 @@ func ExerciseEndpointContract(t *testing.T, tc PlanCase, endpoint Endpoint) {
 	body := any(map[string]any{})
 	prefix := strings.Split(tc.ID, "-")[0]
 	if !negative {
+		switch prefix {
+		case "SUB":
+			account := createFixtureAccount(t, h, org, token)
+			createFixtureSubscription(t, h, account, token)
+			return
+		case "PAY":
+			createFixtureAccount(t, h, org, token)
+			CreateCreditPackOrder(t, h, "daybook", 500, token)
+			return
+		case "WH":
+			createFixtureAccount(t, h, org, token)
+			h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{
+				"target_url": h.MockURL + "/receivers/daybook", "secret": "test-secret-0123456789abcdef012345",
+			}, token)
+			return
+		}
 		endpoint, body = preparePositiveCase(t, h, prefix, endpoint, org, token)
 	}
 	status, raw, _ := h.JSON(t, endpoint.Method, endpoint.Path, body, token)
@@ -258,6 +283,13 @@ func ExerciseEndpointContract(t *testing.T, tc PlanCase, endpoint Endpoint) {
 func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token string) bool {
 	t.Helper()
 	switch tc.ID {
+	case "SUB-004":
+		account := createFixtureAccount(t, h, org, token)
+		createFixtureSubscription(t, h, account, token)
+		planID := FixturePlan(t, h, "daybook", "free", token)
+		h.RequireStatusWithHeaders(t, http.StatusConflict, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": planID}, token,
+			http.Header{"Idempotency-Key": []string{Unique("duplicate-subscription")}})
+		return true
 	case "PAY-005", "PAY-006", "PAY-007":
 		exercisePaymentWebhookSignatureCase(t, h, tc.ID, org, token)
 		return true
@@ -280,7 +312,9 @@ func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token st
 	case "WH-002":
 		createFixtureAccount(t, h, org, token)
 		viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "test-secret"}, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{
+			"target_url": h.MockURL + "/receivers/daybook", "secret": "test-secret-0123456789abcdef012345",
+		}, viewer)
 		return true
 	default:
 		return false
@@ -289,17 +323,10 @@ func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token st
 
 func exercisePaymentWebhookSignatureCase(t *testing.T, h *HTTP, id, org, token string) {
 	t.Helper()
-	account := createFixtureAccount(t, h, org, token)
-	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
-	order := Decode[struct {
-		PaymentID string `json:"payment_id"`
-		Order     struct {
-			ID       string `json:"id"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-		} `json:"order"`
-	}](t, orderRaw)
-	event := map[string]any{"id": Unique("payment-event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}
+	createFixtureAccount(t, h, org, token)
+	order := CreateCreditPackOrder(t, h, "daybook", 500, token)
+	config := order.Checkout.ClientConfig
+	event := map[string]any{"id": Unique("payment-event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": config.OrderID, "status": "captured", "amount_minor": config.AmountMinor, "currency": config.Currency}
 
 	switch id {
 	case "PAY-005":
@@ -330,7 +357,7 @@ func exercisePaymentWebhookSignatureCase(t *testing.T, h *HTTP, id, org, token s
 }
 
 func allPermissions() []string {
-	return []string{"billing:read", "billing:write", "billing:link", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"}
+	return []string{"catalogue:read", "billing:read", "billing:write", "billing:ownership", "billing:link", "billing:admin", "credits:grant", "credits:reserve", "credits:settle"}
 }
 
 func AllPermissions() []string { return allPermissions() }
@@ -354,13 +381,18 @@ func CreateFixtureSubscription(t *testing.T, h *HTTP, account, token string) str
 // create a server-priced transition, and confirm it with a signed provider event.
 func ActivatePaidSubscription(t *testing.T, h *HTTP, product, planSlug, token string) string {
 	t.Helper()
-	plans := Decode[[]struct {
-		ID   string `json:"id"`
-		Slug string `json:"slug"`
-	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/plans?product="+url.QueryEscape(product), nil, token))
+	plans := Decode[struct {
+		Plans []struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			BillingModel string `json:"billing_model"`
+		} `json:"plans"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, token)).Plans
 	var planID string
+	wanted := strings.ToLower(strings.ReplaceAll(planSlug, "-", " "))
 	for _, plan := range plans {
-		if plan.Slug == planSlug {
+		name := strings.ToLower(plan.Name)
+		if plan.BillingModel == "paid" && (plan.ID == planSlug || name == wanted || strings.Contains(name, wanted)) {
 			planID = plan.ID
 			break
 		}
@@ -376,17 +408,20 @@ func ActivatePaidSubscription(t *testing.T, h *HTTP, product, planSlug, token st
 	transition := Decode[struct {
 		ID       string `json:"id"`
 		Checkout struct {
-			OrderID     string `json:"order_id"`
-			AmountMinor int64  `json:"amount_minor"`
-			Currency    string `json:"currency"`
+			ClientConfig struct {
+				OrderID     string `json:"order_id"`
+				AmountMinor int64  `json:"amount_minor"`
+				Currency    string `json:"currency"`
+			} `json:"client_config"`
 		} `json:"checkout"`
 	}](t, raw)
-	if transition.Checkout.OrderID == "" {
+	config := transition.Checkout.ClientConfig
+	if config.OrderID == "" {
 		t.Fatalf("paid transition did not return checkout: %s", raw)
 	}
 	if status := h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{
-		"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": transition.Checkout.OrderID,
-		"status": "captured", "amount_minor": transition.Checkout.AmountMinor, "currency": transition.Checkout.Currency,
+		"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": config.OrderID,
+		"status": "captured", "amount_minor": config.AmountMinor, "currency": config.Currency,
 	}, "test-webhook-secret"); status != http.StatusNoContent {
 		t.Fatalf("capture paid transition: got %d", status)
 	}
@@ -398,6 +433,29 @@ func ActivatePaidSubscription(t *testing.T, h *HTTP, product, planSlug, token st
 		t.Fatalf("paid transition did not complete: %+v", completed)
 	}
 	return completed.SubscriptionID
+}
+
+type PaymentOrderFixture struct {
+	PaymentID string `json:"payment_id"`
+	Checkout  struct {
+		ClientConfig struct {
+			OrderID     string `json:"order_id"`
+			AmountMinor int64  `json:"amount_minor"`
+			Currency    string `json:"currency"`
+		} `json:"client_config"`
+	} `json:"checkout"`
+}
+
+func CreateCreditPackOrder(t *testing.T, h *HTTP, product string, credits int64, token string) PaymentOrderFixture {
+	t.Helper()
+	raw := h.RequireStatusWithHeaders(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders",
+		map[string]any{"credit_pack_id": FixtureCreditPack(t, h, product, credits, token)}, token,
+		http.Header{"Idempotency-Key": []string{Unique("payment-order")}})
+	order := Decode[PaymentOrderFixture](t, raw)
+	if order.PaymentID == "" || order.Checkout.ClientConfig.OrderID == "" {
+		t.Fatalf("payment order omitted identifiers: %s", raw)
+	}
+	return order
 }
 
 func CreateFundedWallet(t *testing.T, h *HTTP, account, token string) string {
@@ -412,11 +470,9 @@ func ReserveFixture(t *testing.T, h *HTTP, wallet, token string) string {
 func preparePositiveCase(t *testing.T, h *HTTP, prefix string, endpoint Endpoint, org, token string) (Endpoint, any) {
 	t.Helper()
 	switch prefix {
-	case "SUB", "ENT", "WAL", "RES", "MTR", "PAY", "INV", "WH", "LIM":
+	case "ENT", "WAL", "RES", "MTR", "INV", "LIM":
 		account := createFixtureAccount(t, h, org, token)
 		switch prefix {
-		case "SUB":
-			return endpoint, map[string]any{"account_id": account, "plan": "daybook-free", "product": "daybook"}
 		case "ENT":
 			createFixtureSubscription(t, h, account, token)
 			return endpoint, nil
@@ -424,10 +480,6 @@ func preparePositiveCase(t *testing.T, h *HTTP, prefix string, endpoint Endpoint
 			return endpoint, nil
 		case "LIM":
 			return endpoint, nil
-		case "PAY":
-			return endpoint, map[string]any{"account_id": account, "credit_pack": "credits-500"}
-		case "WH":
-			return endpoint, map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "test-secret"}
 		case "WAL":
 			return endpoint, map[string]any{"account_id": account, "product_id": fixtureProduct(t, h, "daybook", token)}
 		case "RES":
@@ -444,7 +496,7 @@ func preparePositiveCase(t *testing.T, h *HTTP, prefix string, endpoint Endpoint
 }
 func createFixtureAccount(t *testing.T, h *HTTP, org, token string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Contract Account", "external_ref": Unique("account"), "application": "daybook", "organization_id": org}, token)
+	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Contract Account", "external_ref": Unique("account")}, token)
 	var out struct {
 		ID string `json:"id"`
 	}
@@ -455,22 +507,86 @@ func createFixtureAccount(t *testing.T, h *HTTP, org, token string) string {
 }
 func fixtureProduct(t *testing.T, h *HTTP, slug, token string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, token)
-	items := Decode[[]struct{ ID, Slug string }](t, raw)
-	for _, item := range items {
-		if item.Slug == slug {
-			return item.ID
+	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(slug), nil, token)
+	product := Decode[struct {
+		Product struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"product"`
+	}](t, raw).Product
+	if product.ID == "" || product.Slug != slug {
+		t.Fatalf("seed product %s not found: %s", slug, raw)
+	}
+	return product.ID
+}
+
+func FixtureCreditPack(t *testing.T, h *HTTP, product string, credits int64, token string) string {
+	t.Helper()
+	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, token)
+	packs := Decode[struct {
+		CreditPacks []struct {
+			ID      string `json:"id"`
+			Credits int64  `json:"credits"`
+		} `json:"credit_packs"`
+	}](t, raw).CreditPacks
+	for _, pack := range packs {
+		if pack.Credits == credits {
+			return pack.ID
 		}
 	}
-	t.Fatalf("seed product %s not found", slug)
+	t.Fatalf("credit pack with %d credits not found for %s", credits, product)
+	return ""
+}
+
+func FixturePlan(t *testing.T, h *HTTP, product, billingModel string, token string) string {
+	t.Helper()
+	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, token)
+	plans := Decode[struct {
+		Plans []struct {
+			ID           string `json:"id"`
+			BillingModel string `json:"billing_model"`
+		} `json:"plans"`
+	}](t, raw).Plans
+	for _, plan := range plans {
+		if plan.BillingModel == billingModel {
+			return plan.ID
+		}
+	}
+	t.Fatalf("%s plan not found for %s", billingModel, product)
 	return ""
 }
 func createFixtureSubscription(t *testing.T, h *HTTP, account, token string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "plan": "daybook-free", "product": "daybook"}, token)
-	return Decode[struct {
-		ID string `json:"id"`
-	}](t, raw).ID
+	_ = account
+	catalogue := Decode[struct {
+		Plans []struct {
+			ID           string `json:"id"`
+			BillingModel string `json:"billing_model"`
+		} `json:"plans"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token))
+	var planID string
+	for _, plan := range catalogue.Plans {
+		if plan.BillingModel == "free" {
+			planID = plan.ID
+			break
+		}
+	}
+	if planID == "" {
+		t.Fatal("seed free plan not found")
+	}
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", Unique("subscription"))
+	status, raw, _ := h.JSONWithHeaders(t, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": planID}, token, headers)
+	if status != http.StatusCreated {
+		t.Fatalf("create subscription transition: want %d, got %d: %s", http.StatusCreated, status, raw)
+	}
+	result := Decode[struct {
+		SubscriptionID *string `json:"subscription_id"`
+	}](t, raw)
+	if result.SubscriptionID == nil {
+		t.Fatal("free transition did not return a subscription_id")
+	}
+	return *result.SubscriptionID
 }
 func createFundedWallet(t *testing.T, h *HTTP, account, token string) string {
 	t.Helper()
@@ -496,26 +612,42 @@ func ExerciseAccountContract(t *testing.T, tc PlanCase) {
 		created()
 	case "ACC-002":
 		id := created()
-		h.RequireStatus(t, 200, http.MethodGet, "/v1/accounts/"+id, nil, token)
-	case "ACC-003", "ACC-009":
-		id := created()
-		h.RequireStatus(t, 200, http.MethodPatch, "/v1/accounts/"+id, map[string]any{"name": "Updated Account"}, token)
-	case "ACC-005", "ACC-006":
-		id := created()
-		application := "daybook"
-		if tc.ID == "ACC-006" {
-			application = "taskmesh"
+		current := Decode[struct {
+			ID string `json:"id"`
+		}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, token))
+		if current.ID != id {
+			t.Fatalf("%s: current account = %s, want %s", tc.ID, current.ID, id)
 		}
-		h.RequireStatus(t, 204, http.MethodPost, "/v1/accounts/"+id+"/links", map[string]any{"application": application, "organization_id": Unique("linked-org"), "environment": "production"}, token)
+	case "ACC-003":
+		id := created()
+		h.RequireStatus(t, http.StatusNotFound, http.MethodPatch, "/v1/accounts/"+id, map[string]any{"name": "Updated Account"}, token)
+	case "ACC-005":
+		created()
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, token)
+	case "ACC-006":
+		taskmesh := h.IssueToken(t, org, "taskmesh", allPermissions(), nil)
+		createFixtureAccount(t, h, org, taskmesh)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, taskmesh)
 	case "ACC-007":
-		id := created()
-		for _, app := range []string{"daybook-secondary", "taskmesh"} {
-			h.RequireStatus(t, 204, http.MethodPost, "/v1/accounts/"+id+"/links", map[string]any{"application": app, "organization_id": Unique("org")}, token)
-		}
+		created()
+		taskmesh := h.IssueToken(t, org, "taskmesh", allPermissions(), map[string]any{"sub": "customer:" + org})
+		createFixtureAccount(t, h, org, taskmesh)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=taskmesh", nil, taskmesh)
 	case "ACC-008":
 		id := created()
 		other := h.IssueToken(t, Unique("other"), "daybook", allPermissions(), nil)
-		h.RequireStatus(t, 403, http.MethodPost, "/v1/accounts/"+id+"/links", map[string]any{"application": "taskmesh", "organization_id": Unique("org")}, other)
+		h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/accounts/"+id+"/links", map[string]any{"application": "taskmesh", "organization_id": Unique("org")}, other)
+	case "ACC-009":
+		id := created()
+		createFixtureSubscription(t, h, id, token)
+		repeated := Decode[struct {
+			ID string `json:"id"`
+		}](t, h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/accounts", map[string]any{"name": "Ignored retry", "external_ref": Unique("retry")}, token))
+		if repeated.ID != id {
+			t.Fatalf("%s: account retry changed id from %s to %s", tc.ID, id, repeated.ID)
+		}
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, token)
 	}
 }
 
@@ -526,11 +658,15 @@ func ExercisePlanContract(t *testing.T, tc PlanCase) {
 	token := h.IssueToken(t, org, "daybook", allPermissions(), nil)
 	product := fixtureProduct(t, h, "daybook", token)
 	createPlan := func(active bool, price int64, interval string) string {
-		raw := h.RequireStatus(t, 201, http.MethodPost, "/v1/plans", map[string]any{
-			"product_id": product, "slug": strings.ToLower(tc.ID) + "-" + Unique("plan"),
+		model := "free"
+		if price > 0 {
+			model = "paid"
+		}
+		raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product+"/plans", map[string]any{
+			"slug": strings.ToLower(tc.ID) + "-" + Unique("plan"),
 			"name": "Contract Plan", "price_minor": price, "currency": "INR",
-			"included_credits": 500, "billing_interval": interval, "active": active,
-			"entitlements": map[string]any{"workflow_execution": true},
+			"included_credits": 500, "billing_interval": interval, "billing_model": model, "active": active,
+			"entitlements": daybookEntitlements(),
 		}, token)
 		return Decode[struct {
 			ID string `json:"id"`
@@ -538,24 +674,28 @@ func ExercisePlanContract(t *testing.T, tc PlanCase) {
 	}
 	switch tc.ID {
 	case "PLAN-001":
-		h.RequireStatus(t, 201, http.MethodPost, "/v1/products", map[string]any{"slug": Unique("product"), "name": "Product"}, token)
+		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products", map[string]any{"slug": Unique("product"), "name": "Product"}, token)
 	case "PLAN-004":
-		h.RequireStatus(t, 200, http.MethodGet, "/v1/plans?product=daybook", nil, token)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token)
 	case "PLAN-009":
 		limited := h.IssueToken(t, Unique("customer"), "daybook", []string{"billing:read"}, nil)
-		h.RequireStatus(t, 403, http.MethodPost, "/v1/plans", map[string]any{"product_id": product}, limited)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/admin/products/"+product+"/plans", map[string]any{"slug": Unique("forbidden"), "name": "Forbidden"}, limited)
 	case "PLAN-010":
 		plan := createPlan(true, 1000, "monthly")
-		account := createFixtureAccount(t, h, org, token)
-		h.RequireStatus(t, 201, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "plan_id": plan, "payment_status": "verified"}, token)
-		h.RequireStatus(t, 200, http.MethodPatch, "/v1/plans/"+plan, map[string]any{"price_minor": 2000}, token)
-		h.RequireStatus(t, 200, http.MethodGet, "/v1/subscriptions/current", nil, token)
+		createFixtureAccount(t, h, org, token)
+		ActivatePaidSubscription(t, h, "daybook", plan, token)
+		detail := Decode[struct {
+			Version int64 `json:"version"`
+		}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/plans/"+plan, nil, token))
+		h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/plans/"+plan, map[string]any{"price_minor": 2000, "version": detail.Version}, token)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, token)
 	case "PLAN-011":
 		plan := createPlan(false, 0, "monthly")
-		account := createFixtureAccount(t, h, org, token)
-		h.RequireStatus(t, 409, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "plan_id": plan}, token)
+		createFixtureAccount(t, h, org, token)
+		h.RequireStatusWithHeaders(t, http.StatusBadRequest, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": plan}, token,
+			http.Header{"Idempotency-Key": []string{Unique("inactive-plan")}})
 	case "PLAN-012":
-		h.RequireStatus(t, 201, http.MethodPost, "/v1/credit-packs", map[string]any{"product_id": product, "slug": Unique("pack"), "name": "Top-up", "credits": 250, "price_minor": 25000, "currency": "INR", "validity_days": 90}, token)
+		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/credit-packs", map[string]any{"product_id": product, "slug": Unique("pack"), "name": "Top-up", "credits": 250, "price_minor": 25000, "currency": "INR", "validity_days": 90}, token)
 	default:
 		interval := "monthly"
 		price := int64(0)
@@ -567,11 +707,18 @@ func ExercisePlanContract(t *testing.T, tc PlanCase) {
 	}
 }
 
+func daybookEntitlements() map[string]any {
+	return map[string]any{
+		"branches": 1, "users": 1, "serviceusers": 0,
+		"workflow_execution": true, "standalone_workflow": false,
+	}
+}
+
 func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	t.Helper()
 	h := NewHTTP(t)
 	org := Unique("auth-org")
-	path := "/v1/products"
+	path := "/v1/catalog"
 	permissions := allPermissions()
 	overrides := map[string]any{}
 	token := ""
@@ -580,7 +727,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		token = h.IssueToken(t, org, "daybook", permissions, map[string]any{"token_use": "id", "audience": "billmesh-browser-client"})
 	case "AUTH-018":
 		token = h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
-		status, raw, _ := h.JSON(t, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack": "credits-500"}, token)
+		status, raw, _ := h.JSON(t, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": "00000000-0000-0000-0000-000000000001"}, token)
 		if status != http.StatusForbidden {
 			t.Fatalf("%s: want 403, got %d: %s", tc.ID, status, raw)
 		}
@@ -596,11 +743,13 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 			ID string `json:"id"`
 		}](t, raw).ID
 		other := h.IssueToken(t, Unique("other-org"), "daybook", permissions, nil)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/accounts/"+account, nil, other)
+		h.RequireStatus(t, http.StatusNotFound, http.MethodGet, "/v1/accounts/current", nil, other)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/wallets/"+wallet, nil, other)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/wallets/"+wallet+"/reservations", map[string]any{"execution_id": Unique("nested"), "operation_seq": 0, "amount": 1}, other)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/reservations/"+reservation+"/settle", map[string]any{"actual": 1}, other)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, other)
+		_ = subscription
+		h.RequireStatusWithHeaders(t, http.StatusNotFound, http.MethodPost, "/v1/subscriptions/current/cancellation", map[string]any{"effective": "immediate"}, other,
+			http.Header{"Idempotency-Key": []string{Unique("foreign-cancel")}})
 		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/installations/"+installation+"/revoke", nil, other)
 		return
 	case "AUTH-002":
@@ -619,7 +768,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		token = h.IssueToken(t, org, "daybook", permissions, overrides)
 	case "AUTH-009":
 		service := h.IssueToken(t, org, "daybook", []string{"billing:read"}, map[string]any{"sub": "service:metering-worker"})
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, service)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, service)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/admin/audit", nil, service)
 		owner := h.IssueToken(t, org, "daybook", allPermissions(), nil)
 		account := createFixtureAccount(t, h, org, owner)
@@ -635,7 +784,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		service := h.IssueToken(t, org, "daybook", []string{"credits:reserve"}, map[string]any{"sub": "service:runtime"})
 		account := createFixtureAccount(t, h, org, h.IssueToken(t, org, "daybook", permissions, nil))
 		wallet := createFundedWallet(t, h, account, h.IssueToken(t, org, "daybook", permissions, nil))
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, service)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": "00000000-0000-0000-0000-000000000001"}, service)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/admin/adjustments", map[string]any{"wallet_id": wallet, "amount": 1, "reason": "forbidden"}, service)
 		return
 	case "AUTH-013":
@@ -657,7 +806,8 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		owner := h.IssueToken(t, org, "daybook", permissions, nil)
 		account := createFixtureAccount(t, h, org, owner)
 		other := h.IssueToken(t, Unique("other-org"), "daybook", permissions, nil)
-		h.RequireStatus(t, 403, http.MethodGet, "/v1/accounts/"+account, nil, other)
+		_ = account
+		h.RequireStatus(t, http.StatusNotFound, http.MethodGet, "/v1/accounts/current", nil, other)
 		return
 	case "AUTH-012":
 		owner := h.IssueToken(t, org, "daybook", permissions, nil)
@@ -672,19 +822,20 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		wallet := createFundedWallet(t, h, account, staging)
 		subscription := createFixtureSubscription(t, h, account, staging)
 		production := h.IssueToken(t, org, "daybook", permissions, map[string]any{"environment": "production"})
-		h.RequireStatus(t, 403, http.MethodGet, "/v1/accounts/"+account, nil, production)
+		h.RequireStatus(t, http.StatusNotFound, http.MethodGet, "/v1/accounts/current", nil, production)
 		h.RequireStatus(t, 403, http.MethodGet, "/v1/wallets/"+wallet, nil, production)
 		h.RequireStatus(t, 403, http.MethodPost, "/v1/wallets/"+wallet+"/grants", map[string]any{"source": "test", "operation_ref": Unique("cross-env"), "amount": 1}, production)
-		h.RequireStatus(t, 403, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, production)
-		h.RequireStatus(t, 404, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "cross-env"}, production)
+		_ = subscription
+		h.RequireStatusWithHeaders(t, http.StatusNotFound, http.MethodPost, "/v1/subscriptions/current/cancellation", map[string]any{"effective": "immediate"}, production,
+			http.Header{"Idempotency-Key": []string{Unique("cross-env-cancel")}})
+		h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/daybook", "secret": "cross-environment-secret-0123456789"}, production)
 		for _, list := range []string{"/v1/payments", "/v1/invoices", "/v1/webhooks", "/v1/usage-events", "/v1/admin/audit"} {
 			h.RequireStatus(t, http.StatusNotFound, http.MethodGet, list, nil, production)
 		}
 		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/events", nil, production)
-		link := map[string]any{"application": "daybook", "organization_id": org, "environment": "production"}
 		withoutLinkPermission := h.IssueToken(t, org, "daybook", []string{"billing:write", "billing:read"}, map[string]any{"environment": "staging"})
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts/"+account+"/links", link, withoutLinkPermission)
-		raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/"+account, nil, staging)
+		h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{}, withoutLinkPermission)
+		raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, staging)
 		if !strings.Contains(string(raw), account) {
 			t.Fatalf("%s: staging owner could not read its own account: %s", tc.ID, raw)
 		}
@@ -693,13 +844,14 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		writer := h.IssueToken(t, org, "daybook", permissions, nil)
 		account := createFixtureAccount(t, h, org, writer)
 		viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, viewer)
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/"+account, nil, viewer)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, viewer)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, viewer)
 		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, viewer)
 		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/invoices", nil, viewer)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts", map[string]any{"name": "viewer write", "external_ref": Unique("viewer"), "application": "daybook", "organization_id": org}, viewer)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, viewer)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/daybook", "secret": "viewer"}, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts", map[string]any{"name": "viewer write", "external_ref": Unique("viewer")}, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": FixtureCreditPack(t, h, "daybook", 500, viewer)}, viewer)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/daybook", "secret": "viewer-secret-0123456789abcdef012345"}, viewer)
+		_ = account
 		return
 	case "AUTH-015":
 		admin := h.IssueToken(t, org, "daybook", permissions, nil)
@@ -707,9 +859,12 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		product := fixtureProduct(t, h, "daybook", admin)
 		subscription := createFixtureSubscription(t, h, account, admin)
 		runtime := h.IssueToken(t, org, "daybook", []string{"credits:reserve", "credits:settle"}, nil)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/plans", map[string]any{"product_id": product, "slug": Unique("runtime-plan"), "name": "Runtime Plan", "price_minor": 100, "currency": "INR", "included_credits": 10, "billing_interval": "monthly"}, runtime)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{"plan": "daybook-pro"}, runtime)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, runtime)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/admin/products/"+product+"/plans", map[string]any{"slug": Unique("runtime-plan"), "name": "Runtime Plan"}, runtime)
+		h.RequireStatusWithHeaders(t, http.StatusForbidden, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": FixturePlan(t, h, "daybook", "paid", admin)}, runtime,
+			http.Header{"Idempotency-Key": []string{Unique("runtime-transition")}})
+		h.RequireStatusWithHeaders(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/current/cancellation", map[string]any{"effective": "immediate"}, runtime,
+			http.Header{"Idempotency-Key": []string{Unique("runtime-cancel")}})
+		_ = subscription
 		return
 	default:
 		token = h.IssueToken(t, org, "daybook", permissions, nil)
@@ -742,15 +897,21 @@ func ExerciseAdminContract(t *testing.T, tc PlanCase) {
 	switch tc.ID {
 	case "ADM-001":
 		product := fixtureProduct(t, h, "daybook", admin)
-		raw := h.RequireStatus(t, 201, http.MethodPost, "/v1/plans", map[string]any{"product_id": product, "slug": Unique("admin-plan"), "name": "Admin Plan", "price_minor": 100, "currency": "INR", "included_credits": 10, "billing_interval": "monthly"}, admin)
+		raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product+"/plans", map[string]any{
+			"slug": Unique("admin-plan"), "name": "Admin Plan", "billing_model": "paid", "price_minor": 100,
+			"currency": "INR", "included_credits": 10, "billing_interval": "monthly", "entitlements": daybookEntitlements(),
+		}, admin)
 		plan := Decode[struct {
 			ID string `json:"id"`
 		}](t, raw).ID
-		h.RequireStatus(t, 200, http.MethodPatch, "/v1/plans/"+plan, map[string]any{"price_minor": 200}, admin)
+		detail := Decode[struct {
+			Version int64 `json:"version"`
+		}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/plans/"+plan, nil, admin))
+		h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/plans/"+plan, map[string]any{"price_minor": 200, "version": detail.Version}, admin)
 	case "ADM-002":
 		account := createFixtureAccount(t, h, org, admin)
 		createFixtureSubscription(t, h, account, admin)
-		h.RequireStatus(t, 200, http.MethodGet, "/v1/subscriptions/current", nil, admin)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, admin)
 	case "ADM-003", "ADM-004":
 		account := createFixtureAccount(t, h, org, admin)
 		wallet := createFundedWallet(t, h, account, admin)

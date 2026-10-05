@@ -67,9 +67,10 @@ redirects, or locally maintained subscription rules.
 - [X] Payment and invoice read APIs exist.
 - [X] Entitlement and individual feature-check APIs exist.
 
-These foundations do not yet make paid subscriptions production-safe. The
-remaining work below closes the caller-trust, lifecycle, identity, and projection
-gaps.
+The v1 publication work adds caller-trust, identity, checkout, reconciliation,
+and typed-projection safeguards to these foundations. Unchecked items below are
+longer-term policy breadth, verification, or rollout work and do not imply an
+alternate public subscription API.
 
 ## Generic product billing policy
 
@@ -122,13 +123,13 @@ contracts.
 - [X] Configure the stable external identity claim mapping used by that scope.
 - [X] Configure the number of Free subscriptions allowed per customer, including
   zero for products without a Free allowance.
-- [ ] Configure whether eligibility is retained or reevaluated after account
+- [X] Configure whether eligibility is retained or reevaluated after account
   ownership changes.
-- [ ] Configure ownership-transfer behavior as `unsupported`, `retain`, or
+- [X] Configure ownership-transfer behavior as `unsupported`, `retain`, or
   `preauthorized_recheck`.
-- [ ] Configure rejection or Paid-checkout requirements when a proposed owner is
+- [X] Configure rejection or Paid-checkout requirements when a proposed owner is
   not eligible for Free.
-- [ ] Keep the ownership-transfer protocol itself transactional, expiring,
+- [X] Keep the ownership-transfer protocol itself transactional, expiring,
   confirmable, cancellable, and reconcilable whenever enabled.
 
 ### Account onboarding policy
@@ -236,7 +237,8 @@ Daybook. They are not switches in the product billing policy.
 - [ ] Choose durable and cache storage for the non-authoritative projection.
 - [ ] Define login, account-switching, expired-projection, and outage behavior
   within the limits published by Billmesh.
-- [ ] Run dual-read comparison during migration.
+- [ ] Run staging conformance checks between the cached consumer projection and
+  the live authoritative snapshot.
 - [ ] Define operational ownership for projection lag and reconciliation alerts.
 - [ ] Define customer-facing UI for transition states and delayed provider
   confirmation.
@@ -280,9 +282,8 @@ Daybook. They are not switches in the product billing policy.
 - [X] Prevent unpaid paid-plan changes.
 - [X] Prevent unpaid paid-plan reactivation.
 - [X] Prevent caller-asserted paid renewal.
-- [X] Add a narrowly scoped temporary internal permission if the legacy flow must
-  remain available during migration.
-- [ ] Ensure Daybook never receives that internal permission.
+- [ ] Remove the duplicate direct paid-subscription operations before the first
+  public release; no compatibility path is required for this fresh application.
 - [X] Add negative security tests for creation, plan change, renewal, and
   reactivation bypass attempts.
 
@@ -444,10 +445,9 @@ Daybook. They are not switches in the product billing policy.
 - [ ] Missing or duplicate events converge to the authoritative Billmesh state.
 - [X] Webhook consumers can rotate secrets without downtime.
 
-## Phase 8 — Migrate Daybook and retire legacy APIs
+## Phase 8 — Adopt the canonical Daybook contract
 
 - [X] Backfill plan semantics and commercial versions for existing plans.
-- [ ] Backfill billing customers and account ownership links.
 - [ ] Deploy additive catalogue, transition, snapshot, and webhook contracts.
 - [ ] Change Daybook catalogue reads to use opaque Billmesh IDs.
 - [ ] Change Daybook subscription mutations to use transition commands.
@@ -455,14 +455,11 @@ Daybook. They are not switches in the product billing policy.
 - [ ] Add Daybook projection storage with revision, ETag, verified time, and
   expiry.
 - [ ] Add Daybook webhook inbox, conditional refetch, retry, and reconciliation.
-- [ ] Run legacy and new reads in parallel and compare results.
-- [ ] Monitor mismatches until the agreed migration threshold is met.
-- [ ] Disable slug-based subscription mutations for Daybook.
+- [ ] Remove slug-based subscription mutations before Daybook integrates.
 - [ ] Remove public `payment_status` fields.
-- [ ] Remove or internalize direct paid change, renew, and reactivate operations.
+- [ ] Remove direct paid change, renew, and reactivate operations.
 - [ ] Remove Daybook plan slugs, prices, classifications, and local lifecycle
   rules.
-- [ ] Remove obsolete compatibility permissions after all callers migrate.
 
 ### Phase 8 exit criteria
 
@@ -470,7 +467,7 @@ Daybook. They are not switches in the product billing policy.
   logic.
 - [ ] All Daybook billing reads derive from the Billmesh snapshot.
 - [ ] All Daybook billing mutations are Billmesh commands.
-- [ ] Legacy APIs cannot bypass the new state machine.
+- [ ] The public contract exposes no alternate path around the state machine.
 
 ## Cross-cutting contract and operational work
 

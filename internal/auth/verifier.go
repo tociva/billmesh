@@ -22,8 +22,7 @@ import (
 
 type Claims struct {
 	Permissions       jwt.ClaimStrings `json:"permissions"`
-	Scope             jwt.ClaimStrings `json:"scope"`
-	Scopes            jwt.ClaimStrings `json:"scp"`
+	ActorType         string           `json:"actor_type"`
 	OrgID             string           `json:"org_id"`
 	App               string           `json:"app"`
 	Environment       string           `json:"environment"`
@@ -68,6 +67,7 @@ type JWKSVerifier struct {
 const keyCacheLifetime = time.Minute
 const keyCacheOutageGrace = 5 * time.Minute
 const unknownKeyRefreshInterval = time.Second
+const maxServiceTokenLifetime = time.Hour
 
 func NewJWKSVerifier(issuer, audience string, client *http.Client) *JWKSVerifier {
 	return newJWKSVerifier(issuer, audience, client, true)
@@ -112,22 +112,64 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	claims.AddPermissions()
+	if v.requireContext {
+		if err := validateCanonicalPermissionsClaim(raw); err != nil {
+			return nil, err
+		}
+	}
 	if claims.Subject == "" {
 		return nil, errors.New("missing token subject")
 	}
-	if v.requireContext && (claims.OrgID == "" || claims.App == "") {
-		return nil, errors.New("missing identity context")
+	if claims.IssuedAt == nil {
+		return nil, errors.New("missing token issued-at time")
+	}
+	if v.requireContext && claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time) > maxServiceTokenLifetime {
+		return nil, errors.New("service token lifetime exceeds one hour")
+	}
+	if v.requireContext && (claims.App == "" || claims.Environment == "") {
+		return nil, errors.New("missing application or environment context")
+	}
+	if v.requireContext && claims.ActorType != "user" && claims.ActorType != "service" {
+		return nil, errors.New("actor_type must be user or service")
+	}
+	for _, permission := range claims.Permissions {
+		if permission == "" || len(strings.Fields(permission)) != 1 {
+			return nil, errors.New("permissions must be an array of individual permission strings")
+		}
 	}
 	return claims, nil
 }
 
-// AddPermissions normalizes the permissions, scp, and scope claim shapes used
-// by IdNest/Hydra. Claims and OAuth token responses may encode scopes either as
-// arrays or as space-delimited strings.
+func validateCanonicalPermissionsClaim(raw string) error {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return errors.New("invalid token encoding")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return errors.New("invalid token payload encoding")
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return errors.New("invalid token payload")
+	}
+	rawPermissions, ok := document["permissions"]
+	if !ok || len(rawPermissions) == 0 || rawPermissions[0] != '[' {
+		return errors.New("permissions must be an array of individual permission strings")
+	}
+	var permissions []string
+	if err := json.Unmarshal(rawPermissions, &permissions); err != nil {
+		return errors.New("permissions must be an array of individual permission strings")
+	}
+	return nil
+}
+
+// AddPermissions adds explicitly supplied OAuth response scopes to browser
+// session claims. Service access tokens use only the canonical permissions
+// array and never call this as a token-claim compatibility fallback.
 func (c *Claims) AddPermissions(scopes ...string) {
 	seen := make(map[string]struct{})
-	permissions := make(jwt.ClaimStrings, 0, len(c.Permissions)+len(c.Scope)+len(c.Scopes))
+	permissions := make(jwt.ClaimStrings, 0, len(c.Permissions)+len(scopes))
 	add := func(values ...string) {
 		for _, value := range values {
 			for _, permission := range strings.Fields(value) {
@@ -140,8 +182,6 @@ func (c *Claims) AddPermissions(scopes ...string) {
 		}
 	}
 	add(c.Permissions...)
-	add(c.Scopes...)
-	add(c.Scope...)
 	add(scopes...)
 	c.Permissions = permissions
 }
@@ -365,10 +405,44 @@ func FromContext(ctx context.Context) (*Claims, bool) {
 func Require(permission string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := FromContext(r.Context())
-		if !ok || !claims.Has(permission) {
+		if !ok || claims.App == "" || claims.Environment == "" || claims.OrgID == "" || !claims.Has(permission) {
 			httpresponse.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next(w, r)
+	}
+}
+
+// RequireApplication authorizes an application-scoped operation. Unlike
+// organization billing commands, application operations such as catalogue
+// discovery do not require an org_id claim.
+func RequireApplication(permission string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := FromContext(r.Context())
+		if !ok || claims.App == "" || claims.Environment == "" || !claims.Has(permission) {
+			httpresponse.Error(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// RequireAnyApplication accepts either the dedicated catalogue permission on an
+// application token or billing:read on an organization token without weakening
+// organization-scoped command authorization.
+func RequireAnyApplication(permissions []string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := FromContext(r.Context())
+		if !ok || claims.App == "" || claims.Environment == "" {
+			httpresponse.Error(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		for _, permission := range permissions {
+			if claims.Has(permission) {
+				next(w, r)
+				return
+			}
+		}
+		httpresponse.Error(w, http.StatusForbidden, "forbidden")
 	}
 }

@@ -10,6 +10,6 @@ import (
 
 func TestSubscriptions(t *testing.T) {
 	testkit.RunCases(t, "SUB", "E", func(t *testing.T, tc testkit.PlanCase) {
-		testkit.ExerciseEndpointContract(t, tc, testkit.Endpoint{Method: http.MethodPost, Path: "/v1/subscriptions"})
+		testkit.ExerciseEndpointContract(t, tc, testkit.Endpoint{Method: http.MethodPost, Path: "/v1/subscription-transitions"})
 	})
 }

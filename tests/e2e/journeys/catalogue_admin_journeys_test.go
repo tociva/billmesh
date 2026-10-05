@@ -44,16 +44,14 @@ func TestJOURNEYPRD001Through004CatalogueLifecycleAndSubscriptionSnapshots(t *te
 
 	firstOrg := testkit.Unique("journey-first")
 	first := h.IssueToken(t, firstOrg, product.Slug, []string{"billing:read", "billing:write"}, nil)
-	firstAccount := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "First Customer", "application": product.Slug, "organization_id": firstOrg,
-	}, first)).ID
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
+		"name": "First Customer", "external_ref": testkit.Unique("first-customer"),
+	}, first)
 	firstSubscription := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{
-		"account_id": firstAccount, "plan_id": plan.ID,
-	}, first)).ID
+		ID string `json:"subscription_id"`
+	}](t, h.RequireStatusWithHeaders(t, http.StatusCreated, http.MethodPost, "/v1/subscription-transitions", map[string]any{
+		"plan_id": plan.ID,
+	}, first, http.Header{"Idempotency-Key": []string{testkit.Unique("first-subscription")}})).ID
 
 	h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/plans/"+plan.ID, map[string]any{
 		"price_minor": 2500, "billing_model": "paid", "included_credits": 250,
@@ -82,9 +80,9 @@ func TestJOURNEYPRD001Through004CatalogueLifecycleAndSubscriptionSnapshots(t *te
 	secondOrg := testkit.Unique("journey-second")
 	second := h.IssueToken(t, secondOrg, product.Slug, []string{"billing:read", "billing:write"}, nil)
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "Second Customer", "application": product.Slug, "organization_id": secondOrg,
+		"name": "Second Customer", "external_ref": testkit.Unique("second-customer"),
 	}, second)
-	secondSubscription := testkit.ActivatePaidSubscription(t, h, product.Slug, plan.Slug, second)
+	secondSubscription := testkit.ActivatePaidSubscription(t, h, product.Slug, plan.ID, second)
 	if err := pool.QueryRow(context.Background(), `SELECT price_minor,included_credits,COALESCE((entitlements->>'reports')::boolean,false)
 		FROM billmesh.subscriptions WHERE id=$1`, secondSubscription).Scan(&price, &credits, &reports); err != nil {
 		t.Fatal(err)
@@ -95,28 +93,29 @@ func TestJOURNEYPRD001Through004CatalogueLifecycleAndSubscriptionSnapshots(t *te
 
 	planDetail := testkit.Decode[cataloguePlan](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/plans/"+plan.ID, nil, admin))
 	h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/plans/"+plan.ID, map[string]any{"active": false, "version": planDetail.Version}, admin)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current", nil, first)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, first)
 
 	thirdOrg := testkit.Unique("journey-third")
 	third := h.IssueToken(t, thirdOrg, product.Slug, []string{"billing:read", "billing:write"}, nil)
 	thirdAccount := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "Third Customer", "application": product.Slug, "organization_id": thirdOrg,
+		"name": "Third Customer", "external_ref": testkit.Unique("third-customer"),
 	}, third)).ID
-	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/subscriptions", map[string]any{
-		"account_id": thirdAccount, "plan_id": plan.ID, "payment_status": "verified",
-	}, third)
+	h.RequireStatusWithHeaders(t, http.StatusBadRequest, http.MethodPost, "/v1/subscription-transitions", map[string]any{
+		"plan_id": plan.ID,
+	}, third, http.Header{"Idempotency-Key": []string{testkit.Unique("inactive-plan")}})
+	_ = thirdAccount
 
 	productDetail := testkit.Decode[catalogueProduct](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/products/"+product.ID, nil, admin))
 	archivedProduct := testkit.Decode[catalogueProduct](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{"active": false, "version": productDetail.Version}, admin))
-	publicProducts := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, first)
-	if strings.Contains(string(publicProducts), product.Slug) {
-		t.Fatalf("JOURNEY-PRD-004: archived product remains public: %s", publicProducts)
+	status, publicProducts, _ := h.JSON(t, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, first)
+	if status == http.StatusOK && strings.Contains(string(publicProducts), product.Slug) {
+		t.Fatalf("JOURNEY-PRD-004: archived product remains available: %s", publicProducts)
 	}
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current", nil, first)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, first)
 	h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{"active": true, "version": archivedProduct.Version}, admin)
-	publicProducts = h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, first)
+	publicProducts = h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, first)
 	if !strings.Contains(string(publicProducts), product.Slug) {
 		t.Fatalf("JOURNEY-PRD-004: reactivated product did not return to catalogue: %s", publicProducts)
 	}

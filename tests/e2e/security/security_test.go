@@ -25,7 +25,7 @@ func TestSecurityAuthenticationHeaderRejections(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("gap-auth")
 	valid := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, valid)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, valid)
 
 	cases := []struct {
 		name          string
@@ -43,7 +43,7 @@ func TestSecurityAuthenticationHeaderRejections(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req, err := http.NewRequest(http.MethodGet, h.BaseURL+"/v1/products", nil)
+			req, err := http.NewRequest(http.MethodGet, h.BaseURL+"/v1/catalog", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,12 +89,14 @@ func replaceJWTAlgorithm(t *testing.T, raw, algorithm string) string {
 func TestSecuritySignedMissingAndMalformedClaims(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("claims")
-	for _, claim := range []string{"exp", "iss", "aud", "sub", "org_id", "app"} {
+	for _, claim := range []string{"exp", "iss", "aud", "sub", "app"} {
 		t.Run("missing "+claim, func(t *testing.T) {
 			token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"omit_claims": []string{claim}})
-			h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/products", nil, token)
+			h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/catalog", nil, token)
 		})
 	}
+	withoutOrg := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"omit_claims": []string{"org_id"}})
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, withoutOrg)
 	for _, tc := range []struct {
 		claim string
 		value any
@@ -103,7 +105,7 @@ func TestSecuritySignedMissingAndMalformedClaims(t *testing.T) {
 	} {
 		t.Run("wrong type "+tc.claim, func(t *testing.T) {
 			token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"claim_overrides": map[string]any{tc.claim: tc.value}})
-			h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/products", nil, token)
+			h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/catalog", nil, token)
 		})
 	}
 }
@@ -113,11 +115,11 @@ func TestSecurityMissingTokenContextIsRejected(t *testing.T) {
 	org := testkit.Unique("gap-context")
 
 	withoutTokenUse := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"omit_token_use": true})
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, withoutTokenUse)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, withoutTokenUse)
 
 	withoutOrg := h.IssueToken(t, "", "daybook", testkit.AllPermissions(), nil)
-	status, raw, _ := h.JSON(t, http.MethodPost, "/v1/accounts", map[string]any{"name": "Missing Org", "external_ref": testkit.Unique("acct"), "application": "daybook", "organization_id": org}, withoutOrg)
-	if status != http.StatusUnauthorized {
+	status, raw, _ := h.JSON(t, http.MethodPost, "/v1/accounts", map[string]any{"name": "Missing Org", "external_ref": testkit.Unique("acct")}, withoutOrg)
+	if status != http.StatusForbidden {
 		t.Fatalf("GAP-AUTH-002: token without org context created an account bridge, got %d: %s", status, raw)
 	}
 }
@@ -156,10 +158,10 @@ func TestSecurityJSONParserRejectsAmbiguity(t *testing.T) {
 		body        string
 		contentType string
 	}{
-		{name: "unknown writable field", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `","application":"daybook","organization_id":"` + org + `","admin":true}`, contentType: "application/json"},
-		{name: "duplicate json key", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `","application":"daybook","organization_id":"attacker","organization_id":"` + org + `"}`, contentType: "application/json"},
-		{name: "trailing json value", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `","application":"daybook","organization_id":"` + org + `"} {"name":"second"}`, contentType: "application/json"},
-		{name: "unsupported content type", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `","application":"daybook","organization_id":"` + org + `"}`, contentType: "text/plain"},
+		{name: "unknown writable field", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `","admin":true}`, contentType: "application/json"},
+		{name: "duplicate json key", body: `{"name":"Parser","name":"Attacker","external_ref":"` + testkit.Unique("acct") + `"}`, contentType: "application/json"},
+		{name: "trailing json value", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `"} {"name":"second"}`, contentType: "application/json"},
+		{name: "unsupported content type", body: `{"name":"Parser","external_ref":"` + testkit.Unique("acct") + `"}`, contentType: "text/plain"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -170,15 +172,12 @@ func TestSecurityJSONParserRejectsAmbiguity(t *testing.T) {
 		})
 	}
 	sqlLike := `Robert'); DROP TABLE billing_accounts; --`
-	raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": sqlLike, "external_ref": testkit.Unique("sql-like"), "application": "daybook", "organization_id": org}, token)
-	id := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, raw).ID
-	account := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/"+id, nil, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": sqlLike, "external_ref": testkit.Unique("sql-like")}, token)
+	account := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, token)
 	if !strings.Contains(string(account), sqlLike) {
 		t.Fatalf("GAP-SEC-006: SQL-like name was not stored as data: %s", account)
 	}
-	h.RequireStatus(t, http.StatusBadRequest, http.MethodGet, "/v1/accounts/not-a-uuid", nil, token)
+	h.RequireStatus(t, http.StatusNotFound, http.MethodGet, "/v1/accounts/not-a-uuid", nil, token)
 }
 
 func TestSecurityAccountLinkCannotClaimForeignIdentity(t *testing.T) {
@@ -194,16 +193,14 @@ func TestSecurityAccountLinkCannotClaimForeignIdentity(t *testing.T) {
 		{"application": "daybook", "organization_id": org, "environment": "staging"},
 	} {
 		status, raw, _ := h.JSON(t, http.MethodPost, "/v1/accounts/"+account+"/links", target, token)
-		if status != http.StatusForbidden {
-			t.Fatalf("GAP-AUTHZ-005: billing-write token claimed a foreign identity link, got %d: %s", status, raw)
+		if status != http.StatusNotFound {
+			t.Fatalf("GAP-AUTHZ-005: removed account-link route returned %d: %s", status, raw)
 		}
 	}
 	foreign := h.IssueToken(t, foreignOrg, "daybook", testkit.AllPermissions(), nil)
-	h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/accounts/"+account, nil, foreign)
+	h.RequireStatus(t, http.StatusNotFound, http.MethodGet, "/v1/accounts/current", nil, foreign)
 	linker := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "billing:link"}, nil)
-	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "taskmesh", "organization_id": org, "environment": "production"}, linker)
-	taskmesh := h.IssueToken(t, org, "taskmesh", []string{"billing:read"}, nil)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/"+account, nil, taskmesh)
+	h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "taskmesh", "organization_id": org, "environment": "production"}, linker)
 }
 
 func TestSecurityProductBoundaryForWalletsAndSubscriptions(t *testing.T) {
@@ -211,13 +208,15 @@ func TestSecurityProductBoundaryForWalletsAndSubscriptions(t *testing.T) {
 	org := testkit.Unique("gap-product")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, nil)
 	account := testkit.CreateFixtureAccount(t, h, org, token)
-	taskmesh := productID(t, h, "taskmesh", token)
+	taskmeshToken := h.IssueToken(t, org, "taskmesh", []string{"catalogue:read"}, nil)
+	taskmesh := productID(t, h, "taskmesh", taskmeshToken)
 
 	status, raw, _ := h.JSON(t, http.MethodPost, "/v1/wallets", map[string]any{"account_id": account, "product_id": taskmesh}, token)
 	if status != http.StatusForbidden {
 		t.Fatalf("GAP-AUTHZ-006: daybook token created taskmesh wallet, got %d: %s", status, raw)
 	}
-	status, raw, _ = h.JSON(t, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "plan": "professional", "product": "taskmesh", "payment_status": "verified"}, token)
+	headers := http.Header{"Idempotency-Key": []string{testkit.Unique("foreign-transition")}}
+	status, raw, _ = h.JSONWithHeaders(t, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": testkit.FixturePlan(t, h, "taskmesh", "paid", taskmeshToken)}, token, headers)
 	if status != http.StatusForbidden {
 		t.Fatalf("GAP-AUTHZ-006: daybook token created taskmesh subscription, got %d: %s", status, raw)
 	}
@@ -244,28 +243,21 @@ func TestSecurityPaymentWebhookRequiresTrustedCaptureFields(t *testing.T) {
 	resetMockFailure(t, h)
 	org := testkit.Unique("gap-payment")
 	token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
-	account := testkit.CreateFixtureAccount(t, h, org, token)
-	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
-	order := testkit.Decode[struct {
-		Order struct {
-			ID       string `json:"id"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-		} `json:"order"`
-	}](t, orderRaw)
+	testkit.CreateFixtureAccount(t, h, org, token)
+	order := testkit.CreateCreditPackOrder(t, h, "daybook", 500, token)
 
 	cases := []struct {
 		name  string
 		event map[string]any
 	}{
-		{name: "missing amount and currency", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured"}},
-		{name: "zero amount", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": 0, "currency": order.Order.Currency}},
-		{name: "mismatched amount", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount + 1, "currency": order.Order.Currency}},
-		{name: "missing currency", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount}},
-		{name: "mismatched currency", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": "USD"}},
-		{name: "missing payment reference", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}},
-		{name: "unknown order", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": testkit.Unique("order"), "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}},
-		{name: "mismatched payment status", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Order.ID, "status": "authorized", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}},
+		{name: "missing amount and currency", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured"}},
+		{name: "zero amount", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": 0, "currency": order.Checkout.ClientConfig.Currency}},
+		{name: "mismatched amount", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor + 1, "currency": order.Checkout.ClientConfig.Currency}},
+		{name: "missing currency", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor}},
+		{name: "mismatched currency", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor, "currency": "USD"}},
+		{name: "missing payment reference", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor, "currency": order.Checkout.ClientConfig.Currency}},
+		{name: "unknown order", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": testkit.Unique("order"), "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor, "currency": order.Checkout.ClientConfig.Currency}},
+		{name: "mismatched payment status", event: map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": order.Checkout.ClientConfig.OrderID, "status": "authorized", "amount_minor": order.Checkout.ClientConfig.AmountMinor, "currency": order.Checkout.ClientConfig.Currency}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -291,13 +283,13 @@ func TestSecuritySharedWebhookURLUsesTenantSecret(t *testing.T) {
 	orgA := testkit.Unique("gap-webhook-a")
 	tokenA := h.IssueToken(t, orgA, "daybook", testkit.AllPermissions(), nil)
 	accountA := testkit.CreateFixtureAccount(t, h, orgA, tokenA)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "tenant-a-secret"}, tokenA)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": target, "secret": "tenant-a-secret-0123456789abcdef"}, tokenA)
 	subscriptionA := testkit.CreateFixtureSubscription(t, h, accountA, tokenA)
 
 	orgB := testkit.Unique("gap-webhook-b")
 	tokenB := h.IssueToken(t, orgB, "daybook", testkit.AllPermissions(), nil)
 	accountB := testkit.CreateFixtureAccount(t, h, orgB, tokenB)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "tenant-b-secret"}, tokenB)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": target, "secret": "tenant-b-secret-0123456789abcdef"}, tokenB)
 	subscriptionB := testkit.CreateFixtureSubscription(t, h, accountB, tokenB)
 
 	deliveries := waitForWebhookDeliveries(t, h, len(before)+4)
@@ -306,17 +298,17 @@ func TestSecuritySharedWebhookURLUsesTenantSecret(t *testing.T) {
 	foundB := false
 	eventB := ""
 	for _, delivery := range newDeliveries {
-		if delivery.App != "shared" || delivery.EventType != "subscription.active" {
+		if delivery.App != "shared" || delivery.EventType != "subscription.transition_completed" {
 			continue
 		}
 		if strings.Contains(delivery.RawBody, subscriptionA) {
-			if delivery.Signature != webhookSignature(delivery.RawBody, "tenant-a-secret") {
+			if delivery.Signature != outgoingWebhookSignature(delivery.Timestamp, delivery.RawBody, "tenant-a-secret-0123456789abcdef") {
 				t.Fatalf("GAP-SEC-002: tenant A event used the wrong secret: %+v", delivery)
 			}
 			foundA = true
 		}
 		if strings.Contains(delivery.RawBody, subscriptionB) {
-			if delivery.Signature != webhookSignature(delivery.RawBody, "tenant-b-secret") {
+			if delivery.Signature != outgoingWebhookSignature(delivery.Timestamp, delivery.RawBody, "tenant-b-secret-0123456789abcdef") {
 				t.Fatalf("GAP-SEC-002: tenant B event used the wrong secret: %+v", delivery)
 			}
 			foundB = true
@@ -339,7 +331,7 @@ func TestSecuritySharedWebhookURLUsesTenantSecret(t *testing.T) {
 	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/admin/webhooks/"+deliveryID+"/replay", nil, tokenB)
 	retried := waitForWebhookDeliveries(t, h, prior+1)
 	last := retried[len(retried)-1]
-	if last.EventID != eventB || last.Signature != webhookSignature(last.RawBody, "tenant-b-secret") {
+	if last.EventID != eventB || last.Signature != outgoingWebhookSignature(last.Timestamp, last.RawBody, "tenant-b-secret-0123456789abcdef") {
 		t.Fatalf("GAP-SEC-002: replay used wrong tenant secret: %+v", last)
 	}
 }
@@ -366,18 +358,7 @@ func rawJSON(t *testing.T, h *testkit.HTTP, method, path string, raw []byte, tok
 
 func productID(t *testing.T, h *testkit.HTTP, slug, token string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, token)
-	items := testkit.Decode[[]struct {
-		ID   string `json:"id"`
-		Slug string `json:"slug"`
-	}](t, raw)
-	for _, item := range items {
-		if item.Slug == slug {
-			return item.ID
-		}
-	}
-	t.Fatalf("product %s not found", slug)
-	return ""
+	return testkit.FixtureProduct(t, h, slug, token)
 }
 
 type receivedWebhook struct {
@@ -385,6 +366,7 @@ type receivedWebhook struct {
 	EventID   string `json:"event_id"`
 	EventType string `json:"event_type"`
 	Signature string `json:"signature"`
+	Timestamp string `json:"timestamp"`
 	RawBody   string `json:"raw_body"`
 }
 
@@ -424,5 +406,11 @@ func waitForWebhookDeliveries(t *testing.T, h *testkit.HTTP, want int) []receive
 func webhookSignature(rawBody, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(rawBody))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func outgoingWebhookSignature(timestamp, rawBody, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp + "." + rawBody))
 	return hex.EncodeToString(mac.Sum(nil))
 }

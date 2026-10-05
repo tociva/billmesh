@@ -37,7 +37,9 @@ func TestSecurityWebhookDeliveryRejectsPublicToPrivateRedirect(t *testing.T) {
 	token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
 	account := testkit.CreateFixtureAccount(t, h, org, token)
 	wallet := testkit.CreateFundedWallet(t, h, account, token)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/redirect-private", "secret": "redirect-secret"}, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{
+		"target_url": h.MockURL + "/receivers/redirect-private", "secret": "redirect-secret-0123456789abcdef012345",
+	}, token)
 	ref := testkit.Unique("redirect-event")
 	h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/wallets/"+wallet+"/grants", map[string]any{"source": "test", "operation_ref": ref, "amount": 1}, token)
 	url := os.Getenv("BILLMESH_E2E_DATABASE_URL")

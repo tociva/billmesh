@@ -21,9 +21,12 @@ func TestSecurityOutgoingWebhookSecretRotation(t *testing.T) {
 	account := testkit.CreateFixtureAccount(t, h, org, token)
 	wallet := testkit.CreateFundedWallet(t, h, account, token)
 	target := h.MockURL + "/receivers/rotation"
-	register := func(secret string) {
+	register := func(secret string) string {
 		t.Helper()
-		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": secret}, token)
+		raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": target, "secret": secret}, token)
+		return testkit.Decode[struct {
+			ID string `json:"id"`
+		}](t, raw).ID
 	}
 	deliver := func(secret string) receivedWebhook {
 		t.Helper()
@@ -35,7 +38,7 @@ func TestSecurityOutgoingWebhookSecretRotation(t *testing.T) {
 				if item.App != "rotation" || !strings.Contains(item.RawBody, ref) {
 					continue
 				}
-				if item.Signature != webhookSignature(item.RawBody, secret) {
+				if item.Signature != outgoingWebhookSignature(item.Timestamp, item.RawBody, secret) {
 					t.Fatalf("WH-021: delivery used wrong signing secret: %+v", item)
 				}
 				return item
@@ -45,11 +48,15 @@ func TestSecurityOutgoingWebhookSecretRotation(t *testing.T) {
 		t.Fatalf("WH-021: no signed delivery for %s", ref)
 		return receivedWebhook{}
 	}
-	register("old-secret")
-	oldDelivery := deliver("old-secret")
-	register("new-secret")
-	newDelivery := deliver("new-secret")
-	if newDelivery.Signature == webhookSignature(newDelivery.RawBody, "old-secret") || oldDelivery.Signature == webhookSignature(oldDelivery.RawBody, "new-secret") {
+	oldSecret := "old-secret-0123456789abcdef012345"
+	newSecret := "new-secret-0123456789abcdef012345"
+	endpointID := register(oldSecret)
+	oldDelivery := deliver(oldSecret)
+	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/webhooks/"+endpointID+"/rotate-secret", map[string]any{
+		"secret": newSecret, "grace_seconds": 60,
+	}, token)
+	newDelivery := deliver(newSecret)
+	if newDelivery.Signature == outgoingWebhookSignature(newDelivery.Timestamp, newDelivery.RawBody, oldSecret) || oldDelivery.Signature == outgoingWebhookSignature(oldDelivery.Timestamp, oldDelivery.RawBody, newSecret) {
 		t.Fatal("WH-021: retired and current secrets were not distinct")
 	}
 }
@@ -60,7 +67,7 @@ func TestSecurityOutgoingWebhookMissingSecretDoesNotSendUnsigned(t *testing.T) {
 	token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
 	account := testkit.CreateFixtureAccount(t, h, org, token)
 	wallet := testkit.CreateFundedWallet(t, h, account, token)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/missing-secret", "secret": "temporary-secret"}, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/missing-secret", "secret": "temporary-secret-0123456789abcdef"}, token)
 	url := os.Getenv("BILLMESH_E2E_DATABASE_URL")
 	if url == "" {
 		t.Fatal("BILLMESH_E2E_DATABASE_URL is required")

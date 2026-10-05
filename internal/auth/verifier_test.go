@@ -54,7 +54,8 @@ func newJWKSFixture(t *testing.T) *jwksFixture {
 
 func (f *jwksFixture) token(t *testing.T, mutate func(*Claims)) string {
 	t.Helper()
-	claims := Claims{Permissions: []string{"billing:read"}, OrgID: "org-1", App: "daybook", RegisteredClaims: jwt.RegisteredClaims{Issuer: f.issuer, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}}
+	now := time.Now()
+	claims := Claims{Permissions: []string{"billing:read"}, ActorType: "user", OrgID: "org-1", App: "daybook", Environment: "test", RegisteredClaims: jwt.RegisteredClaims{Issuer: f.issuer, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute))}}
 	if mutate != nil {
 		mutate(&claims)
 	}
@@ -187,8 +188,9 @@ func TestJWKSVerifierRequiresStandardAndBillingContextClaims(t *testing.T) {
 		{name: "missing issuer", mutate: func(claims *Claims) { claims.Issuer = "" }},
 		{name: "missing audience", mutate: func(claims *Claims) { claims.Audience = nil }},
 		{name: "missing subject", mutate: func(claims *Claims) { claims.Subject = "" }},
-		{name: "missing organization", mutate: func(claims *Claims) { claims.OrgID = "" }},
 		{name: "missing application", mutate: func(claims *Claims) { claims.App = "" }},
+		{name: "missing environment", mutate: func(claims *Claims) { claims.Environment = "" }},
+		{name: "missing actor type", mutate: func(claims *Claims) { claims.ActorType = "" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -204,8 +206,7 @@ func TestOIDCJWKSVerifierAcceptsInteractiveAdminClaims(t *testing.T) {
 	raw := fixture.token(t, func(claims *Claims) {
 		claims.OrgID = ""
 		claims.App = ""
-		claims.Permissions = nil
-		claims.Scope = jwt.ClaimStrings{"openid profile billing:admin"}
+		claims.Permissions = jwt.ClaimStrings{"billing:admin"}
 	})
 
 	claims, err := NewOIDCJWKSVerifier(fixture.issuer, "billmesh-test", nil).Verify(context.Background(), raw)
@@ -213,7 +214,7 @@ func TestOIDCJWKSVerifierAcceptsInteractiveAdminClaims(t *testing.T) {
 	require.True(t, claims.Has("billing:admin"))
 
 	_, err = NewJWKSVerifier(fixture.issuer, "billmesh-test", nil).Verify(context.Background(), raw)
-	require.ErrorContains(t, err, "missing identity context")
+	require.ErrorContains(t, err, "missing application or environment context")
 }
 
 func TestJWKSVerifierRejectsJWKSFailures(t *testing.T) {
@@ -284,18 +285,17 @@ func TestJWKSVerifierRejectsInvalidOIDCDiscovery(t *testing.T) {
 	}
 }
 
-func TestJWKSVerifierAcceptsStringPermissionClaim(t *testing.T) {
+func TestJWKSVerifierRejectsStringPermissionClaim(t *testing.T) {
 	fixture := newJWKSFixture(t)
 	defer fixture.close()
-	claims := jwt.MapClaims{"iss": fixture.issuer, "aud": "billmesh-test", "sub": "user-1", "exp": time.Now().Add(time.Minute).Unix(), "org_id": "org-1", "app": "daybook", "permissions": "billing:read"}
+	claims := jwt.MapClaims{"iss": fixture.issuer, "aud": "billmesh-test", "sub": "user-1", "exp": time.Now().Add(time.Minute).Unix(), "org_id": "org-1", "app": "daybook", "environment": "test", "actor_type": "user", "permissions": "billing:read"}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = fixture.kid
 	raw, err := token.SignedString(fixture.key)
 	require.NoError(t, err)
 
-	verified, err := NewJWKSVerifier(fixture.issuer, "billmesh-test", nil).Verify(context.Background(), raw)
-	require.NoError(t, err)
-	require.True(t, verified.Has("billing:read"))
+	_, err = NewJWKSVerifier(fixture.issuer, "billmesh-test", nil).Verify(context.Background(), raw)
+	require.Error(t, err)
 }
 
 func TestJWKSVerifierEnforcesTimeBoundaries(t *testing.T) {
@@ -336,7 +336,7 @@ func TestJWKSVerifierRejectsRetiredCachedSigningKey(t *testing.T) {
 	verifier.now = func() time.Time { return now }
 	sign := func(t *testing.T, key *rsa.PrivateKey, kid string) string {
 		t.Helper()
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, Claims{Permissions: []string{"billing:read"}, OrgID: "org-1", App: "daybook", RegisteredClaims: jwt.RegisteredClaims{Issuer: srv.URL, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}})
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, Claims{Permissions: []string{"billing:read"}, ActorType: "user", OrgID: "org-1", App: "daybook", Environment: "test", RegisteredClaims: jwt.RegisteredClaims{Issuer: srv.URL, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute))}})
 		token.Header["kid"] = kid
 		raw, err := token.SignedString(key)
 		require.NoError(t, err)

@@ -29,18 +29,21 @@ import (
 )
 
 type API struct {
-	pool            *pgxpool.Pool
-	wallets         *wallets.Service
-	auth            auth.TokenVerifier
-	log             *slog.Logger
-	client          *http.Client
-	providerBaseURL string
-	webhookSecret   string
-	sseMu           sync.Mutex
-	sseActive       map[uuid.UUID]int
-	authFailures    *failureWindow
-	mutations       *keyedBuckets
-	browser         browserAuth
+	pool                *pgxpool.Pool
+	wallets             *wallets.Service
+	auth                auth.TokenVerifier
+	log                 *slog.Logger
+	client              *http.Client
+	providerBaseURL     string
+	providerPublicKey   string
+	providerSecret      string
+	providerCheckoutURL string
+	webhookSecret       string
+	sseMu               sync.Mutex
+	sseActive           map[uuid.UUID]int
+	authFailures        *failureWindow
+	mutations           *keyedBuckets
+	browser             browserAuth
 }
 
 type browserAuth interface {
@@ -56,13 +59,17 @@ func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *
 	if log == nil {
 		log = slog.Default()
 	}
-	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"), webhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET"), sseActive: make(map[uuid.UUID]int)}
+	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"), providerPublicKey: strings.TrimSpace(os.Getenv("RAZORPAY_KEY_ID")), providerSecret: strings.TrimSpace(os.Getenv("RAZORPAY_KEY_SECRET")), providerCheckoutURL: strings.TrimRight(os.Getenv("RAZORPAY_CHECKOUT_URL"), "/"), webhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET"), sseActive: make(map[uuid.UUID]int)}
 	a.ConfigureRequestLimits(30, 10, 50)
 	return a
 }
 
 func (a *API) ConfigureBrowserAuth(browser browserAuth) {
 	a.browser = browser
+}
+
+func (a *API) paymentProviderConfigured() bool {
+	return a.providerBaseURL != "" && a.providerPublicKey != "" && a.providerSecret != ""
 }
 
 func (a *API) Handler() http.Handler {
@@ -83,16 +90,11 @@ func (a *API) Handler() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("POST /v1/accounts", auth.Require("billing:write", a.createAccount))
 	protected.HandleFunc("GET /v1/accounts/current", auth.Require("billing:read", a.getCurrentAccount))
-	protected.HandleFunc("GET /v1/accounts/{id}", auth.Require("billing:read", a.getAccount))
-	protected.HandleFunc("PATCH /v1/accounts/{id}", auth.Require("billing:write", a.updateAccount))
-	protected.HandleFunc("POST /v1/accounts/{id}/links", auth.Require("billing:write", a.linkAccount))
-	protected.HandleFunc("POST /v1/account-links", auth.Require("billing:write", a.linkCurrentAccount))
-	protected.HandleFunc("POST /v1/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
-	protected.HandleFunc("GET /v1/products", a.listProducts)
-	protected.HandleFunc("GET /v1/catalog", auth.Require("billing:read", a.catalogue))
-	protected.HandleFunc("POST /v1/plans", a.requireCatalogueAdmin("plan.create", "plan", a.createPlan))
-	protected.HandleFunc("GET /v1/plans", a.listPlans)
-	protected.HandleFunc("PATCH /v1/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
+	protected.HandleFunc("POST /v1/account-ownership-transfers", auth.Require("billing:ownership", a.createOwnershipTransfer))
+	protected.HandleFunc("GET /v1/account-ownership-transfers/{id}", auth.Require("billing:read", a.getOwnershipTransfer))
+	protected.HandleFunc("POST /v1/account-ownership-transfers/{id}/confirm", auth.Require("billing:ownership", a.confirmOwnershipTransfer))
+	protected.HandleFunc("POST /v1/account-ownership-transfers/{id}/cancel", auth.Require("billing:ownership", a.cancelOwnershipTransfer))
+	protected.HandleFunc("GET /v1/catalog", auth.RequireAnyApplication([]string{"catalogue:read", "billing:read"}, a.catalogue))
 	protected.HandleFunc("GET /v1/admin/products", a.requireCatalogueAdmin("product.list", "product", a.listAdminProducts))
 	protected.HandleFunc("GET /v1/admin/product-policy-metadata", a.requireCatalogueAdmin("product.read", "product", a.productPolicyMetadata))
 	protected.HandleFunc("POST /v1/admin/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
@@ -102,16 +104,9 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/admin/products/{id}/plans", a.requireCatalogueAdmin("plan.create", "plan", a.createPlan))
 	protected.HandleFunc("GET /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.read", "plan", a.getAdminPlan))
 	protected.HandleFunc("PATCH /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
-	protected.HandleFunc("POST /v1/credit-packs", a.requireAdmin("credit_pack.create", "credit_pack", a.createCreditPack))
-	protected.HandleFunc("GET /v1/credit-packs", auth.Require("billing:read", a.listCreditPacks))
-	protected.HandleFunc("POST /v1/subscriptions", auth.Require("billing:write", a.createSubscription))
-	protected.HandleFunc("GET /v1/subscriptions/current", auth.Require("billing:read", a.currentSubscription))
+	protected.HandleFunc("POST /v1/admin/credit-packs", a.requireAdmin("credit_pack.create", "credit_pack", a.createCreditPack))
+	protected.HandleFunc("GET /v1/credit-packs", auth.RequireAnyApplication([]string{"catalogue:read", "billing:read"}, a.listCreditPacks))
 	protected.HandleFunc("POST /v1/subscriptions/current/cancellation", auth.Require("billing:write", a.requestCurrentCancellation))
-	protected.HandleFunc("POST /v1/subscriptions/{id}/change-plan", auth.Require("billing:write", a.changeSubscriptionPlan))
-	protected.HandleFunc("POST /v1/subscriptions/{id}/cancel", auth.Require("billing:write", a.cancelSubscription))
-	protected.HandleFunc("POST /v1/subscriptions/current/cancel", auth.Require("billing:write", a.cancelCurrentSubscription))
-	protected.HandleFunc("POST /v1/subscriptions/{id}/reactivate", auth.Require("billing:write", a.reactivateSubscription))
-	protected.HandleFunc("POST /v1/subscriptions/{id}/renew", auth.Require("billing:write", a.renewSubscription))
 	protected.HandleFunc("POST /v1/subscription-transitions", auth.Require("billing:write", a.createSubscriptionTransition))
 	protected.HandleFunc("GET /v1/subscription-transitions/{id}", auth.Require("billing:read", a.getSubscriptionTransition))
 	protected.HandleFunc("POST /v1/subscription-transitions/{id}/cancel", auth.Require("billing:write", a.cancelSubscriptionTransition))
@@ -161,7 +156,7 @@ func (a *API) Handler() http.Handler {
 		})
 		mux.Handle("/api/v1/", a.browser.Middleware(http.StripPrefix("/api", browserProtected)))
 	}
-	handler := http.Handler(requestLog(a.log, recoverer(httpresponse.JSONFallbacks(mux))))
+	handler := http.Handler(requestID(requestLog(a.log, recoverer(httpresponse.JSONFallbacks(mux)))))
 	if a.browser != nil {
 		handler = a.browser.CORS(handler)
 	}
@@ -180,23 +175,19 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name           string `json:"name"`
-		ExternalRef    string `json:"external_ref"`
-		Application    string `json:"application"`
-		OrganizationID string `json:"organization_id"`
+		Name        string `json:"name"`
+		ExternalRef string `json:"external_ref"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	if in.Name == "" || in.Application == "" || in.OrganizationID == "" {
-		writeError(w, 400, "name, application and organization_id are required")
+	if in.Name == "" {
+		writeCodedError(w, http.StatusBadRequest, "account_name_required", "name is required")
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	if (claims.OrgID != in.OrganizationID || claims.App != in.Application) && !claims.Has("billing:link") {
-		writeError(w, 403, "identity mismatch")
-		return
-	}
+	application := claims.App
+	organizationID := claims.OrgID
 	tx, err := a.pool.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "database error")
@@ -211,7 +202,7 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	var productID uuid.UUID
 	var policyVersion, catalogueRevision int64
 	if err = tx.QueryRow(r.Context(), `SELECT p.id,p.billing_policy,p.billing_policy_version,COALESCE(cr.revision,1)
-		FROM products p LEFT JOIN catalogue_revisions cr ON cr.product_id=p.id WHERE p.slug=$1 AND p.active`, in.Application).
+		FROM products p LEFT JOIN catalogue_revisions cr ON cr.product_id=p.id WHERE p.slug=$1 AND p.active`, application).
 		Scan(&productID, &policy, &policyVersion, &catalogueRevision); err != nil {
 		writeError(w, http.StatusBadRequest, "application does not identify an active billing product")
 		return
@@ -223,11 +214,16 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	issuer := claims.Issuer
 	subject := claims.Subject
 	switch policy.Customer.Scope {
+	case "identity":
+		if claims.ActorType != "user" {
+			writeCodedError(w, http.StatusForbidden, "delegated_owner_identity_required", "a delegated user identity is required by product policy")
+			return
+		}
 	case "organization":
-		issuer = "urn:billmesh:organization:" + in.Application + ":" + environment
-		subject = in.OrganizationID
+		issuer = "urn:billmesh:organization:" + application + ":" + environment
+		subject = organizationID
 	case "external_customer":
-		issuer = "urn:billmesh:external-customer:" + in.Application + ":" + environment
+		issuer = "urn:billmesh:external-customer:" + application + ":" + environment
 		subject = strings.TrimSpace(claims.BillingCustomerID)
 		if subject == "" {
 			writeError(w, http.StatusForbidden, "billing_customer_id claim is required by product policy")
@@ -242,7 +238,7 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Serialize this identity key so a repeated create returns the same account.
-	identityKey := in.Application + ":" + in.OrganizationID + ":" + environment
+	identityKey := application + ":" + organizationID + ":" + environment
 	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, identityKey); err != nil {
 		writeDBError(w, err)
 		return
@@ -257,7 +253,7 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 	var created time.Time
 	var name string
 	var ref *string
-	err = tx.QueryRow(r.Context(), `SELECT b.id,b.name,b.external_ref,b.created_at FROM account_links l JOIN billing_accounts b ON b.id=l.account_id WHERE l.application=$1 AND l.organization_id=$2 AND l.environment=$3`, in.Application, in.OrganizationID, environment).Scan(&id, &name, &ref, &created)
+	err = tx.QueryRow(r.Context(), `SELECT b.id,b.name,b.external_ref,b.created_at FROM account_links l JOIN billing_accounts b ON b.id=l.account_id WHERE l.application=$1 AND l.organization_id=$2 AND l.environment=$3`, application, organizationID, environment).Scan(&id, &name, &ref, &created)
 	if err == nil {
 		if _, err = tx.Exec(r.Context(), `UPDATE billing_accounts SET customer_id=COALESCE(customer_id,$2),updated_at=now() WHERE id=$1`, id, customerID); err != nil {
 			writeDBError(w, err)
@@ -282,7 +278,7 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	if _, err = tx.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id,environment) VALUES($1,$2,$3,$4)`, id, in.Application, in.OrganizationID, environment); err != nil {
+	if _, err = tx.Exec(r.Context(), `INSERT INTO account_links(account_id,application,organization_id,environment) VALUES($1,$2,$3,$4)`, id, application, organizationID, environment); err != nil {
 		writeDBError(w, err)
 		return
 	}
@@ -649,7 +645,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	httpresponse.Error(w, status, message)
 }
 func writeCodedError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]any{"error": message, "code": code})
+	writeJSON(w, status, map[string]any{"error": message, "code": code, "request_id": w.Header().Get("X-Request-ID")})
 }
 func writeNoContent(w http.ResponseWriter) {
 	httpresponse.NoContent(w)
@@ -690,4 +686,28 @@ func requestLog(log *slog.Logger, next http.Handler) http.Handler {
 			log.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 		}
 	})
+}
+
+func requestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if !validRequestID(id) {
+			id = uuid.NewString()
+		}
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func validRequestID(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._:-", character) {
+			continue
+		}
+		return false
+	}
+	return true
 }

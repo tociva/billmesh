@@ -14,7 +14,28 @@ func JSON(w http.ResponseWriter, status int, value any) {
 
 // Error writes the standard API error envelope.
 func Error(w http.ResponseWriter, status int, message string) {
-	JSON(w, status, map[string]string{"error": message})
+	code := map[int]string{
+		http.StatusBadRequest:           "invalid_request",
+		http.StatusUnauthorized:         "unauthenticated",
+		http.StatusForbidden:            "forbidden",
+		http.StatusNotFound:             "not_found",
+		http.StatusMethodNotAllowed:     "method_not_allowed",
+		http.StatusConflict:             "conflict",
+		http.StatusPreconditionFailed:   "stale_revision",
+		http.StatusPreconditionRequired: "precondition_required",
+		http.StatusTooManyRequests:      "rate_limited",
+		http.StatusInternalServerError:  "internal_error",
+		http.StatusBadGateway:           "dependency_invalid_response",
+		http.StatusServiceUnavailable:   "dependency_unavailable",
+	}[status]
+	if code == "" {
+		code = "request_failed"
+	}
+	JSON(w, status, map[string]string{
+		"error":      message,
+		"code":       code,
+		"request_id": w.Header().Get("X-Request-ID"),
+	})
 }
 
 // NoContent completes a request without writing a response body.

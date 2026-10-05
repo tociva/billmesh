@@ -134,6 +134,20 @@ Swagger's static JavaScript and CSS assets remain public, but do not contain the
 API contract. The source contract is also available in the repository at
 [`api/openapi.yaml`](api/openapi.yaml).
 
+Consumer applications should also follow
+[`docs/how-to-use-billmesh.md`](docs/how-to-use-billmesh.md), which defines the
+Billmesh/application responsibility boundary, the supported integration flow,
+and the remaining production-publication gates. The exact consumer route
+allowlist is documented in
+[`docs/public-api-surface.md`](docs/public-api-surface.md). The ordered
+implementation and release work is tracked in
+[`docs/api-publication-plan.md`](docs/api-publication-plan.md).
+
+The service identity, event-delivery, and failure contracts are documented in
+[`docs/idnest-token-profile.md`](docs/idnest-token-profile.md),
+[`docs/webhook-contract.md`](docs/webhook-contract.md), and
+[`docs/api-error-codes.md`](docs/api-error-codes.md).
+
 The service endpoints under `/v1/*` use bearer tokens. The browser-facing
 protected handlers are mirrored under `/api/v1/*` and use a realm-specific
 `__Host-billmesh-*-session` cookie plus `X-CSRF-Token` for unsafe requests.

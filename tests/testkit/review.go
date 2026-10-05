@@ -152,7 +152,9 @@ func ExerciseReviewE2ECase(t *testing.T, tc PlanCase) bool {
 			"http://postgres:5432/hook",
 		} {
 			t.Run(url.QueryEscape(target), func(t *testing.T) {
-				requireReviewStatus(t, h, tc.ID, http.StatusBadRequest, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "secret"}, token)
+				requireReviewStatus(t, h, tc.ID, http.StatusBadRequest, http.MethodPost, "/v1/webhooks", map[string]any{
+					"target_url": target, "secret": "ssrf-test-secret-0123456789abcdef012345",
+				}, token)
 			})
 		}
 	case "WH-021", "WH-022", "WH-023", "WH-024":
@@ -177,7 +179,10 @@ func ExerciseReviewE2ECase(t *testing.T, tc PlanCase) bool {
 		if first == second {
 			t.Fatalf("%s: independent fixtures reused account %s", tc.ID, first)
 		}
-		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/accounts/"+first, nil, otherToken)
+		current := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, otherToken)
+		if strings.Contains(string(current), first) {
+			t.Fatalf("%s: first fixture account leaked into second tenant: %s", tc.ID, current)
+		}
 	}
 	return true
 }
@@ -196,20 +201,17 @@ func requireReviewStatus(t *testing.T, h *HTTP, id string, want int, method, pat
 
 func exerciseReviewPayment(t *testing.T, h *HTTP, id, org, token string) {
 	t.Helper()
-	account := CreateFixtureAccount(t, h, org, token)
-	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
-	order := Decode[struct {
-		PaymentID string `json:"payment_id"`
-		Order     struct {
-			ID       string `json:"id"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-		} `json:"order"`
-	}](t, orderRaw)
-	event := map[string]any{"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}
+	CreateFixtureAccount(t, h, org, token)
+	packID := FixtureCreditPack(t, h, "daybook", 500, token)
+	key := Unique("review-payment")
+	orderRaw := h.RequireStatusWithHeaders(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": packID}, token,
+		http.Header{"Idempotency-Key": []string{key}})
+	order := Decode[PaymentOrderFixture](t, orderRaw)
+	config := order.Checkout.ClientConfig
+	event := map[string]any{"id": Unique("event"), "type": "payment.captured", "payment_id": Unique("payment"), "order_id": config.OrderID, "status": "captured", "amount_minor": config.AmountMinor, "currency": config.Currency}
 	switch id {
 	case "PAY-021":
-		event["amount_minor"] = order.Order.Amount + 1
+		event["amount_minor"] = config.AmountMinor + 1
 		event["currency"] = "USD"
 		if status := h.SignedWebhook(t, "/v1/payments/webhook", event, "test-webhook-secret"); status != http.StatusBadRequest {
 			t.Fatalf("%s: want 400 for mismatched capture, got %d", id, status)
@@ -226,7 +228,8 @@ func exerciseReviewPayment(t *testing.T, h *HTTP, id, org, token string) {
 			t.Fatalf("%s: payment leaked into another account", id)
 		}
 	case "PAY-023":
-		secondRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500", "idempotency_key": order.PaymentID}, token)
+		secondRaw := h.RequireStatusWithHeaders(t, http.StatusOK, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": packID}, token,
+			http.Header{"Idempotency-Key": []string{key}})
 		second := Decode[struct {
 			PaymentID string `json:"payment_id"`
 		}](t, secondRaw)
@@ -237,7 +240,7 @@ func exerciseReviewPayment(t *testing.T, h *HTTP, id, org, token string) {
 		if status := h.SignedWebhook(t, "/v1/payments/webhook", event, "test-webhook-secret"); status != http.StatusNoContent {
 			t.Fatalf("%s: capture status %d", id, status)
 		}
-		refund := map[string]any{"id": Unique("refund-event"), "type": "refund.processed", "payment_id": event["payment_id"], "refund_id": Unique("refund"), "amount_minor": order.Order.Amount}
+		refund := map[string]any{"id": Unique("refund-event"), "type": "refund.processed", "payment_id": event["payment_id"], "refund_id": Unique("refund"), "amount_minor": config.AmountMinor}
 		if status := h.SignedWebhook(t, "/v1/payments/webhook", refund, "test-webhook-secret"); status != http.StatusNoContent {
 			t.Fatalf("%s: refund status %d", id, status)
 		}
@@ -261,9 +264,13 @@ func exerciseReviewPayment(t *testing.T, h *HTTP, id, org, token string) {
 		t.Cleanup(func() {
 			_, _ = h.Client.Post(h.MockURL+"/test/failure", "application/json", strings.NewReader(`{"status":0}`))
 		})
-		requireReviewStatus(t, h, id, http.StatusServiceUnavailable, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
+		status, raw, _ := h.JSONWithHeaders(t, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": packID}, token,
+			http.Header{"Idempotency-Key": []string{Unique("provider-outage")}})
+		if status != http.StatusServiceUnavailable {
+			t.Fatalf("%s: want 503, got %d: %s", id, status, raw)
+		}
 	case "PAY-027":
-		event["type"] = "payment.unsupported"
+		event["order_id"] = Unique("unknown-order")
 		if status := h.SignedWebhook(t, "/v1/payments/webhook", event, "test-webhook-secret"); status != http.StatusBadRequest {
 			t.Fatalf("%s: want 400 for unsupported operation, got %d", id, status)
 		}
@@ -277,23 +284,44 @@ func exerciseReviewSubscription(t *testing.T, h *HTTP, id, org, token string) {
 	switch id {
 	case "SUB-022":
 		before := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/entitlements", nil, token)
-		requireReviewStatus(t, h, id, http.StatusPaymentRequired, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{"plan": "daybook-pro", "payment_status": "failed"}, token)
+		paid := FixturePlan(t, h, "daybook", "paid", token)
+		raw := h.RequireStatusWithHeaders(t, http.StatusCreated, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": paid}, token,
+			http.Header{"Idempotency-Key": []string{Unique("failed-upgrade")}})
+		transition := Decode[struct {
+			Checkout struct {
+				ClientConfig struct {
+					OrderID string `json:"order_id"`
+				} `json:"client_config"`
+			} `json:"checkout"`
+		}](t, raw)
+		if status := h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{
+			"id": Unique("failed-payment"), "type": "payment.failed", "payment_id": Unique("provider-payment"),
+			"order_id": transition.Checkout.ClientConfig.OrderID, "status": "failed",
+		}, "test-webhook-secret"); status != http.StatusNoContent {
+			t.Fatalf("%s: failed payment webhook returned %d", id, status)
+		}
 		after := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/entitlements", nil, token)
 		if string(before) != string(after) {
 			t.Fatalf("%s: failed upgrade changed entitlements", id)
 		}
 	case "SUB-023", "SUB-028":
-		h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/"+subscription+"/cancel", map[string]any{"immediate": true}, token)
-		requireReviewStatus(t, h, id, http.StatusConflict, http.MethodPost, "/v1/subscriptions/"+subscription+"/renew", map[string]any{"operation_ref": Unique("late-renewal")}, token)
+		h.RequireStatusWithHeaders(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/current/cancellation", map[string]any{"effective": "immediate"}, token,
+			http.Header{"Idempotency-Key": []string{Unique("cancel")}})
+		snapshot := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot", nil, token)
+		if !strings.Contains(string(snapshot), `"status":"cancelled"`) {
+			t.Fatalf("%s: cancellation was not preserved: %s", id, snapshot)
+		}
 	case "SUB-027":
 		wallet := CreateFundedWallet(t, h, account, token)
 		before := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/wallets/"+wallet, nil, token)
-		requireReviewStatus(t, h, id, http.StatusBadRequest, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{"plan": "unknown"}, token)
+		h.RequireStatusWithHeaders(t, http.StatusBadRequest, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": "00000000-0000-0000-0000-000000000001"}, token,
+			http.Header{"Idempotency-Key": []string{Unique("unknown-plan")}})
 		after := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/wallets/"+wallet, nil, token)
 		if string(before) != string(after) {
 			t.Fatalf("%s: rejected plan change modified purchased credits", id)
 		}
 	}
+	_ = subscription
 }
 
 func exerciseReviewWebhook(t *testing.T, h *HTTP, id, org, token string) {
@@ -302,9 +330,17 @@ func exerciseReviewWebhook(t *testing.T, h *HTTP, id, org, token string) {
 	target := h.MockURL + "/receivers/daybook"
 	switch id {
 	case "WH-021":
-		requireReviewStatus(t, h, id, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "current", "previous_secret": "retired"}, token)
+		raw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{
+			"target_url": target, "secret": "current-secret-0123456789abcdef012345",
+		}, token)
+		endpoint := Decode[struct {
+			ID string `json:"id"`
+		}](t, raw).ID
+		h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/webhooks/"+endpoint+"/rotate-secret", map[string]any{
+			"secret": "replacement-secret-0123456789abcdef", "grace_seconds": 60,
+		}, token)
 	case "WH-022":
-		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "tenant-secret"}, token)
+		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": target, "secret": "tenant-secret-0123456789abcdef012345"}, token)
 		otherOrg := Unique("other-org")
 		other := h.IssueToken(t, otherOrg, "daybook", AllPermissions(), nil)
 		CreateFixtureAccount(t, h, otherOrg, other)
@@ -328,7 +364,7 @@ func exerciseReviewWebhook(t *testing.T, h *HTTP, id, org, token string) {
 				reset.Body.Close()
 			}
 		})
-		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": target, "secret": "retry-secret"}, token)
+		h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": target, "secret": "retry-secret-0123456789abcdef012345"}, token)
 	}
 }
 

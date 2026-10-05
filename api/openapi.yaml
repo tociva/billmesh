@@ -234,7 +234,7 @@ paths:
       operationId: createAccount
       tags: [Accounts]
       summary: Create or return a billing account for an identity
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       parameters:
         - { $ref: "#/components/parameters/IfMatch" }
       requestBody: { $ref: "#/components/requestBodies/CreateAccount" }
@@ -247,51 +247,76 @@ paths:
       operationId: getCurrentAccount
       tags: [Accounts]
       summary: Get the account linked to the caller
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       responses:
         "200": { $ref: "#/components/responses/Account" }
         default: { $ref: "#/components/responses/Error" }
-  /v1/accounts/{id}:
+  /v1/account-ownership-transfers:
+    post:
+      operationId: createAccountOwnershipTransfer
+      tags: [Accounts]
+      summary: Pre-authorize a billing account ownership transfer
+      x-required-permissions: ["billing:ownership"]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+        - { $ref: "#/components/parameters/IfMatchRequired" }
+      requestBody: { $ref: "#/components/requestBodies/CreateOwnershipTransfer" }
+      responses:
+        "201":
+          description: Ownership transfer decision.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnershipTransfer" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/account-ownership-transfers/{id}:
     parameters:
       - { $ref: "#/components/parameters/ID" }
     get:
-      operationId: getAccount
+      operationId: getAccountOwnershipTransfer
       tags: [Accounts]
-      summary: Get a billing account
-      x-required-permissions: [billing:read]
+      summary: Get an ownership transfer decision and status
+      x-required-permissions: ["billing:read"]
       responses:
-        "200": { $ref: "#/components/responses/Account" }
+        "200":
+          description: Ownership transfer status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnershipTransfer" }
         default: { $ref: "#/components/responses/Error" }
-    patch:
-      operationId: updateAccount
-      tags: [Accounts]
-      summary: Rename a billing account
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/UpdateAccount" }
-      responses:
-        "200": { $ref: "#/components/responses/AccountSummary" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/accounts/{id}/links:
+  /v1/account-ownership-transfers/{id}/confirm:
     parameters:
       - { $ref: "#/components/parameters/ID" }
     post:
-      operationId: linkAccount
+      operationId: confirmAccountOwnershipTransfer
       tags: [Accounts]
-      summary: Link another application identity to an account
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/AccountLink" }
+      summary: Confirm a pre-authorized ownership transfer
+      x-required-permissions: ["billing:ownership"]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+        - { $ref: "#/components/parameters/IfMatchRequired" }
       responses:
-        "204": { $ref: "#/components/responses/NoContent" }
+        "200":
+          description: Confirmed ownership transfer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnershipTransfer" }
         default: { $ref: "#/components/responses/Error" }
-  /v1/account-links:
+  /v1/account-ownership-transfers/{id}/cancel:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
     post:
-      operationId: linkCurrentAccount
+      operationId: cancelAccountOwnershipTransfer
       tags: [Accounts]
-      summary: Link another application identity to the caller's account
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/AccountLink" }
+      summary: Cancel a pending ownership transfer
+      x-required-permissions: ["billing:ownership"]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
-        "204": { $ref: "#/components/responses/NoContent" }
+        "200":
+          description: Cancelled ownership transfer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnershipTransfer" }
         default: { $ref: "#/components/responses/Error" }
   /v1/accounts/{id}/installations:
     parameters:
@@ -300,7 +325,7 @@ paths:
       operationId: createInstallation
       tags: [Installations]
       summary: Create or reactivate an application installation
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       requestBody: { $ref: "#/components/requestBodies/Installation" }
       responses:
         "201":
@@ -309,39 +334,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Installation" }
         default: { $ref: "#/components/responses/Error" }
-  /v1/products:
-    get:
-      operationId: listProducts
-      tags: [Catalogue]
-      summary: List active customer-visible products
-      responses:
-        "200":
-          description: Products.
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Product" }
-        default: { $ref: "#/components/responses/Error" }
-    post:
-      operationId: createProduct
-      tags: [Catalogue]
-      summary: Create a product
-      x-required-permissions: [billing:admin]
-      requestBody: { $ref: "#/components/requestBodies/CreateProduct" }
-      responses:
-        "201":
-          description: Product created.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Product" }
-        default: { $ref: "#/components/responses/Error" }
   /v1/catalog:
     get:
       operationId: getCatalogue
       tags: [Catalogue]
       summary: Get the authoritative customer catalogue
-      x-required-permissions: [billing:read]
+      x-required-permissions-any: ["catalogue:read", "billing:read"]
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
         - { $ref: "#/components/parameters/IfNoneMatch" }
@@ -377,57 +375,12 @@ paths:
               schema: { $ref: "#/components/schemas/Catalogue" }
         "304": { $ref: "#/components/responses/NotModified" }
         default: { $ref: "#/components/responses/Error" }
-  /v1/plans:
-    get:
-      operationId: listPlans
-      tags: [Catalogue]
-      summary: List active plans
-      parameters:
-        - { $ref: "#/components/parameters/ProductFilter" }
-      responses:
-        "200":
-          description: Plans.
-          content:
-            application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Plan" }
-        default: { $ref: "#/components/responses/Error" }
-    post:
-      operationId: createPlan
-      tags: [Catalogue]
-      summary: Create a plan
-      x-required-permissions: [billing:admin]
-      requestBody: { $ref: "#/components/requestBodies/CreatePlan" }
-      responses:
-        "201":
-          description: Plan created.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Plan" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/plans/{id}:
-    parameters:
-      - { $ref: "#/components/parameters/ID" }
-    patch:
-      operationId: updatePlan
-      tags: [Catalogue]
-      summary: Update a plan
-      x-required-permissions: [billing:admin]
-      requestBody: { $ref: "#/components/requestBodies/UpdatePlan" }
-      responses:
-        "200":
-          description: Plan updated.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Plan" }
-        default: { $ref: "#/components/responses/Error" }
   /v1/admin/products:
     get:
       operationId: listAdminProducts
       tags: [Administration, Catalogue]
       summary: List active and archived products
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       parameters:
         - name: status
           in: query
@@ -442,15 +395,13 @@ paths:
           description: Products visible to an administrator.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Product" }
+              schema: { $ref: "#/components/schemas/ProductPage" }
         default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createAdminProduct
       tags: [Administration, Catalogue]
       summary: Create a product
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       requestBody: { $ref: "#/components/requestBodies/CreateProduct" }
       responses:
         "201":
@@ -464,7 +415,7 @@ paths:
       operationId: getProductPolicyMetadata
       tags: [Administration, Catalogue]
       summary: Get product billing-policy defaults, options, and constraints
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       responses:
         "200":
           description: Billing-policy form metadata.
@@ -479,7 +430,7 @@ paths:
       operationId: getAdminProduct
       tags: [Administration, Catalogue]
       summary: Get active or archived product detail
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       responses:
         "200":
           description: Product detail.
@@ -491,7 +442,7 @@ paths:
       operationId: updateAdminProduct
       tags: [Administration, Catalogue]
       summary: Update, archive, or reactivate a product
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       requestBody: { $ref: "#/components/requestBodies/UpdateProduct" }
       responses:
         "200":
@@ -507,7 +458,7 @@ paths:
       operationId: listAdminProductPlans
       tags: [Administration, Catalogue]
       summary: List active and inactive plans for a product
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       parameters:
         - name: status
           in: query
@@ -527,7 +478,7 @@ paths:
       operationId: createAdminProductPlan
       tags: [Administration, Catalogue]
       summary: Create a plan for a product
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       requestBody: { $ref: "#/components/requestBodies/CreateNestedPlan" }
       responses:
         "201":
@@ -543,7 +494,7 @@ paths:
       operationId: getAdminPlan
       tags: [Administration, Catalogue]
       summary: Get active or inactive plan detail
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       responses:
         "200":
           description: Plan detail.
@@ -555,7 +506,7 @@ paths:
       operationId: updateAdminPlan
       tags: [Administration, Catalogue]
       summary: Update, archive, or reactivate a plan
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       requestBody: { $ref: "#/components/requestBodies/UpdateAdminPlan" }
       responses:
         "200":
@@ -569,7 +520,7 @@ paths:
       operationId: listCreditPacks
       tags: [Catalogue]
       summary: List active credit packs
-      x-required-permissions: [billing:read]
+      x-required-permissions-any: ["catalogue:read", "billing:read"]
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
       responses:
@@ -581,50 +532,22 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/CreditPack" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/admin/credit-packs:
     post:
       operationId: createCreditPack
-      tags: [Catalogue]
+      tags: [Administration, Catalogue]
       summary: Create a prepaid credit pack
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       requestBody: { $ref: "#/components/requestBodies/CreateCreditPack" }
       responses:
         "201": { $ref: "#/components/responses/IDOnly" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions:
-    post:
-      operationId: createSubscription
-      tags: [Subscriptions]
-      summary: Subscribe an account to a plan
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/CreateSubscription" }
-      responses:
-        "201":
-          description: Subscription created.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Subscription" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions/current:
-    get:
-      operationId: getCurrentSubscription
-      tags: [Subscriptions]
-      summary: Get the caller's current subscription
-      x-required-permissions: [billing:read]
-      parameters:
-        - { $ref: "#/components/parameters/ProductFilter" }
-      responses:
-        "200":
-          description: Current subscription.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Subscription" }
         default: { $ref: "#/components/responses/Error" }
   /v1/subscriptions/current/cancellation:
     post:
       operationId: requestCurrentSubscriptionCancellation
       tags: [Subscriptions]
       summary: Cancel the current subscription immediately or at period end
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { $ref: "#/components/requestBodies/Cancellation" }
@@ -635,78 +558,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CancellationResult" }
         default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions/{id}/change-plan:
-    parameters:
-      - { $ref: "#/components/parameters/ID" }
-    post:
-      operationId: changeSubscriptionPlan
-      tags: [Subscriptions]
-      summary: Change a subscription's plan
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/ChangePlan" }
-      responses:
-        "200": { $ref: "#/components/responses/SubscriptionPlan" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions/{id}/cancel:
-    parameters:
-      - { $ref: "#/components/parameters/ID" }
-    post:
-      operationId: cancelSubscription
-      tags: [Subscriptions]
-      summary: Cancel a subscription immediately or at period end
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/SubscriptionStatus" }
-      responses:
-        "200": { $ref: "#/components/responses/SubscriptionStatus" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions/current/cancel:
-    post:
-      operationId: cancelCurrentSubscription
-      tags: [Subscriptions]
-      summary: Immediately cancel the caller's current application subscription
-      x-required-permissions: [billing:write]
-      responses:
-        "204": { $ref: "#/components/responses/NoContent" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions/{id}/reactivate:
-    parameters:
-      - { $ref: "#/components/parameters/ID" }
-    post:
-      operationId: reactivateSubscription
-      tags: [Subscriptions]
-      summary: Reactivate a subscription
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/SubscriptionStatus" }
-      responses:
-        "200": { $ref: "#/components/responses/SubscriptionStatus" }
-        default: { $ref: "#/components/responses/Error" }
-  /v1/subscriptions/{id}/renew:
-    parameters:
-      - { $ref: "#/components/parameters/ID" }
-    post:
-      operationId: renewSubscription
-      tags: [Subscriptions]
-      summary: Renew a subscription idempotently
-      x-required-permissions: [billing:write]
-      requestBody: { $ref: "#/components/requestBodies/RenewSubscription" }
-      responses:
-        "200":
-          description: Renewal result.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Renewal" }
-        default: { $ref: "#/components/responses/Error" }
   /v1/subscription-transitions:
     post:
       operationId: createSubscriptionTransition
       tags: [Subscriptions]
       summary: Select a plan and let Billmesh determine the required transition
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
         - { $ref: "#/components/parameters/IfMatch" }
       requestBody: { $ref: "#/components/requestBodies/CreateSubscriptionTransition" }
       responses:
+        "200":
+          description: Existing idempotent transition.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionTransition" }
         "201":
           description: Transition created.
           headers:
@@ -722,7 +591,9 @@ paths:
       operationId: getSubscriptionTransition
       tags: [Subscriptions]
       summary: Get a subscription transition
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
+      parameters:
+        - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
         "200":
           description: Transition state.
@@ -731,6 +602,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SubscriptionTransition" }
+        "304": { $ref: "#/components/responses/NotModified" }
         default: { $ref: "#/components/responses/Error" }
   /v1/subscription-transitions/{id}/cancel:
     parameters:
@@ -739,7 +611,9 @@ paths:
       operationId: cancelSubscriptionTransition
       tags: [Subscriptions]
       summary: Cancel a pending subscription transition
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "200":
           description: Cancelled transition.
@@ -754,7 +628,7 @@ paths:
       operationId: getBillingSnapshot
       tags: [Billing state]
       summary: Get the authoritative revisioned billing projection
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
         - { $ref: "#/components/parameters/IfNoneMatch" }
@@ -773,7 +647,7 @@ paths:
       operationId: getEntitlements
       tags: [Entitlements]
       summary: Get the effective entitlements for a product
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
       responses:
@@ -788,7 +662,7 @@ paths:
       operationId: checkEntitlement
       tags: [Entitlements]
       summary: Check whether a feature is enabled
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - name: feature
           in: query
@@ -802,7 +676,7 @@ paths:
       operationId: createWallet
       tags: [Wallets]
       summary: Create or return an account's product wallet
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       requestBody: { $ref: "#/components/requestBodies/CreateWallet" }
       responses:
         "201": { $ref: "#/components/responses/Wallet" }
@@ -814,7 +688,7 @@ paths:
       operationId: getWallet
       tags: [Wallets]
       summary: Get wallet balances
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       responses:
         "200": { $ref: "#/components/responses/Wallet" }
         default: { $ref: "#/components/responses/Error" }
@@ -825,7 +699,7 @@ paths:
       operationId: listWalletLedger
       tags: [Wallets]
       summary: List a wallet's credit ledger
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - { $ref: "#/components/parameters/Limit" }
       responses:
@@ -844,7 +718,7 @@ paths:
       operationId: grantCredits
       tags: [Wallets]
       summary: Grant credits to a wallet idempotently
-      x-required-permissions: [credits:grant]
+      x-required-permissions: ["credits:grant"]
       requestBody: { $ref: "#/components/requestBodies/GrantCredits" }
       responses:
         "200": { $ref: "#/components/responses/Wallet" }
@@ -857,7 +731,7 @@ paths:
       tags: [Reservations]
       summary: Reserve credits for an execution
       description: The tuple `(wallet ID, execution_id, operation_seq)` is idempotent.
-      x-required-permissions: [credits:reserve]
+      x-required-permissions: ["credits:reserve"]
       requestBody: { $ref: "#/components/requestBodies/ReserveCredits" }
       responses:
         "201": { $ref: "#/components/responses/Reservation" }
@@ -869,7 +743,7 @@ paths:
       operationId: settleReservation
       tags: [Reservations]
       summary: Settle a reservation with actual credit usage
-      x-required-permissions: [credits:settle]
+      x-required-permissions: ["credits:settle"]
       requestBody: { $ref: "#/components/requestBodies/Settlement" }
       responses:
         "200": { $ref: "#/components/responses/Reservation" }
@@ -881,7 +755,7 @@ paths:
       operationId: releaseReservation
       tags: [Reservations]
       summary: Release all credits held by a reservation
-      x-required-permissions: [credits:settle]
+      x-required-permissions: ["credits:settle"]
       responses:
         "200": { $ref: "#/components/responses/Reservation" }
         default: { $ref: "#/components/responses/Error" }
@@ -892,7 +766,7 @@ paths:
       operationId: extendReservation
       tags: [Reservations]
       summary: Extend a reservation's expiry
-      x-required-permissions: [credits:reserve]
+      x-required-permissions: ["credits:reserve"]
       requestBody: { $ref: "#/components/requestBodies/ExtendReservation" }
       responses:
         "200": { $ref: "#/components/responses/Reservation" }
@@ -902,7 +776,7 @@ paths:
       operationId: authorizeExecution
       tags: [Reservations]
       summary: Authorize an execution against an installation or funded wallet
-      x-required-permissions: [credits:reserve]
+      x-required-permissions: ["credits:reserve"]
       requestBody: { $ref: "#/components/requestBodies/AuthorizeExecution" }
       responses:
         "201":
@@ -918,7 +792,7 @@ paths:
       operationId: revokeInstallation
       tags: [Installations]
       summary: Revoke an application installation
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
@@ -929,7 +803,7 @@ paths:
       operationId: settleInstallationExecution
       tags: [Installations]
       summary: Clear and settle an installation's active execution
-      x-required-permissions: [credits:settle]
+      x-required-permissions: ["credits:settle"]
       requestBody: { $ref: "#/components/requestBodies/Settlement" }
       responses:
         "200":
@@ -949,7 +823,7 @@ paths:
       tags: [Usage]
       summary: Record one or more usage events
       description: Accepts a single event, an array, or an object containing an `events` array of at most 1000 items.
-      x-required-permissions: [credits:settle]
+      x-required-permissions: ["credits:settle"]
       requestBody:
         required: true
         content:
@@ -985,7 +859,7 @@ paths:
       operationId: listUsageEvents
       tags: [Usage]
       summary: List usage events for the caller's account
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - { name: meter, in: query, schema: { type: string } }
         - { $ref: "#/components/parameters/ProductFilter" }
@@ -1007,7 +881,7 @@ paths:
       operationId: getLimits
       tags: [Usage]
       summary: Get wallet usage and credit limits
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       responses:
         "200":
           description: Wallet limits visible to the caller.
@@ -1022,9 +896,16 @@ paths:
       operationId: createPaymentOrder
       tags: [Payments]
       summary: Create a payment-provider order for a credit pack
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
+      parameters:
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { $ref: "#/components/requestBodies/CreatePaymentOrder" }
       responses:
+        "200":
+          description: Existing idempotent payment order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentOrder" }
         "201":
           description: Payment order created or returned idempotently.
           content:
@@ -1057,41 +938,39 @@ paths:
       operationId: listPayments
       tags: [Payments]
       summary: List payments for the caller's account
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
       responses:
         "200":
           description: Payments, newest first.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Payment" }
+              schema: { $ref: "#/components/schemas/PaymentPage" }
         default: { $ref: "#/components/responses/Error" }
   /v1/invoices:
     get:
       operationId: listInvoices
       tags: [Payments]
       summary: List invoices for the caller's account
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - { $ref: "#/components/parameters/Limit" }
+        - { $ref: "#/components/parameters/Cursor" }
       responses:
         "200":
           description: Invoices, newest first.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Invoice" }
+              schema: { $ref: "#/components/schemas/InvoicePage" }
         default: { $ref: "#/components/responses/Error" }
   /v1/webhooks:
     post:
       operationId: registerWebhook
       tags: [Webhooks]
       summary: Register or replace an application webhook
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       requestBody: { $ref: "#/components/requestBodies/RegisterWebhook" }
       responses:
         "201":
@@ -1104,7 +983,7 @@ paths:
       operationId: listWebhooks
       tags: [Webhooks]
       summary: List registered webhooks
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       responses:
         "200":
           description: Registered webhooks.
@@ -1121,7 +1000,7 @@ paths:
       operationId: updateWebhook
       tags: [Webhooks]
       summary: Update or disable a webhook endpoint
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       requestBody: { $ref: "#/components/requestBodies/UpdateWebhook" }
       responses:
         "200":
@@ -1134,7 +1013,7 @@ paths:
       operationId: deleteWebhook
       tags: [Webhooks]
       summary: Disable a webhook endpoint
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
@@ -1145,7 +1024,7 @@ paths:
       operationId: rotateWebhookSecret
       tags: [Webhooks]
       summary: Rotate a webhook signing secret
-      x-required-permissions: [billing:write]
+      x-required-permissions: ["billing:write"]
       requestBody: { $ref: "#/components/requestBodies/RotateWebhookSecret" }
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -1155,7 +1034,7 @@ paths:
       operationId: createAdminAdjustment
       tags: [Administration]
       summary: Grant an audited administrative credit adjustment
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       requestBody: { $ref: "#/components/requestBodies/AdminAdjustment" }
       responses:
         "201":
@@ -1173,7 +1052,7 @@ paths:
       operationId: listAuditEvents
       tags: [Administration]
       summary: List account audit events
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       parameters:
         - { $ref: "#/components/parameters/Limit" }
       responses:
@@ -1192,7 +1071,7 @@ paths:
       operationId: replayWebhookDelivery
       tags: [Administration, Webhooks]
       summary: Queue a webhook delivery for replay
-      x-required-permissions: [billing:admin]
+      x-required-permissions: ["billing:admin"]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
@@ -1205,7 +1084,7 @@ paths:
         Replays events after `Last-Event-ID`, then streams new events. A cursor
         that has fallen out of retained history returns `410`. Each account may
         hold at most eight concurrent streams.
-      x-required-permissions: [billing:read]
+      x-required-permissions: ["billing:read"]
       parameters:
         - name: Last-Event-ID
           in: header
@@ -1225,7 +1104,14 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: OIDC access token carrying Billmesh permissions and application context.
+      description: >-
+        RS256 IdNest OIDC access token with required iss, aud, sub, iat, exp,
+        app, environment, actor_type, and a permissions string array. exp may be
+        at most one hour after iat and no additional clock-skew leeway is applied.
+        Catalogue tokens use actor_type=service and catalogue:read. Organization
+        billing tokens additionally carry org_id and billing:read and/or billing:write.
+        A human owner is represented only by actor_type=user on a delegated token;
+        a generic service-token sub is never treated as the owner.
     consoleBrowserSession:
       type: apiKey
       in: cookie
@@ -1256,6 +1142,11 @@ components:
       name: limit
       in: query
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string, minLength: 1 }
+      description: Opaque cursor returned by the preceding page.
     Offset:
       name: offset
       in: query
@@ -1276,6 +1167,12 @@ components:
       in: header
       schema: { type: string }
       description: Optional billing snapshot ETag used for optimistic concurrency.
+    IfMatchRequired:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string }
+      description: Current billing snapshot ETag required for optimistic concurrency.
     IfNoneMatch:
       name: If-None-Match
       in: header
@@ -1289,6 +1186,9 @@ components:
   headers:
     ETag:
       description: Revision-backed entity tag.
+      schema: { type: string }
+    RequestID:
+      description: Request correlation identifier.
       schema: { type: string }
   responses:
     Health:
@@ -1311,6 +1211,8 @@ components:
               status: { type: string, const: ready }
     Error:
       description: Request failed. The HTTP status communicates the failure category.
+      headers:
+        X-Request-ID: { $ref: "#/components/headers/RequestID" }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -1363,42 +1265,8 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Reservation" }
-    SubscriptionPlan:
-      description: Subscription plan changed.
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [id, plan_id]
-            properties:
-              id: { $ref: "#/components/schemas/UUID" }
-              plan_id: { $ref: "#/components/schemas/UUID" }
-    SubscriptionStatus:
-      description: Subscription status changed.
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [id, status, scheduled]
-            properties:
-              id: { $ref: "#/components/schemas/UUID" }
-              status: { type: string }
-              scheduled: { type: boolean }
   requestBodies:
     CreateAccount:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            required: [name, application, organization_id]
-            properties:
-              name: { type: string, minLength: 1 }
-              external_ref: { type: string }
-              application: { type: string, minLength: 1 }
-              organization_id: { type: string, minLength: 1 }
-    UpdateAccount:
       required: true
       content:
         application/json:
@@ -1408,18 +1276,21 @@ components:
             required: [name]
             properties:
               name: { type: string, minLength: 1 }
-    AccountLink:
+              external_ref: { type: string }
+    CreateOwnershipTransfer:
       required: true
       content:
         application/json:
           schema:
             type: object
             additionalProperties: false
-            required: [application, organization_id]
+            required: [new_owner_ref]
             properties:
-              application: { type: string, minLength: 1 }
-              organization_id: { type: string, minLength: 1 }
-              environment: { type: string, default: production }
+              new_owner_ref:
+                type: string
+                minLength: 1
+                maxLength: 512
+                description: Opaque owner reference asserted by a trusted application service token.
     Installation:
       required: true
       content:
@@ -1478,7 +1349,7 @@ components:
               billing_model: { type: string, enum: [free, paid] }
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
-              entitlements: { type: object, additionalProperties: true }
+              entitlements: { $ref: "#/components/schemas/EntitlementValues" }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               active: { type: boolean, default: true }
               selectable: { type: boolean, default: true }
@@ -1503,7 +1374,7 @@ components:
               billing_model: { type: string, enum: [free, paid] }
               price_minor: { type: integer, format: int64, minimum: 0 }
               included_credits: { type: integer, format: int64, minimum: 0 }
-              entitlements: { type: object, additionalProperties: true }
+              entitlements: { $ref: "#/components/schemas/EntitlementValues" }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               active: { type: boolean, default: true }
               selectable: { type: boolean, default: true }
@@ -1524,7 +1395,7 @@ components:
               price_minor: { type: integer, format: int64, minimum: 0 }
               currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
-              entitlements: { type: object, additionalProperties: true }
+              entitlements: { $ref: "#/components/schemas/EntitlementValues" }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               billing_interval: { type: string, enum: [monthly, annual] }
               billing_model: { type: string, enum: [free, paid] }
@@ -1549,7 +1420,7 @@ components:
               price_minor: { type: integer, format: int64, minimum: 0 }
               currency: { type: string, pattern: "^[A-Z]{3}$" }
               included_credits: { type: integer, format: int64, minimum: 0 }
-              entitlements: { type: object, additionalProperties: true }
+              entitlements: { $ref: "#/components/schemas/EntitlementValues" }
               entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
               billing_interval: { type: string, enum: [monthly, annual] }
               billing_model: { type: string, enum: [free, paid] }
@@ -1576,56 +1447,6 @@ components:
               credits: { type: integer, format: int64, minimum: 1 }
               price_minor: { type: integer, format: int64, minimum: 0 }
               validity_days: { type: integer, minimum: 1 }
-    CreateSubscription:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            properties:
-              account_id: { $ref: "#/components/schemas/UUID" }
-              plan_id: { $ref: "#/components/schemas/UUID" }
-              product: { type: string }
-              plan: { type: string }
-              payment_status: { type: string, enum: [verified] }
-            anyOf:
-              - required: [plan_id]
-              - required: [plan]
-    ChangePlan:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            properties:
-              plan_id: { $ref: "#/components/schemas/UUID" }
-              plan: { type: string }
-              effective: { type: string }
-              payment_status: { type: string }
-            anyOf:
-              - required: [plan_id]
-              - required: [plan]
-    SubscriptionStatus:
-      required: false
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            properties:
-              immediate: { type: boolean, default: true }
-    RenewSubscription:
-      required: false
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            properties:
-              operation_ref: { type: string, description: Idempotency reference required for paid renewals. }
-              payment_status: { type: string, enum: [verified] }
     CreateSubscriptionTransition:
       required: true
       content:
@@ -1728,15 +1549,9 @@ components:
           schema:
             type: object
             additionalProperties: false
-            anyOf:
-              - required: [credit_pack_id]
-              - required: [credit_pack]
+            required: [credit_pack_id]
             properties:
-              account_id: { $ref: "#/components/schemas/UUID" }
               credit_pack_id: { $ref: "#/components/schemas/UUID" }
-              credit_pack: { type: string, minLength: 1 }
-              price_minor: { type: integer, format: int64, minimum: 0, description: Optional assertion; the server controls the price. }
-              idempotency_key: { type: string, format: uuid, description: Existing internal payment ID to return. }
     RegisterWebhook:
       required: true
       content:
@@ -1744,17 +1559,15 @@ components:
           schema:
             type: object
             additionalProperties: false
-            required: [application, target_url, secret]
+            required: [target_url, secret]
             properties:
-              application: { type: string, minLength: 1 }
               target_url: { type: string, format: uri }
-              secret: { type: string, minLength: 1, writeOnly: true }
-              previous_secret: { type: string, minLength: 1, writeOnly: true, description: Optional former secret accepted during a 24-hour migration window. }
-              api_version: { type: string, enum: ["1", "2"], default: "1" }
+              secret: { type: string, minLength: 32, writeOnly: true }
+              api_version: { type: string, const: "2", default: "2" }
               event_types:
                 type: array
                 uniqueItems: true
-                items: { type: string }
+                items: { $ref: "#/components/schemas/WebhookEventType" }
     UpdateWebhook:
       required: true
       content:
@@ -1765,11 +1578,11 @@ components:
             properties:
               target_url: { type: string, format: uri }
               active: { type: boolean }
-              api_version: { type: string, enum: ["1", "2"] }
+              api_version: { type: string, const: "2" }
               event_types:
                 type: array
                 uniqueItems: true
-                items: { type: string }
+                items: { $ref: "#/components/schemas/WebhookEventType" }
     RotateWebhookSecret:
       required: true
       content:
@@ -1779,7 +1592,7 @@ components:
             additionalProperties: false
             required: [secret]
             properties:
-              secret: { type: string, minLength: 16, writeOnly: true }
+              secret: { type: string, minLength: 32, writeOnly: true }
               grace_seconds: { type: integer, format: int64, minimum: 0, maximum: 604800, default: 86400 }
     AdminAdjustment:
       required: true
@@ -1800,10 +1613,11 @@ components:
     Error:
       type: object
       additionalProperties: false
-      required: [error]
+      required: [error, code, request_id]
       properties:
         error: { type: string }
-        code: { type: string, description: Stable machine-readable reason code when available. }
+        code: { type: string, description: Stable machine-readable reason code. }
+        request_id: { type: string, description: Request correlation identifier returned in X-Request-ID. }
     IDOnly:
       type: object
       required: [id]
@@ -1818,6 +1632,23 @@ components:
         external_ref: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    OwnershipTransfer:
+      type: object
+      additionalProperties: false
+      required: [id, status, decision_code, required_action, base_revision, expires_at, confirmed_at, cancelled_at]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        status:
+          type: string
+          enum: [authorized, requires_paid_transition, ineligible, confirmed, cancelled, expired]
+        decision_code:
+          type: string
+          enum: [owner_eligible, new_owner_free_allowance_exhausted]
+        required_action: { type: string, enum: [none, paid_transition, reject] }
+        base_revision: { type: integer, format: int64, minimum: 1 }
+        expires_at: { type: string, format: date-time }
+        confirmed_at: { type: [string, "null"], format: date-time }
+        cancelled_at: { type: [string, "null"], format: date-time }
     BrowserSession:
       type: object
       required: [authenticated, user, context, permissions, csrfToken, expiresAt]
@@ -1858,6 +1689,9 @@ components:
         label: { type: string, minLength: 1, maxLength: 120 }
         description: { type: string, maxLength: 500 }
         type: { type: string, enum: [boolean, integer, number, string, select, object, array] }
+        unit: { type: string, maxLength: 64 }
+        enforcement: { type: string, enum: [feature, limit, meter] }
+        resource: { type: string, maxLength: 128 }
         required: { type: boolean, default: false }
         nullable: { type: boolean, default: false }
         default: {}
@@ -1996,6 +1830,17 @@ components:
         version: { type: integer, format: int64, minimum: 1 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    ProductPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Product" }
+        total: { type: integer, format: int64, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+        offset: { type: integer, minimum: 0 }
     Plan:
       type: object
       required: [id, product_id, slug, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, product, selectable, default_for_product, checkout_enabled, effective_from, active, version, created_at, updated_at]
@@ -2008,7 +1853,7 @@ components:
         price_minor: { type: integer, format: int64, minimum: 0 }
         currency: { type: string }
         included_credits: { type: integer, format: int64, minimum: 0 }
-        entitlements: { type: object, additionalProperties: true }
+        entitlements: { $ref: "#/components/schemas/EntitlementValues" }
         billing_interval: { type: string, enum: [monthly, annual] }
         billing_model: { type: string, enum: [free, paid] }
         product: { type: string }
@@ -2041,7 +1886,7 @@ components:
         price_minor: { type: integer, format: int64, minimum: 0 }
         currency: { type: string }
         included_credits: { type: integer, format: int64, minimum: 0 }
-        entitlements: { type: object, additionalProperties: true }
+        entitlements: { $ref: "#/components/schemas/EntitlementValues" }
         billing_interval: { type: string, enum: [monthly, annual] }
         billing_model: { type: string, enum: [free, paid] }
         selectable: { type: boolean, const: true }
@@ -2056,12 +1901,14 @@ components:
       properties:
         product:
           type: object
-          required: [id, slug, name, description, billing_policy, billing_policy_version]
+          required: [id, slug, name, description, entitlement_schema_version, entitlement_schema, billing_policy, billing_policy_version]
           properties:
             id: { $ref: "#/components/schemas/UUID" }
             slug: { type: string }
             name: { type: string }
             description: { type: string }
+            entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
+            entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
             billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
             billing_policy_version: { type: integer, format: int64, minimum: 1 }
         revision: { type: integer, format: int64, minimum: 1 }
@@ -2071,19 +1918,10 @@ components:
         credit_packs:
           type: array
           items: { $ref: "#/components/schemas/CreditPack" }
-    Subscription:
-      type: object
-      required: [id, status]
-      properties:
-        id: { $ref: "#/components/schemas/UUID" }
-        plan_id: { $ref: "#/components/schemas/UUID" }
-        status: { type: string, enum: [pending, active, past_due, cancelled, expired] }
-        current_period_start: { type: [string, "null"], format: date-time }
-        current_period_end: { type: [string, "null"], format: date-time }
-        cancel_at_period_end: { type: boolean }
     SubscriptionTransition:
       type: object
-      required: [id, plan_id, plan_name, operation, effective, status, billing_policy_version, revision, snapshot_url]
+      additionalProperties: false
+      required: [id, subscription_id, plan_id, plan_name, operation, effective, effective_at, status, billing_policy_version, failure_code, payment_id, revision, snapshot_url, checkout]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         subscription_id: { type: [string, "null"], format: uuid }
@@ -2099,16 +1937,33 @@ components:
         revision: { type: integer, format: int64, minimum: 1 }
         snapshot_url: { type: string, format: uri-reference }
         checkout:
-          type: object
-          required: [provider, order_id, amount_minor, currency]
-          properties:
-            provider: { type: string, const: razorpay }
-            order_id: { type: [string, "null"] }
-            amount_minor: { type: integer, format: int64, minimum: 0 }
-            currency: { type: string }
-            expires_at: { type: [string, "null"], format: date-time }
-            success_url: { type: [string, "null"], format: uri }
-            cancel_url: { type: [string, "null"], format: uri }
+          oneOf:
+            - { $ref: "#/components/schemas/Checkout" }
+            - { type: "null" }
+    Checkout:
+      type: object
+      additionalProperties: false
+      required: [provider, presentation, checkout_url, client_config, expires_at, success_url, cancel_url]
+      properties:
+        provider: { type: string, const: razorpay }
+        presentation: { type: string, enum: [inline, modal, provider_hosted] }
+        checkout_url: { type: [string, "null"], format: uri }
+        client_config:
+          oneOf:
+            - { $ref: "#/components/schemas/CheckoutClientConfig" }
+            - { type: "null" }
+        expires_at: { type: [string, "null"], format: date-time }
+        success_url: { type: [string, "null"], format: uri }
+        cancel_url: { type: [string, "null"], format: uri }
+    CheckoutClientConfig:
+      type: object
+      additionalProperties: false
+      required: [public_key, order_id, amount_minor, currency]
+      properties:
+        public_key: { type: string, minLength: 1, description: Public provider key; never a provider secret. }
+        order_id: { type: string, minLength: 1 }
+        amount_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
     CancellationResult:
       type: object
       required: [id, status, cancel_at_period_end, revision, duplicate]
@@ -2121,7 +1976,8 @@ components:
         duplicate: { type: boolean }
     BillingSnapshot:
       type: object
-      required: [revision, generated_at, effective_at, verified_at, expires_at, product_policy, account, entitlements]
+      additionalProperties: false
+      required: [revision, generated_at, effective_at, verified_at, expires_at, degraded_until, product_policy, account, subscription, entitlements, credit_balance, resource_limits, pending_transition]
       properties:
         revision: { type: integer, format: int64, minimum: 1 }
         generated_at: { type: string, format: date-time }
@@ -2131,41 +1987,122 @@ components:
         degraded_until: { type: [string, "null"], format: date-time }
         product_policy:
           type: object
+          additionalProperties: false
           required: [version, policy]
           properties:
             version: { type: integer, format: int64, minimum: 1 }
             policy: { $ref: "#/components/schemas/BillingPolicy" }
         account:
-          type: object
-          required: [id, name]
-          properties:
-            id: { $ref: "#/components/schemas/UUID" }
-            customer_id: { type: [string, "null"], format: uuid }
-            name: { type: string }
+          $ref: "#/components/schemas/BillingSnapshotAccount"
         subscription:
-          type: [object, "null"]
-          additionalProperties: true
-        entitlements: { type: object, additionalProperties: true }
-        limits:
-          type: [object, "null"]
-          additionalProperties: true
+          oneOf:
+            - { $ref: "#/components/schemas/BillingSnapshotSubscription" }
+            - { type: "null" }
+        entitlements: { $ref: "#/components/schemas/EntitlementValues" }
+        credit_balance:
+          oneOf:
+            - { $ref: "#/components/schemas/BillingSnapshotCreditBalance" }
+            - { type: "null" }
+        resource_limits:
+          type: array
+          items: { $ref: "#/components/schemas/BillingSnapshotResourceLimit" }
         pending_transition:
-          type: [object, "null"]
-          additionalProperties: true
-    Renewal:
+          oneOf:
+            - { $ref: "#/components/schemas/BillingSnapshotPendingTransition" }
+            - { type: "null" }
+    BillingSnapshotAccount:
       type: object
-      required: [id, status, current_period_end, duplicate]
+      additionalProperties: false
+      required: [id, customer_id, name]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
-        status: { type: string, const: active }
-        current_period_end: { type: string, format: date-time }
-        duplicate: { type: boolean }
+        customer_id: { type: [string, "null"], format: uuid }
+        name: { type: string }
+    BillingSnapshotSubscription:
+      type: object
+      additionalProperties: false
+      required: [id, status, current_period_start, current_period_end, cancel_at_period_end, billing_policy, billing_policy_version, effective_plan]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        status: { type: string, enum: [pending, active, past_due, cancelled, expired] }
+        current_period_start: { type: [string, "null"], format: date-time }
+        current_period_end: { type: [string, "null"], format: date-time }
+        cancel_at_period_end: { type: boolean }
+        billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
+        billing_policy_version: { type: integer, format: int64, minimum: 1 }
+        effective_plan: { $ref: "#/components/schemas/BillingSnapshotEffectivePlan" }
+    BillingSnapshotEffectivePlan:
+      type: object
+      additionalProperties: false
+      required: [id, version, name, description, billing_model, price_minor, currency, billing_interval, included_credits, entitlement_schema_version, entitlement_schema, entitlements]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        version: { type: integer, format: int64, minimum: 1 }
+        name: { type: string }
+        description: { type: string }
+        billing_model: { type: string, enum: [free, paid] }
+        price_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        billing_interval: { type: string, enum: [monthly, annual] }
+        included_credits: { type: integer, format: int64, minimum: 0 }
+        entitlement_schema_version: { type: integer, format: int64, minimum: 1 }
+        entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
+        entitlements: { $ref: "#/components/schemas/EntitlementValues" }
+    BillingSnapshotCreditBalance:
+      type: object
+      additionalProperties: false
+      required: [wallet_id, available, reserved, total_granted]
+      properties:
+        wallet_id: { $ref: "#/components/schemas/UUID" }
+        available: { type: integer, format: int64, minimum: 0 }
+        reserved: { type: integer, format: int64, minimum: 0 }
+        total_granted: { type: integer, format: int64, minimum: 0 }
+    BillingSnapshotResourceLimit:
+      type: object
+      additionalProperties: false
+      required: [key, resource, unit, enforcement, value]
+      properties:
+        key: { type: string, pattern: "^[a-z][a-z0-9_]{0,62}$" }
+        resource: { type: string, minLength: 1, maxLength: 128 }
+        unit: { type: string, maxLength: 64 }
+        enforcement: { type: string, const: limit }
+        value:
+          oneOf:
+            - { type: integer }
+            - { type: number }
+    BillingSnapshotPendingTransition:
+      type: object
+      additionalProperties: false
+      required: [id, target_plan_id, status, operation, effective, effective_at, checkout_expires_at, billing_policy_version]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        target_plan_id: { $ref: "#/components/schemas/UUID" }
+        status: { type: string, enum: [requires_payment, processing] }
+        operation: { type: string, enum: [activate, upgrade, downgrade, change, reactivate, renew] }
+        effective: { type: string, enum: [immediate, period_end] }
+        effective_at: { type: [string, "null"], format: date-time }
+        checkout_expires_at: { type: [string, "null"], format: date-time }
+        billing_policy_version: { type: integer, format: int64, minimum: 1 }
+    EntitlementValues:
+      type: object
+      additionalProperties: { $ref: "#/components/schemas/EntitlementValue" }
+    EntitlementValue:
+      oneOf:
+        - { type: boolean }
+        - { type: integer }
+        - { type: number }
+        - { type: string }
+        - type: array
+          items: {}
+        - type: object
+          additionalProperties: true
+        - { type: "null" }
     Entitlements:
       type: object
       required: [status, entitlements]
       properties:
         status: { type: string }
-        entitlements: { type: object, additionalProperties: true }
+        entitlements: { $ref: "#/components/schemas/EntitlementValues" }
     Wallet:
       type: object
       description: Wallet service values currently use Go's exported field names in JSON.
@@ -2255,26 +2192,19 @@ components:
         usage_percent: { type: integer, minimum: 0, maximum: 100 }
     PaymentOrder:
       type: object
-      required: [payment_id, provider, order, credit_pack, credits]
+      additionalProperties: false
+      required: [payment_id, credit_pack_id, credits, checkout]
       properties:
         payment_id: { $ref: "#/components/schemas/UUID" }
-        provider: { type: string, const: razorpay }
-        order:
-          type: object
-          additionalProperties: true
-          properties:
-            id: { type: string }
-            status: { type: string }
-            amount: { type: integer, format: int64 }
-            currency: { type: string }
-        credit_pack: { type: string }
+        credit_pack_id: { $ref: "#/components/schemas/UUID" }
         credits: { type: integer, format: int64 }
+        checkout: { $ref: "#/components/schemas/Checkout" }
     PaymentWebhook:
       type: object
       required: [id, type]
       properties:
         id: { type: string }
-        type: { type: string, enum: [payment.captured, payment.failed, refund.processed] }
+        type: { type: string, enum: [payment.captured, order.paid, payment.failed, refund.processed] }
         payment_id: { type: string }
         order_id: { type: string }
         status: { type: string }
@@ -2294,6 +2224,15 @@ components:
         amount_minor: { type: integer, format: int64 }
         currency: { type: string }
         created_at: { type: string, format: date-time }
+    PaymentPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Payment" }
+        next_cursor: { type: [string, "null"] }
     Invoice:
       type: object
       required: [id, invoice_number, status, currency, total_minor, created_at]
@@ -2306,6 +2245,15 @@ components:
         finalized_at: { type: [string, "null"], format: date-time }
         paid_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
+    InvoicePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Invoice" }
+        next_cursor: { type: [string, "null"] }
     Webhook:
       type: object
       required: [id, application, target_url, active, api_version, event_types]
@@ -2314,11 +2262,79 @@ components:
         application: { type: string }
         target_url: { type: string, format: uri }
         active: { type: boolean }
-        api_version: { type: string, enum: ["1", "2"] }
+        api_version: { type: string, const: "2" }
         event_types:
           type: array
-          items: { type: string }
+          items: { $ref: "#/components/schemas/WebhookEventType" }
         created_at: { type: string, format: date-time }
+    WebhookEventType:
+      type: string
+      enum:
+        - billing.ownership_transferred
+        - credits.expired
+        - credits.granted
+        - payment.failed
+        - payment.late_capture
+        - payment.refunded
+        - payment.succeeded
+        - subscription.cancelled
+        - subscription.cancellation_scheduled
+        - subscription.cancellation_withdrawn
+        - subscription.expired
+        - subscription.past_due
+        - subscription.renewed
+        - subscription.transition_completed
+    BillmeshWebhookEventV2:
+      type: object
+      additionalProperties: false
+      required: [specversion, schema_version, id, type, occurred_at, account_id, product_id, revision, aggregate, snapshot_url, data]
+      properties:
+        specversion: { type: string, const: "1.0" }
+        schema_version: { type: string, const: "2" }
+        id: { $ref: "#/components/schemas/UUID" }
+        type: { $ref: "#/components/schemas/WebhookEventType" }
+        occurred_at: { type: string, format: date-time }
+        account_id: { type: [string, "null"], format: uuid }
+        product_id: { type: [string, "null"], format: uuid }
+        revision: { type: [integer, "null"], format: int64, minimum: 1 }
+        aggregate:
+          type: object
+          additionalProperties: false
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [account, subscription, payment, wallet] }
+            id: { $ref: "#/components/schemas/UUID" }
+        snapshot_url: { type: string, const: /v1/billing-snapshot }
+        data: { $ref: "#/components/schemas/BillmeshWebhookDataV2" }
+    BillmeshWebhookDataV2:
+      type: object
+      additionalProperties: false
+      description: Event-specific diagnostic data. Consumers reconcile from snapshot_url rather than applying this object as state.
+      properties:
+        subscription_id: { type: string, format: uuid }
+        transition_id: { type: string, format: uuid }
+        payment_id: { type: string, format: uuid }
+        refund_id: { type: string, format: uuid }
+        grant_id: { type: string, format: uuid }
+        transfer_id: { type: string, format: uuid }
+        plan_id: { type: string, format: uuid }
+        amount: { type: integer, format: int64 }
+        amount_minor: { type: integer, format: int64 }
+        credits: { type: integer, format: int64 }
+        credits_reversed: { type: integer, format: int64 }
+        source: { type: string }
+        reason: { type: string }
+        effective: { type: string }
+        operation: { type: string }
+        deferred: { type: boolean }
+        full: { type: boolean }
+        refund_policy: { type: string }
+        entitlement_policy: { type: string }
+        expiration_policy: { type: string }
+        policy_version: { type: integer, format: int64, minimum: 1 }
+        current_period_end: { type: string, format: date-time }
+        grace_period_end: { type: string, format: date-time }
+        snapshot_url: { type: string, const: /v1/billing-snapshot }
     AuditEvent:
       type: object
       required: [id, actor, actor_type, action, resource_type, resource_id, created_at]

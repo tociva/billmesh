@@ -98,7 +98,7 @@ func TestAutomaticDefaultPlanOnboardingUsesProductPolicy(t *testing.T) {
 	org := testkit.Unique("automatic-org")
 	consumer := h.IssueToken(t, org, product.Slug, []string{"billing:read", "billing:write"}, map[string]any{"sub": testkit.Unique("automatic-customer")})
 	accountBody := map[string]any{
-		"name": "Automatic account", "application": product.Slug, "organization_id": org,
+		"name": "Automatic account", "external_ref": testkit.Unique("automatic-account"),
 	}
 	h.RequireStatus(t, http.StatusPreconditionRequired, http.MethodPost, "/v1/accounts", accountBody, consumer)
 	status, _, catalogueHeaders := h.JSON(t, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, consumer)
@@ -158,9 +158,9 @@ func TestPRD001ThroughPRD015ProductAdminContract(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("product-admin")
 	admin := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
-	viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
 
 	product := createAdminProduct(t, h, admin, "catalogue")
+	viewer := h.IssueToken(t, org, product.Slug, []string{"billing:read"}, nil)
 	if product.ID == "" || !product.Active || product.Version != 1 || product.Description == "" || product.EntitlementSchemaVersion != 1 {
 		t.Fatalf("PRD-004: incomplete product response: %+v", product)
 	}
@@ -170,7 +170,7 @@ func TestPRD001ThroughPRD015ProductAdminContract(t *testing.T) {
 		t.Fatalf("PRD-003: got product %q, want %q", detail.Slug, product.Slug)
 	}
 
-	customerProducts := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, viewer)
+	customerProducts := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, viewer)
 	if !strings.Contains(string(customerProducts), product.Slug) {
 		t.Fatalf("PRD-001: active product missing from customer catalogue: %s", customerProducts)
 	}
@@ -201,8 +201,8 @@ func TestPRD001ThroughPRD015ProductAdminContract(t *testing.T) {
 	if archivedAgain.Active || archivedAgain.Version != archived.Version {
 		t.Fatalf("PRD-013: repeated archive was not idempotent: before=%+v after=%+v", archived, archivedAgain)
 	}
-	customerProducts = h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, viewer)
-	if strings.Contains(string(customerProducts), product.Slug) {
+	status, customerProducts, _ := h.JSON(t, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, viewer)
+	if status == http.StatusOK && strings.Contains(string(customerProducts), product.Slug) {
 		t.Fatalf("PRD-001: archived product leaked into customer catalogue: %s", customerProducts)
 	}
 	adminProducts := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/products?status=archived&query="+product.Slug+"&limit=1&offset=0", nil, admin)
@@ -249,8 +249,8 @@ func TestPRD007ThroughPRD009ProductValidationAndUniqueness(t *testing.T) {
 func TestPLAN013ThroughPLAN029PlanAdminContract(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	admin := h.IssueToken(t, testkit.Unique("plan-admin"), "daybook", testkit.AllPermissions(), nil)
-	viewer := h.IssueToken(t, testkit.Unique("plan-viewer"), "daybook", []string{"billing:read"}, nil)
 	product := createAdminProduct(t, h, admin, "plans-product")
+	viewer := h.IssueToken(t, testkit.Unique("plan-viewer"), product.Slug, []string{"billing:read"}, nil)
 	active := createAdminPlan(t, h, admin, product, true)
 	inactive := createAdminPlan(t, h, admin, product, false)
 	freeAnnual := testkit.Decode[planResponse](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
@@ -277,8 +277,23 @@ func TestPLAN013ThroughPLAN029PlanAdminContract(t *testing.T) {
 		t.Fatalf("PLAN-015: got %q, want %q", detail.Slug, active.Slug)
 	}
 
-	public := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/plans?product="+product.Slug, nil, viewer)
-	if !strings.Contains(string(public), active.Slug) || strings.Contains(string(public), inactive.Slug) {
+	public := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, viewer)
+	publicPlans := testkit.Decode[struct {
+		Plans []struct {
+			ID string `json:"id"`
+		} `json:"plans"`
+	}](t, public).Plans
+	containsPlan := func(plans []struct {
+		ID string `json:"id"`
+	}, id string) bool {
+		for _, plan := range plans {
+			if plan.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+	if !containsPlan(publicPlans, active.ID) || containsPlan(publicPlans, inactive.ID) {
 		t.Fatalf("PLAN-017: customer plan visibility is wrong: %s", public)
 	}
 
@@ -305,8 +320,13 @@ func TestPLAN013ThroughPLAN029PlanAdminContract(t *testing.T) {
 	if archived.Active {
 		t.Fatal("PLAN-023: plan remained active")
 	}
-	public = h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/plans?product="+product.Slug, nil, viewer)
-	if strings.Contains(string(public), active.Slug) {
+	public = h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, viewer)
+	publicPlans = testkit.Decode[struct {
+		Plans []struct {
+			ID string `json:"id"`
+		} `json:"plans"`
+	}](t, public).Plans
+	if containsPlan(publicPlans, active.ID) {
 		t.Fatalf("PLAN-017: inactive plan leaked into customer list: %s", public)
 	}
 	reactivated := testkit.Decode[planResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/plans/"+active.ID, map[string]any{
@@ -412,7 +432,7 @@ func TestPRD020AndPLAN021ArchivedProductBlocksNewBusiness(t *testing.T) {
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
-		"name": "Archived Product Customer", "application": product.Slug, "organization_id": org,
+		"name": "Archived Product Customer", "external_ref": testkit.Unique("archived-customer"),
 	}, customer)).ID
 
 	archived := testkit.Decode[productResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
@@ -425,9 +445,10 @@ func TestPRD020AndPLAN021ArchivedProductBlocksNewBusiness(t *testing.T) {
 		"slug": testkit.Unique("blocked-plan"), "name": "Blocked Plan", "currency": "INR", "active": true,
 	}, admin)
 
-	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/subscriptions", map[string]any{
-		"account_id": account, "plan_id": plan.ID, "payment_status": "verified",
-	}, customer)
+	h.RequireStatusWithHeaders(t, http.StatusBadRequest, http.MethodPost, "/v1/subscription-transitions", map[string]any{
+		"plan_id": plan.ID,
+	}, customer, http.Header{"Idempotency-Key": []string{testkit.Unique("archived-product")}})
+	_ = account
 }
 
 func TestCatalogueResponsesRemainValidJSON(t *testing.T) {

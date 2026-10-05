@@ -15,7 +15,7 @@ import (
 func TestSecurityBrowserOriginContract(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	token := h.IssueToken(t, testkit.Unique("browser-origin"), "daybook", []string{"billing:read"}, nil)
-	sameOrigin, err := http.NewRequest(http.MethodGet, h.BaseURL+"/v1/products", nil)
+	sameOrigin, err := http.NewRequest(http.MethodGet, h.BaseURL+"/v1/catalog", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestSecurityBrowserOriginContract(t *testing.T) {
 		t.Fatalf("GAP-SEC-011: same-origin bearer request returned %d with %d session cookies", resp.StatusCode, len(resp.Cookies()))
 	}
 	for _, method := range []string{http.MethodOptions, http.MethodGet} {
-		req, err := http.NewRequest(method, h.BaseURL+"/v1/products", nil)
+		req, err := http.NewRequest(method, h.BaseURL+"/v1/catalog", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

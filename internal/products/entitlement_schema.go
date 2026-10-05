@@ -25,6 +25,9 @@ type EntitlementField struct {
 	Label       string              `json:"label,omitempty"`
 	Description string              `json:"description,omitempty"`
 	Type        string              `json:"type"`
+	Unit        string              `json:"unit,omitempty"`
+	Enforcement string              `json:"enforcement,omitempty"`
+	Resource    string              `json:"resource,omitempty"`
 	Required    bool                `json:"required,omitempty"`
 	Nullable    bool                `json:"nullable,omitempty"`
 	Default     any                 `json:"default,omitempty"`
@@ -86,6 +89,21 @@ func validateEntitlementFields(fields []EntitlementField, requireKey bool, depth
 }
 
 func validateEntitlementField(field EntitlementField, depth int, count *int) error {
+	if field.Enforcement != "" && field.Enforcement != "feature" && field.Enforcement != "limit" && field.Enforcement != "meter" {
+		return fmt.Errorf("entitlement %q has unsupported enforcement %q", field.Key, field.Enforcement)
+	}
+	if field.Enforcement == "feature" && field.Type != "boolean" {
+		return fmt.Errorf("feature entitlement %q must be boolean", field.Key)
+	}
+	if (field.Enforcement == "limit" || field.Enforcement == "meter") && field.Type != "integer" && field.Type != "number" {
+		return fmt.Errorf("%s entitlement %q must be numeric", field.Enforcement, field.Key)
+	}
+	if field.Enforcement == "limit" && strings.TrimSpace(field.Resource) == "" {
+		return fmt.Errorf("limit entitlement %q requires a resource", field.Key)
+	}
+	if len(field.Unit) > 64 || len(field.Resource) > 128 {
+		return fmt.Errorf("entitlement %q unit or resource is too long", field.Key)
+	}
 	switch field.Type {
 	case "boolean":
 	case "integer", "number":

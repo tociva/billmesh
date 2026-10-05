@@ -24,10 +24,7 @@ func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
 	planSlug := testkit.Unique("matrix-plan")
 	packSlug := testkit.Unique("matrix-pack")
 	accountRef := testkit.Unique("matrix-account")
-	taskmeshSubRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "taskmesh", "plan": "professional", "payment_status": "verified"}, admin)
-	taskmeshSub := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, taskmeshSubRaw).ID
+	testkit.CreateFixtureSubscription(t, h, account, admin)
 	installationRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts/"+account+"/installations", map[string]any{"application": "daybook", "organization_id": org}, admin)
 	installation := testkit.Decode[struct {
 		ID string `json:"id"`
@@ -35,19 +32,20 @@ func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
 	operations := []struct {
 		name, method, path string
 		body               any
+		headers            http.Header
 		success            int
 	}{
-		{"account", http.MethodPost, "/v1/accounts", map[string]any{"name": "Authorized", "external_ref": accountRef, "application": "daybook", "organization_id": org}, http.StatusCreated},
-		{"plan", http.MethodPost, "/v1/plans", map[string]any{"product_id": product, "slug": planSlug, "name": "Matrix Plan", "price_minor": 100, "currency": "INR", "included_credits": 10, "billing_interval": "monthly"}, http.StatusCreated},
-		{"credit pack", http.MethodPost, "/v1/credit-packs", map[string]any{"product_id": product, "slug": packSlug, "name": "Matrix Pack", "credits": 10, "price_minor": 100, "currency": "INR"}, http.StatusCreated},
-		{"subscription", http.MethodPost, "/v1/subscriptions", map[string]any{"account_id": account, "product": "daybook", "plan": "daybook-free"}, http.StatusCreated},
-		{"grant", http.MethodPost, "/v1/wallets/" + wallet + "/grants", map[string]any{"source": "test", "operation_ref": testkit.Unique("matrix-grant"), "amount": 1}, http.StatusOK},
-		{"adjustment", http.MethodPost, "/v1/admin/adjustments", map[string]any{"wallet_id": wallet, "amount": 1, "reason": "matrix"}, http.StatusCreated},
-		{"installation", http.MethodPost, "/v1/accounts/" + account + "/installations", map[string]any{"application": "taskmesh", "organization_id": org}, http.StatusCreated},
-		{"webhook", http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/matrix", "secret": "matrix-secret"}, http.StatusCreated},
-		{"payment order", http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, http.StatusCreated},
-		{"subscription cancel", http.MethodPost, "/v1/subscriptions/" + taskmeshSub + "/cancel", map[string]any{"immediate": true}, http.StatusOK},
-		{"installation revoke", http.MethodPost, "/v1/installations/" + installation + "/revoke", nil, http.StatusNoContent},
+		{"account", http.MethodPost, "/v1/accounts", map[string]any{"name": "Authorized", "external_ref": accountRef}, nil, http.StatusCreated},
+		{"plan", http.MethodPost, "/v1/admin/products/" + product + "/plans", map[string]any{"slug": planSlug, "name": "Matrix Plan", "billing_model": "paid", "price_minor": 100, "currency": "INR", "included_credits": 10, "billing_interval": "monthly", "entitlements": map[string]any{"branches": 1, "users": 1, "serviceusers": 0, "workflow_execution": true, "standalone_workflow": false}}, nil, http.StatusCreated},
+		{"credit pack", http.MethodPost, "/v1/admin/credit-packs", map[string]any{"product_id": product, "slug": packSlug, "name": "Matrix Pack", "credits": 10, "price_minor": 100, "currency": "INR"}, nil, http.StatusCreated},
+		{"subscription", http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": testkit.FixturePlan(t, h, "daybook", "paid", admin)}, http.Header{"Idempotency-Key": []string{testkit.Unique("matrix-transition")}}, http.StatusCreated},
+		{"grant", http.MethodPost, "/v1/wallets/" + wallet + "/grants", map[string]any{"source": "test", "operation_ref": testkit.Unique("matrix-grant"), "amount": 1}, nil, http.StatusOK},
+		{"adjustment", http.MethodPost, "/v1/admin/adjustments", map[string]any{"wallet_id": wallet, "amount": 1, "reason": "matrix"}, nil, http.StatusCreated},
+		{"installation", http.MethodPost, "/v1/accounts/" + account + "/installations", map[string]any{"application": "taskmesh", "organization_id": org}, nil, http.StatusCreated},
+		{"webhook", http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/matrix", "secret": "matrix-secret-0123456789abcdef012345"}, nil, http.StatusCreated},
+		{"payment order", http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": testkit.FixtureCreditPack(t, h, "daybook", 500, admin)}, http.Header{"Idempotency-Key": []string{testkit.Unique("matrix-payment")}}, http.StatusCreated},
+		{"subscription cancel", http.MethodPost, "/v1/subscriptions/current/cancellation", map[string]any{"effective": "immediate"}, http.Header{"Idempotency-Key": []string{testkit.Unique("matrix-cancel")}}, http.StatusOK},
+		{"installation revoke", http.MethodPost, "/v1/installations/" + installation + "/revoke", nil, nil, http.StatusNoContent},
 	}
 	url := os.Getenv("BILLMESH_E2E_DATABASE_URL")
 	if url == "" {
@@ -113,18 +111,23 @@ func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
 		name        string
 		permissions []string
 		subject     string
+		want        int
 	}{
-		{"viewer", []string{"billing:read"}, "viewer"},
-		{"runtime", []string{"credits:reserve", "credits:settle"}, "service:runtime"},
-		{"service", []string{"billing:read"}, "service:worker"},
-		{"empty", nil, "user:empty"},
-		{"unknown", []string{"billing:superuser"}, "user:unknown"},
+		{"viewer", []string{"billing:read"}, "viewer", http.StatusForbidden},
+		{"runtime", []string{"credits:reserve", "credits:settle"}, "service:runtime", http.StatusForbidden},
+		{"service", []string{"billing:read"}, "service:worker", http.StatusForbidden},
+		{"empty", nil, "user:empty", http.StatusUnauthorized},
+		{"unknown", []string{"billing:superuser"}, "user:unknown", http.StatusForbidden},
 	}
+	deniedAuditRoles := 0
 	for _, role := range roles {
 		roleToken := h.IssueToken(t, org, "daybook", role.permissions, map[string]any{"sub": role.subject})
+		if role.want == http.StatusForbidden {
+			deniedAuditRoles++
+		}
 		for _, operation := range operations {
 			t.Run(role.name+"/"+operation.name, func(t *testing.T) {
-				h.RequireStatus(t, http.StatusForbidden, operation.method, operation.path, operation.body, roleToken)
+				h.RequireStatusWithHeaders(t, role.want, operation.method, operation.path, operation.body, roleToken, operation.headers)
 			})
 		}
 	}
@@ -134,7 +137,7 @@ func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
 			t.Fatalf("GAP-AUTHZ-009: rejected mutations changed business state at index %d: before=%v after=%v", i, before, after)
 		}
 	}
-	if want := before[len(before)-1] + int64(len(roles)*3); after[len(after)-1] != want {
+	if want := before[len(before)-1] + int64(deniedAuditRoles*3); after[len(after)-1] != want {
 		t.Fatalf("GAP-SEC-009: want %d security audits after denied plan, pack, and adjustment requests; got %d", want, after[len(after)-1])
 	}
 	if after := providerCalls(); after != providerBefore {
@@ -147,9 +150,9 @@ func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
 			if operation.name == "account" {
 				newOrg := testkit.Unique("matrix-account-owner")
 				allowedToken = h.IssueToken(t, newOrg, "daybook", testkit.AllPermissions(), nil)
-				allowedBody = map[string]any{"name": "Authorized", "external_ref": accountRef, "application": "daybook", "organization_id": newOrg}
+				allowedBody = map[string]any{"name": "Authorized", "external_ref": accountRef}
 			}
-			h.RequireStatus(t, operation.success, operation.method, operation.path, allowedBody, allowedToken)
+			h.RequireStatusWithHeaders(t, operation.success, operation.method, operation.path, allowedBody, allowedToken, operation.headers)
 		})
 	}
 }

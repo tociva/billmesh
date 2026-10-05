@@ -25,24 +25,23 @@ func TestSecuritySharedAccountProductBoundaries(t *testing.T) {
 	daybook := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
 	taskmesh := h.IssueToken(t, org, "taskmesh", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
 	account := testkit.CreateFixtureAccount(t, h, org, linker)
-	h.RequireStatus(t, http.StatusNoContent, http.MethodPost, "/v1/accounts/"+account+"/links", map[string]any{"application": "taskmesh", "organization_id": org}, linker)
+	taskmeshAccount := testkit.CreateFixtureAccount(t, h, org, taskmesh)
 	daybookSub := testkit.CreateFixtureSubscription(t, h, account, daybook)
 	taskmeshSub := testkit.ActivatePaidSubscription(t, h, "taskmesh", "professional", taskmesh)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current?product=daybook", nil, daybook)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current?product=taskmesh", nil, taskmesh)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/subscriptions/current?product=taskmesh", nil, linker)
-	h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/subscriptions/current?product=taskmesh", nil, daybook)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot?product=daybook", nil, daybook)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/billing-snapshot?product=taskmesh", nil, taskmesh)
+	h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/billing-snapshot?product=taskmesh", nil, daybook)
 	h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/entitlements?product=taskmesh", nil, daybook)
-	h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+taskmeshSub+"/change-plan", map[string]any{"plan": "professional"}, daybook)
-	h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+taskmeshSub+"/cancel", map[string]any{"immediate": true}, daybook)
-	h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/subscriptions/"+taskmeshSub+"/renew", map[string]any{"operation_ref": testkit.Unique("foreign-renew")}, daybook)
+	h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/subscriptions/"+taskmeshSub+"/change-plan", map[string]any{"plan": "professional"}, daybook)
+	h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/subscriptions/"+taskmeshSub+"/cancel", map[string]any{"immediate": true}, daybook)
+	h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/subscriptions/"+taskmeshSub+"/renew", map[string]any{"operation_ref": testkit.Unique("foreign-renew")}, daybook)
 
-	installationRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts/"+account+"/installations", map[string]any{"application": "taskmesh", "organization_id": org}, taskmesh)
+	installationRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts/"+taskmeshAccount+"/installations", map[string]any{"application": "taskmesh", "organization_id": org}, taskmesh)
 	installation := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, installationRaw).ID
 	h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/installations/"+installation+"/revoke", nil, daybook)
-	h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts/"+account+"/installations", map[string]any{"application": "taskmesh", "organization_id": org}, daybook)
+	h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts/"+taskmeshAccount+"/installations", map[string]any{"application": "taskmesh", "organization_id": org}, daybook)
 
 	taskmeshLimits := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/limits", nil, taskmesh)
 	daybookLimits := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/limits", nil, daybook)
@@ -79,17 +78,21 @@ func TestSecuritySharedAccountProductBoundaries(t *testing.T) {
 	}
 
 	pack := testkit.Unique("taskmesh-pack")
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/credit-packs", map[string]any{"product_id": productID(t, h, "taskmesh", linker), "slug": pack, "name": "Taskmesh Pack", "credits": 10, "price_minor": 100, "currency": "INR"}, linker)
-	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": pack}, taskmesh)
-	order := testkit.Decode[struct {
-		Order struct {
-			ID string `json:"id"`
-		} `json:"order"`
-	}](t, orderRaw)
-	if body := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments?limit=1", nil, daybook); strings.Contains(string(body), order.Order.ID) {
+	packRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/credit-packs", map[string]any{"product_id": productID(t, h, "taskmesh", linker), "slug": pack, "name": "Taskmesh Pack", "credits": 10, "price_minor": 100, "currency": "INR"}, linker)
+	packID := testkit.Decode[struct {
+		ID string `json:"id"`
+	}](t, packRaw).ID
+	orderRaw := h.RequireStatusWithHeaders(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": packID}, taskmesh,
+		http.Header{"Idempotency-Key": []string{testkit.Unique("taskmesh-order")}})
+	order := testkit.Decode[testkit.PaymentOrderFixture](t, orderRaw)
+	config := order.Checkout.ClientConfig
+	if status := h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{"id": testkit.Unique("taskmesh-capture"), "type": "payment.captured", "payment_id": testkit.Unique("provider-payment"), "order_id": config.OrderID, "status": "captured", "amount_minor": config.AmountMinor, "currency": config.Currency}, "test-webhook-secret"); status != http.StatusNoContent {
+		t.Fatalf("taskmesh payment capture returned %d", status)
+	}
+	if body := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments?limit=1", nil, daybook); strings.Contains(string(body), config.OrderID) {
 		t.Fatalf("GAP-AUTHZ-006: taskmesh payment leaked: %s", body)
 	}
-	if body := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, taskmesh); !strings.Contains(string(body), order.Order.ID) {
+	if body := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, taskmesh); !strings.Contains(string(body), config.OrderID) {
 		t.Fatalf("GAP-AUTHZ-006: taskmesh owner cannot see payment: %s", body)
 	}
 	taskmeshInvoices := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/invoices", nil, taskmesh)

@@ -5,7 +5,6 @@ package security_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -119,49 +118,17 @@ func TestCATSEC007Through013TenantAndProductIsolation(t *testing.T) {
 		}
 	}
 
-	productsRaw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/products", nil, owner)
-	var products []struct {
-		ID, Slug string
-	}
-	if err := json.Unmarshal(productsRaw, &products); err != nil {
-		t.Fatal(err)
-	}
-	var daybookID, taskmeshID string
-	for _, product := range products {
-		if product.Slug == "daybook" {
-			daybookID = product.ID
-		}
-		if product.Slug == "taskmesh" {
-			taskmeshID = product.ID
-		}
-	}
-	if daybookID == "" || taskmeshID == "" {
-		t.Fatal("daybook/taskmesh fixture products not found")
-	}
-	daybookPlan := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/plans", map[string]any{
-		"product_id": daybookID, "slug": testkit.Unique("boundary-plan"), "name": "Boundary Plan",
-		"currency": "INR", "billing_interval": "monthly",
-	}, owner))
+	daybookID := testkit.FixtureProduct(t, h, "daybook", owner)
+	taskmeshID := testkit.FixtureProduct(t, h, "taskmesh", owner)
 	h.RequireStatus(t, http.StatusBadRequest, http.MethodPost, "/v1/admin/products/"+taskmeshID+"/plans", map[string]any{
 		"product_id": daybookID, "slug": testkit.Unique("mismatch-plan"), "name": "Mismatch", "currency": "INR",
 	}, owner)
-	taskmeshPlan := testkit.Decode[struct {
-		ID string `json:"id"`
-	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/plans", map[string]any{
-		"product_id": taskmeshID, "slug": testkit.Unique("cross-product-plan"), "name": "Cross Product Plan",
-		"currency": "INR", "billing_interval": "monthly",
-	}, owner))
-	h.RequireStatus(t, http.StatusNotFound, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{
-		"plan_id": taskmeshPlan.ID,
-	}, owner)
-	status, raw, _ := h.JSON(t, http.MethodPost, "/v1/subscriptions/"+subscription+"/change-plan", map[string]any{
-		"plan_id": daybookPlan.ID,
-	}, attacker)
-	if status != http.StatusForbidden && status != http.StatusNotFound {
-		t.Fatalf("cross-tenant plan change returned %d: %s", status, raw)
-	}
+	taskmeshPlan := testkit.FixturePlan(t, h, "taskmesh", "paid", owner)
+	daybookOnly := h.IssueToken(t, ownerOrg, "daybook", []string{"billing:read", "billing:write"}, nil)
+	h.RequireStatusWithHeaders(t, http.StatusForbidden, http.MethodPost, "/v1/subscription-transitions", map[string]any{
+		"plan_id": taskmeshPlan,
+	}, daybookOnly, http.Header{"Idempotency-Key": []string{testkit.Unique("cross-product")}})
+	_ = subscription
 }
 
 func TestCATSEC019CatalogueRejectsMassAssignmentDuplicateKeysAndUnsupportedMedia(t *testing.T) {

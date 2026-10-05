@@ -30,8 +30,8 @@ func TestSecurityTenantAdministratorCannotAdjustOrReplayForeignResources(t *test
 	if strings.Contains(string(auditA), reasonB) || !strings.Contains(string(auditA), "credit.adjust.denied") {
 		t.Fatalf("GAP-AUTHZ-004: foreign audit data leaked: %s", auditA)
 	}
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/tenant-a", "secret": "tenant-a"}, adminA)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/tenant-b", "secret": "tenant-b"}, adminB)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/tenant-a", "secret": "tenant-a-secret-0123456789abcdef"}, adminA)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/tenant-b", "secret": "tenant-b-secret-0123456789abcdef"}, adminB)
 	h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/wallets/"+walletA+"/grants", map[string]any{"source": "test", "operation_ref": testkit.Unique("event-a"), "amount": 1}, adminA)
 	h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/wallets/"+walletB+"/grants", map[string]any{"source": "test", "operation_ref": testkit.Unique("event-b"), "amount": 1}, adminB)
 	url := os.Getenv("BILLMESH_E2E_DATABASE_URL")

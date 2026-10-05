@@ -39,7 +39,7 @@ func assertRouteJSONError(t *testing.T, response *httptest.ResponseRecorder, sta
 }
 
 func (routeTestBrowserAuth) Authenticate(*http.Request) (*auth.Claims, int, error) {
-	return &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook"}, 0, nil
+	return &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook", Environment: "test"}, 0, nil
 }
 
 func (routeTestBrowserAuth) AuthHandler() http.Handler {
@@ -48,7 +48,7 @@ func (routeTestBrowserAuth) AuthHandler() http.Handler {
 
 func (routeTestBrowserAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook"}
+		claims := &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook", Environment: "test"}
 		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
 	})
 }
@@ -60,7 +60,7 @@ func (routeTestVerifier) Verify(_ context.Context, token string) (*auth.Claims, 
 		return &auth.Claims{}, nil
 	}
 	if strings.HasPrefix(token, "with:") {
-		return &auth.Claims{Permissions: []string{strings.TrimPrefix(token, "with:")}, OrgID: "route-test", App: "daybook"}, nil
+		return &auth.Claims{Permissions: []string{strings.TrimPrefix(token, "with:")}, OrgID: "route-test", App: "daybook", Environment: "test"}, nil
 	}
 	return nil, context.Canceled
 }
@@ -85,13 +85,19 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 		method, path, registration := route[1], route[2], route[3]
 		permission := ""
 		switch {
+		case strings.HasPrefix(registration, "auth.RequireAnyApplication("):
+			match := regexp.MustCompile(`auth\.RequireAnyApplication\(\[\]string\{"([^\"]+)"`).FindStringSubmatch(registration)
+			if len(match) != 2 {
+				t.Fatalf("cannot parse permissions for %s %s", method, path)
+			}
+			permission = match[1]
 		case strings.HasPrefix(registration, "auth.Require("):
 			match := regexp.MustCompile(`auth\.Require\("([^\"]+)"`).FindStringSubmatch(registration)
 			if len(match) != 2 {
 				t.Fatalf("cannot parse permission for %s %s", method, path)
 			}
 			permission = match[1]
-		case strings.HasPrefix(registration, "a.requireAdmin("):
+		case strings.HasPrefix(registration, "a.requireAdmin("), strings.HasPrefix(registration, "a.requireCatalogueAdmin("):
 			permission = "billing:admin"
 		case !strings.HasPrefix(registration, "a."):
 			t.Fatalf("cannot parse handler for %s %s: %s", method, path, registration)
@@ -144,7 +150,7 @@ func TestProtectedRouterNotFoundAndMethodErrorsAreJSON(t *testing.T) {
 		status int
 	}{
 		{http.MethodGet, "/v1/not-a-route", http.StatusNotFound},
-		{http.MethodDelete, "/v1/products", http.StatusMethodNotAllowed},
+		{http.MethodDelete, "/v1/admin/products", http.StatusMethodNotAllowed},
 	} {
 		request := httptest.NewRequest(tc.method, tc.path, nil)
 		request.Header.Set("Authorization", "Bearer valid")
@@ -164,7 +170,7 @@ func TestBrowserAndBearerSurfacesShareProtectedHandlersWithoutAuthAmbiguity(t *t
 	handler := a.Handler()
 
 	browser := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/products", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil)
 	request.Header.Set("Origin", "https://console.billmesh.example")
 	handler.ServeHTTP(browser, request)
 	if browser.Code == http.StatusUnauthorized || browser.Code == http.StatusNotFound {
@@ -172,7 +178,7 @@ func TestBrowserAndBearerSurfacesShareProtectedHandlersWithoutAuthAmbiguity(t *t
 	}
 
 	bearer := httptest.NewRecorder()
-	handler.ServeHTTP(bearer, httptest.NewRequest(http.MethodGet, "/v1/products", nil))
+	handler.ServeHTTP(bearer, httptest.NewRequest(http.MethodGet, "/v1/catalog", nil))
 	if bearer.Code != http.StatusUnauthorized {
 		t.Fatalf("bearer surface accepted a cookie-style request: %d", bearer.Code)
 	}

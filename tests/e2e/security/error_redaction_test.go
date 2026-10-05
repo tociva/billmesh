@@ -31,12 +31,12 @@ func TestSecurityErrorsAndEventsDoNotExposeSecrets(t *testing.T) {
 			t.Fatalf("GAP-SEC-008: %s exposed a credential: %s", label, body)
 		}
 	}
-	status, body, _ := h.JSON(t, http.MethodGet, "/v1/products", nil, secret)
+	status, body, _ := h.JSON(t, http.MethodGet, "/v1/catalog", nil, secret)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("GAP-SEC-008: invalid authentication returned %d", status)
 	}
 	check("authentication response", body)
-	status, body, _ = h.JSON(t, http.MethodPost, "/v1/accounts", map[string]any{"name": "Invalid", "external_ref": testkit.Unique("invalid"), "application": "daybook", "organization_id": org, "secret": secret}, token)
+	status, body, _ = h.JSON(t, http.MethodPost, "/v1/accounts", map[string]any{"name": "Invalid", "external_ref": testkit.Unique("invalid"), "secret": secret}, token)
 	if status != http.StatusBadRequest {
 		t.Fatalf("GAP-SEC-008: validation returned %d", status)
 	}
@@ -45,7 +45,7 @@ func TestSecurityErrorsAndEventsDoNotExposeSecrets(t *testing.T) {
 	otherToken := h.IssueToken(t, otherOrg, "daybook", testkit.AllPermissions(), nil)
 	otherAccount := testkit.CreateFixtureAccount(t, h, otherOrg, otherToken)
 	status, body, _ = h.JSON(t, http.MethodGet, "/v1/accounts/"+otherAccount, nil, token)
-	if status != http.StatusForbidden || strings.Contains(string(body), otherAccount) {
+	if status != http.StatusNotFound || strings.Contains(string(body), otherAccount) {
 		t.Fatalf("GAP-SEC-008: foreign account error exposed data: %d %s", status, body)
 	}
 	check("authorization response", body)
@@ -56,13 +56,15 @@ func TestSecurityErrorsAndEventsDoNotExposeSecrets(t *testing.T) {
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
-	status, body, _ = h.JSON(t, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
+	status, body, _ = h.JSONWithHeaders(t, http.MethodPost, "/v1/payments/orders", map[string]any{
+		"credit_pack_id": testkit.FixtureCreditPack(t, h, "daybook", 500, token),
+	}, token, http.Header{"Idempotency-Key": []string{testkit.Unique("redaction-provider")}})
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("GAP-SEC-008: provider failure returned %d: %s", status, body)
 	}
 	check("provider response", body)
 	resetMockFailure(t, h)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"application": "daybook", "target_url": h.MockURL + "/receivers/redaction", "secret": secret}, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/redaction", "secret": secret}, token)
 	resp, err = h.Client.Post(h.MockURL+"/test/failure", "application/json", bytes.NewReader([]byte(`{"status":500}`)))
 	if err != nil {
 		t.Fatal(err)

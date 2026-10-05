@@ -23,8 +23,8 @@ import (
 func securityToken(t *testing.T, key *rsa.PrivateKey, kid, issuer string, now time.Time, mutate func(*Claims)) string {
 	t.Helper()
 	claims := Claims{
-		Permissions: []string{"billing:read"}, OrgID: "org-1", App: "daybook",
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: issuer, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))},
+		Permissions: []string{"billing:read"}, ActorType: "user", OrgID: "org-1", App: "daybook", Environment: "test",
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: issuer, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))},
 	}
 	if mutate != nil {
 		mutate(&claims)

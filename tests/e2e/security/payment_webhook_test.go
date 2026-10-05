@@ -39,15 +39,8 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	resetMockFailure(t, h)
 	org := testkit.Unique("payment-security")
 	token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
-	account := testkit.CreateFixtureAccount(t, h, org, token)
-	orderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": account, "credit_pack": "credits-500"}, token)
-	order := testkit.Decode[struct {
-		Order struct {
-			ID       string `json:"id"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-		} `json:"order"`
-	}](t, orderRaw)
+	testkit.CreateFixtureAccount(t, h, org, token)
+	order := testkit.CreateCreditPackOrder(t, h, "daybook", 500, token)
 	pool, err := pgxpool.New(context.Background(), os.Getenv("BILLMESH_E2E_DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +48,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	defer pool.Close()
 	eventID := testkit.Unique("provider-event")
 	providerPaymentID := testkit.Unique("provider-payment")
-	event := map[string]any{"id": eventID, "type": "payment.captured", "payment_id": providerPaymentID, "order_id": order.Order.ID, "status": "captured", "amount_minor": order.Order.Amount, "currency": order.Order.Currency}
+	event := map[string]any{"id": eventID, "type": "payment.captured", "payment_id": providerPaymentID, "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor, "currency": order.Checkout.ClientConfig.Currency}
 	raw, err := json.Marshal(event)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +79,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", []byte(`{"id":`), "test-webhook-secret"); status != http.StatusBadRequest {
 		t.Fatalf("PAY-007: signed malformed JSON returned %d", status)
 	}
-	status, grants, ledger, invoices := paymentState(t, pool, order.Order.ID)
+	status, grants, ledger, invoices := paymentState(t, pool, order.Checkout.ClientConfig.OrderID)
 	if status != "created" || grants != 0 || ledger != 0 || invoices != 0 {
 		t.Fatalf("invalid webhook changed financial state: %s %d %d %d", status, grants, ledger, invoices)
 	}
@@ -106,7 +99,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	if persisted != 1 {
 		t.Fatalf("PAY-005: valid capture did not persist processed provider event")
 	}
-	status, grants, ledger, invoices = paymentState(t, pool, order.Order.ID)
+	status, grants, ledger, invoices = paymentState(t, pool, order.Checkout.ClientConfig.OrderID)
 	if status != "captured" || grants != 1 || ledger != 1 || invoices != 1 {
 		t.Fatalf("valid capture did not atomically grant and invoice: %s %d %d %d", status, grants, ledger, invoices)
 	}
@@ -121,7 +114,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", conflictRaw, "test-webhook-secret"); status != http.StatusConflict {
 		t.Fatalf("GAP-SEC-004: conflicting replay returned %d", status)
 	}
-	status, grants, ledger, invoices = paymentState(t, pool, order.Order.ID)
+	status, grants, ledger, invoices = paymentState(t, pool, order.Checkout.ClientConfig.OrderID)
 	if status != "captured" || grants != 1 || ledger != 1 || invoices != 1 {
 		t.Fatalf("replay changed financial state: %s %d %d %d", status, grants, ledger, invoices)
 	}
@@ -159,27 +152,20 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 			t.Fatalf("GAP-SEC-004: concurrent replay returned %d", code)
 		}
 	}
-	status, grants, ledger, invoices = paymentState(t, pool, order.Order.ID)
+	status, grants, ledger, invoices = paymentState(t, pool, order.Checkout.ClientConfig.OrderID)
 	if status != "captured" || grants != 1 || ledger != 1 || invoices != 1 {
 		t.Fatalf("GAP-SEC-004: concurrent replay changed financial state: %s %d %d %d", status, grants, ledger, invoices)
 	}
 	otherOrg := testkit.Unique("cross-payment")
 	otherToken := h.IssueToken(t, otherOrg, "daybook", testkit.AllPermissions(), map[string]any{"environment": "staging"})
-	otherAccount := testkit.CreateFixtureAccount(t, h, otherOrg, otherToken)
-	otherOrderRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/payments/orders", map[string]any{"account_id": otherAccount, "credit_pack": "credits-500"}, otherToken)
-	otherOrder := testkit.Decode[struct {
-		Order struct {
-			ID       string `json:"id"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-		} `json:"order"`
-	}](t, otherOrderRaw)
+	testkit.CreateFixtureAccount(t, h, otherOrg, otherToken)
+	otherOrder := testkit.CreateCreditPackOrder(t, h, "daybook", 500, otherToken)
 	crossEventID := testkit.Unique("cross-provider-event")
-	crossEvent := map[string]any{"id": crossEventID, "type": "payment.captured", "payment_id": providerPaymentID, "order_id": otherOrder.Order.ID, "status": "captured", "amount_minor": otherOrder.Order.Amount, "currency": otherOrder.Order.Currency}
+	crossEvent := map[string]any{"id": crossEventID, "type": "payment.captured", "payment_id": providerPaymentID, "order_id": otherOrder.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": otherOrder.Checkout.ClientConfig.AmountMinor, "currency": otherOrder.Checkout.ClientConfig.Currency}
 	if status := h.SignedWebhook(t, "/v1/payments/webhook", crossEvent, "test-webhook-secret"); status != http.StatusConflict {
 		t.Fatalf("GAP-SEC-004: reused payment reference across accounts returned %d", status)
 	}
-	status, grants, ledger, invoices = paymentState(t, pool, otherOrder.Order.ID)
+	status, grants, ledger, invoices = paymentState(t, pool, otherOrder.Checkout.ClientConfig.OrderID)
 	if status != "created" || grants != 0 || ledger != 0 || invoices != 0 {
 		t.Fatalf("GAP-SEC-004: cross-account payment reference changed state: %s %d %d %d", status, grants, ledger, invoices)
 	}

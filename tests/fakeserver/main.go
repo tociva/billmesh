@@ -53,6 +53,7 @@ func main() {
 	mux.HandleFunc("POST /test/token", s.token)
 	mux.HandleFunc("POST /test/rotate-key", s.rotateKey)
 	mux.HandleFunc("POST /v1/orders", s.order)
+	mux.HandleFunc("GET /v1/orders/{id}/payments", s.orderPayments)
 	mux.HandleFunc("GET /test/order-count", s.orderCount)
 	mux.HandleFunc("GET /v1/payments/{id}", s.payment)
 	mux.HandleFunc("POST /receivers/{app}", s.receiver)
@@ -178,7 +179,7 @@ func (s *server) browserTokens(grant oauthGrant) (string, string, error) {
 	accessClaims := jwt.MapClaims{
 		"iss": mockIssuer, "aud": "billmesh-test", "sub": grant.Subject,
 		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "token_use": "access",
-		"org_id": "bff-org", "app": "daybook", "environment": "test",
+		"org_id": "bff-org", "app": "daybook", "environment": "test", "actor_type": "user",
 		"permissions": []string{"billing:read", "billing:write", "billing:admin", "billing:link", "credits:grant", "credits:reserve", "credits:settle"},
 	}
 	access, err := s.sign(accessClaims)
@@ -251,6 +252,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		ExpiresInSeconds *int64         `json:"expires_in_seconds"`
 		UnknownKey       bool           `json:"unknown_key"`
 		Environment      string         `json:"environment"`
+		ActorType        string         `json:"actor_type"`
 		TokenUse         string         `json:"token_use"`
 		OmitTokenUse     bool           `json:"omit_token_use"`
 		OmitClaims       []string       `json:"omit_claims"`
@@ -259,6 +261,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if in.Subject == "" {
 		in.Subject = "test-user"
+	}
+	if in.ActorType == "" {
+		in.ActorType = "user"
 	}
 	issuer := in.Issuer
 	if issuer == "" {
@@ -276,7 +281,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if tokenUse == "" {
 		tokenUse = "access"
 	}
-	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "permissions": in.Permissions}
+	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "actor_type": in.ActorType, "permissions": in.Permissions}
 	if !in.OmitTokenUse {
 		claims["token_use"] = tokenUse
 	}
@@ -341,6 +346,9 @@ func (s *server) orderCount(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Unlock()
 	write(w, map[string]any{"count": count})
 }
+func (s *server) orderPayments(w http.ResponseWriter, _ *http.Request) {
+	write(w, map[string]any{"entity": "collection", "count": 0, "items": []any{}})
+}
 func (s *server) payment(w http.ResponseWriter, r *http.Request) {
 	write(w, map[string]any{"id": r.PathValue("id"), "order_id": "order_test_001", "status": "captured", "currency": "INR", "amount": 50000})
 }
@@ -352,7 +360,11 @@ func (s *server) receiver(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	code := s.failureCode
 	delay := s.receiverDelay
-	s.webhooks = append(s.webhooks, map[string]any{"app": r.PathValue("app"), "event_id": r.Header.Get("X-Billmesh-Event-ID"), "event_type": r.Header.Get("X-Billmesh-Event-Type"), "signature": r.Header.Get("X-Billmesh-Signature"), "raw_body": string(raw), "payload": payload})
+	s.webhooks = append(s.webhooks, map[string]any{
+		"app": r.PathValue("app"), "event_id": r.Header.Get("X-Billmesh-Event-ID"), "event_type": r.Header.Get("X-Billmesh-Event-Type"),
+		"signature": r.Header.Get("X-Billmesh-Signature"), "previous_signature": r.Header.Get("X-Billmesh-Previous-Signature"),
+		"timestamp": r.Header.Get("X-Billmesh-Timestamp"), "raw_body": string(raw), "payload": payload,
+	})
 	s.mu.Unlock()
 	if r.PathValue("app") == "redirect-private" {
 		addresses, err := net.LookupIP("mock-external")

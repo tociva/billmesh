@@ -84,6 +84,8 @@ services:
       BFF_ADMIN_STANDALONE_LOGOUT_URI: https://mock-external:8090/logout
       BFF_SESSION_ENCRYPTION_KEYS: v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       RAZORPAY_BASE_URL: https://mock-external:8090
+      RAZORPAY_KEY_ID: rzp_test_billmesh
+      RAZORPAY_KEY_SECRET: test-provider-secret
       RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
       WEBHOOK_ALLOWED_PRIVATE_HOSTS: mock-external
       AUTH_FAILURES_PER_MINUTE: "1000"
