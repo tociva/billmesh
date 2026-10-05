@@ -103,19 +103,6 @@ INSERT INTO products(slug, name) VALUES
   ('taskmesh', 'Taskmesh')
 ON CONFLICT(slug) DO NOTHING;
 
-INSERT INTO plans(product_id, slug, name, price_minor, currency, included_credits, entitlements, active, billing_interval)
-SELECT id, 'daybook-free', 'Daybook Free', 0, 'INR', 100, '{"workflow_execution":true,"standalone_workflow":false}', true, 'monthly' FROM products WHERE slug='daybook'
-ON CONFLICT(product_id,slug) DO NOTHING;
-INSERT INTO plans(product_id, slug, name, price_minor, currency, included_credits, entitlements, active, billing_interval)
-SELECT id, 'daybook-paid', 'Daybook Paid', 99900, 'INR', 1000, '{"workflow_execution":true,"standalone_workflow":false}', true, 'monthly' FROM products WHERE slug='daybook'
-ON CONFLICT(product_id,slug) DO NOTHING;
-INSERT INTO plans(product_id, slug, name, price_minor, currency, included_credits, entitlements, active, billing_interval)
-SELECT id, 'professional', 'Taskmesh Professional', 149900, 'INR', 1000, '{"workflow_execution":true,"standalone_workflow":true}', true, 'monthly' FROM products WHERE slug='taskmesh'
-ON CONFLICT(product_id,slug) DO NOTHING;
-INSERT INTO credit_packs(product_id, slug, name, credits, price_minor, currency, validity_days)
-SELECT id, 'credits-500', '500 Credits', 500, 49900, 'INR', NULL FROM products WHERE slug='daybook'
-ON CONFLICT(product_id,slug) DO NOTHING;
-
 -- +goose Down
 DROP INDEX subscriptions_account_status_idx;
 DROP INDEX usage_events_filter_idx;

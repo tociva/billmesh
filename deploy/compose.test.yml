@@ -46,10 +46,11 @@ services:
 
   runtime-grants:
     image: postgres:17.6-alpine3.22
-    entrypoint: ["psql", "-h", "postgres", "-U", "billmesh", "-d", "billmesh_e2e", "-v", "ON_ERROR_STOP=1", "-f", "/scripts/test-runtime-grants.sql"]
+    entrypoint: ["psql", "-h", "postgres", "-U", "billmesh", "-d", "billmesh_e2e", "-v", "ON_ERROR_STOP=1", "-f", "/scripts/test-catalogue-fixtures.sql", "-f", "/scripts/test-runtime-grants.sql"]
     environment:
       PGPASSWORD: testpassword
     volumes:
+      - ./test-catalogue-fixtures.sql:/scripts/test-catalogue-fixtures.sql:ro
       - ./test-runtime-grants.sql:/scripts/test-runtime-grants.sql:ro
       - ./runtime-grants.sql:/scripts/runtime-grants.sql:ro
     depends_on:
