@@ -50,6 +50,7 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ProductID       uuid.UUID      `json:"product_id"`
 		Slug            string         `json:"slug"`
+		PlanFamilyID    string         `json:"plan_family_id"`
 		Name            string         `json:"name"`
 		Description     string         `json:"description"`
 		Currency        string         `json:"currency"`
@@ -95,8 +96,12 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 		in.ProductID = productID
 	}
 	in.Slug = strings.TrimSpace(in.Slug)
+	in.PlanFamilyID = strings.TrimSpace(in.PlanFamilyID)
+	if in.PlanFamilyID == "" {
+		in.PlanFamilyID = in.Slug
+	}
 	in.Name = strings.TrimSpace(in.Name)
-	if err := products.ValidatePlan(products.PlanInput{PriceMinor: in.PriceMinor, IncludedCredits: in.IncludedCredits, Currency: in.Currency, BillingInterval: in.BillingInterval}); err != nil {
+	if err := products.ValidatePlan(products.PlanInput{PriceMinor: in.PriceMinor, IncludedCredits: in.IncludedCredits, Currency: in.Currency, BillingInterval: in.BillingInterval, PlanFamilyID: in.PlanFamilyID}); err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}
@@ -155,12 +160,12 @@ func (a *API) createPlan(w http.ResponseWriter, r *http.Request) {
 		if active && !productActive {
 			return catalogueValidationError{"active plans require an active product"}
 		}
-		row := tx.QueryRow(r.Context(), `INSERT INTO plans(product_id,slug,name,description,price_minor,currency,included_credits,entitlements,active,billing_interval,
+		row := tx.QueryRow(r.Context(), `INSERT INTO plans(product_id,slug,plan_family_id,name,description,price_minor,currency,included_credits,entitlements,active,billing_interval,
 			billing_model,selectable,default_for_product,checkout_enabled,effective_from,effective_to)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-			RETURNING id,product_id,$17::text,slug,name,description,price_minor,currency,included_credits,entitlements,billing_interval,billing_model,
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+			RETURNING id,product_id,$18::text,slug,plan_family_id,name,description,price_minor,currency,included_credits,entitlements,billing_interval,billing_model,
 			selectable,default_for_product,checkout_enabled,effective_from,effective_to,active,version,created_at,updated_at`,
-			in.ProductID, in.Slug, in.Name, in.Description, in.PriceMinor, in.Currency, in.IncludedCredits, in.Entitlements, active, in.BillingInterval,
+			in.ProductID, in.Slug, in.PlanFamilyID, in.Name, in.Description, in.PriceMinor, in.Currency, in.IncludedCredits, in.Entitlements, active, in.BillingInterval,
 			in.BillingModel, selectable, in.Default, checkoutEnabled, effectiveFrom, in.EffectiveTo, productSlug)
 		created, err = scanPlan(row)
 		if err != nil {
@@ -196,6 +201,7 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Name            *string        `json:"name"`
+		PlanFamilyID    *string        `json:"plan_family_id"`
 		Description     *string        `json:"description"`
 		PriceMinor      *int64         `json:"price_minor"`
 		Currency        *string        `json:"currency"`
@@ -221,7 +227,7 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	var updated planRecord
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
-		row := tx.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.description,p.price_minor,p.currency,p.included_credits,
+		row := tx.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.plan_family_id,p.name,p.description,p.price_minor,p.currency,p.included_credits,
 			p.entitlements,p.billing_interval,p.billing_model,p.selectable,p.default_for_product,p.checkout_enabled,p.effective_from,p.effective_to,p.active,p.version,p.created_at,p.updated_at
 			FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.id=$1 FOR UPDATE OF p`, id)
 		before, err := scanPlan(row)
@@ -234,6 +240,9 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 		updated = before
 		if in.Name != nil {
 			updated.Name = strings.TrimSpace(*in.Name)
+		}
+		if in.PlanFamilyID != nil {
+			updated.PlanFamilyID = strings.TrimSpace(*in.PlanFamilyID)
 		}
 		if in.Description != nil {
 			updated.Description = strings.TrimSpace(*in.Description)
@@ -301,7 +310,7 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 		if err := products.ValidatePlanName(updated.Name); err != nil {
 			return catalogueValidationError{err.Error()}
 		}
-		if err := products.ValidatePlan(products.PlanInput{PriceMinor: updated.PriceMinor, IncludedCredits: updated.IncludedCredits, Currency: updated.Currency, BillingInterval: updated.BillingInterval}); err != nil {
+		if err := products.ValidatePlan(products.PlanInput{PriceMinor: updated.PriceMinor, IncludedCredits: updated.IncludedCredits, Currency: updated.Currency, BillingInterval: updated.BillingInterval, PlanFamilyID: updated.PlanFamilyID}); err != nil {
 			return catalogueValidationError{err.Error()}
 		}
 		if err := validatePlanSemantics(updated.BillingModel, updated.PriceMinor, updated.Active, updated.Selectable, updated.Default, updated.CheckoutEnabled, updated.EffectiveFrom, updated.EffectiveTo); err != nil {
@@ -316,12 +325,12 @@ func (a *API) updatePlan(w http.ResponseWriter, r *http.Request) {
 				return catalogueValidationError{"active plans require an active product"}
 			}
 		}
-		row = tx.QueryRow(r.Context(), `UPDATE plans SET name=$2,description=$3,price_minor=$4,currency=$5,included_credits=$6,entitlements=$7,
-			billing_interval=$8,billing_model=$9,selectable=$10,default_for_product=$11,checkout_enabled=$12,effective_from=$13,effective_to=$14,
-			active=$15,version=version+1,updated_at=now() WHERE id=$1
-			RETURNING id,product_id,$16::text,slug,name,description,price_minor,currency,included_credits,entitlements,billing_interval,billing_model,
+		row = tx.QueryRow(r.Context(), `UPDATE plans SET plan_family_id=$2,name=$3,description=$4,price_minor=$5,currency=$6,included_credits=$7,entitlements=$8,
+			billing_interval=$9,billing_model=$10,selectable=$11,default_for_product=$12,checkout_enabled=$13,effective_from=$14,effective_to=$15,
+			active=$16,version=version+1,updated_at=now() WHERE id=$1
+			RETURNING id,product_id,$17::text,slug,plan_family_id,name,description,price_minor,currency,included_credits,entitlements,billing_interval,billing_model,
 			selectable,default_for_product,checkout_enabled,effective_from,effective_to,active,version,created_at,updated_at`,
-			id, updated.Name, updated.Description, updated.PriceMinor, updated.Currency, updated.IncludedCredits, updated.Entitlements,
+			id, updated.PlanFamilyID, updated.Name, updated.Description, updated.PriceMinor, updated.Currency, updated.IncludedCredits, updated.Entitlements,
 			updated.BillingInterval, updated.BillingModel, updated.Selectable, updated.Default, updated.CheckoutEnabled, updated.EffectiveFrom,
 			updated.EffectiveTo, updated.Active, before.Product)
 		updated, err = scanPlan(row)

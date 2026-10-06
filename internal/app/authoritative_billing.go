@@ -35,6 +35,7 @@ type transitionPlan struct {
 	ID                       uuid.UUID
 	ProductID                uuid.UUID
 	Product                  string
+	PlanFamilyID             string
 	Version                  int64
 	Name                     string
 	Description              string
@@ -132,7 +133,7 @@ func (a *API) writeCatalogue(w http.ResponseWriter, r *http.Request, product str
 		return
 	}
 
-	rows, err := a.pool.Query(r.Context(), `SELECT id,name,description,price_minor,currency,included_credits,entitlements,billing_interval,
+	rows, err := a.pool.Query(r.Context(), `SELECT id,plan_family_id,name,description,price_minor,currency,included_credits,entitlements,billing_interval,
 		billing_model,default_for_product,checkout_enabled,effective_from,effective_to,version
 		FROM plans WHERE product_id=$1 AND active AND selectable AND effective_from<=now()
 		AND (effective_to IS NULL OR effective_to>now()) ORDER BY default_for_product DESC,price_minor,name,id`, productID)
@@ -143,20 +144,20 @@ func (a *API) writeCatalogue(w http.ResponseWriter, r *http.Request, product str
 	plans := []map[string]any{}
 	for rows.Next() {
 		var id uuid.UUID
-		var name, planDescription, currency, interval, model string
+		var familyID, name, planDescription, currency, interval, model string
 		var price, credits, version int64
 		var entitlements map[string]any
 		var isDefault, checkout bool
 		var from time.Time
 		var to *time.Time
-		if err := rows.Scan(&id, &name, &planDescription, &price, &currency, &credits, &entitlements, &interval, &model,
+		if err := rows.Scan(&id, &familyID, &name, &planDescription, &price, &currency, &credits, &entitlements, &interval, &model,
 			&isDefault, &checkout, &from, &to, &version); err != nil {
 			rows.Close()
 			writeDBError(w, err)
 			return
 		}
 		plans = append(plans, map[string]any{
-			"id": id, "name": name, "description": planDescription, "price_minor": price, "currency": currency,
+			"id": id, "plan_family_id": familyID, "name": name, "description": planDescription, "price_minor": price, "currency": currency,
 			"included_credits": credits, "entitlements": entitlements, "billing_interval": interval,
 			"billing_model": model, "selectable": true, "default_for_product": isDefault,
 			"checkout_enabled": checkout, "effective_from": from, "effective_to": to, "version": version,
@@ -387,11 +388,11 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 		if pending {
 			return errTransitionConflict
 		}
-		_, err = tx.Exec(r.Context(), `INSERT INTO subscription_transitions(id,account_id,product_id,subscription_id,target_plan_id,target_plan_version,
+		_, err = tx.Exec(r.Context(), `INSERT INTO subscription_transitions(id,account_id,product_id,subscription_id,target_plan_id,target_plan_family_id,target_plan_version,
 			target_plan_name,target_plan_description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,
 			entitlement_schema_version,entitlement_schema,operation,effective,status,idempotency_key,request_hash,checkout_expires_at,effective_at,billing_policy,billing_policy_version,success_url,cancel_url)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`, transitionID, accountID,
-			plan.ProductID, subscriptionID, plan.ID, plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency,
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`, transitionID, accountID,
+			plan.ProductID, subscriptionID, plan.ID, plan.PlanFamilyID, plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency,
 			plan.BillingInterval, plan.IncludedCredits, plan.Entitlements, plan.EntitlementSchemaVersion, plan.EntitlementSchema, operation, effective, status, idempotencyKey, requestHash,
 			nil, effectiveAt, plan.BillingPolicy, plan.PolicyVersion, nullIfEmpty(in.SuccessURL), nullIfEmpty(in.CancelURL))
 		if err != nil {
@@ -461,11 +462,11 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 
 func (a *API) transitionPlan(ctx context.Context, planID uuid.UUID) (transitionPlan, error) {
 	var plan transitionPlan
-	err := a.pool.QueryRow(ctx, `SELECT p.id,p.product_id,pr.slug,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,
+	err := a.pool.QueryRow(ctx, `SELECT p.id,p.product_id,pr.slug,p.plan_family_id,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,
 		p.billing_interval,p.included_credits,p.entitlements,pr.entitlement_schema_version,pr.entitlement_schema,p.checkout_enabled,pr.billing_policy,pr.billing_policy_version
 		FROM plans p JOIN products pr ON pr.id=p.product_id
 		WHERE p.id=$1 AND p.active AND p.selectable AND pr.active AND p.effective_from<=now() AND (p.effective_to IS NULL OR p.effective_to>now())`, planID).
-		Scan(&plan.ID, &plan.ProductID, &plan.Product, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor,
+		Scan(&plan.ID, &plan.ProductID, &plan.Product, &plan.PlanFamilyID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor,
 			&plan.Currency, &plan.BillingInterval, &plan.IncludedCredits, &plan.Entitlements, &plan.EntitlementSchemaVersion, &plan.EntitlementSchema, &plan.CheckoutEnabled, &plan.BillingPolicy, &plan.PolicyVersion)
 	return plan, err
 }
@@ -512,11 +513,11 @@ func ensureProductOnboarding(ctx context.Context, tx pgx.Tx, accountID, productI
 		return nil
 	}
 	var plan transitionPlan
-	err := tx.QueryRow(ctx, `SELECT p.id,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,p.billing_interval,
+	err := tx.QueryRow(ctx, `SELECT p.id,p.plan_family_id,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,p.billing_interval,
 		p.included_credits,p.entitlements,pr.entitlement_schema_version,pr.entitlement_schema,p.checkout_enabled FROM plans p JOIN products pr ON pr.id=p.product_id
 		WHERE p.product_id=$1 AND p.active AND p.selectable AND p.default_for_product
 		AND p.effective_from<=now() AND (p.effective_to IS NULL OR p.effective_to>now())`, productID).
-		Scan(&plan.ID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor, &plan.Currency,
+		Scan(&plan.ID, &plan.PlanFamilyID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor, &plan.Currency,
 			&plan.BillingInterval, &plan.IncludedCredits, &plan.Entitlements, &plan.EntitlementSchemaVersion, &plan.EntitlementSchema, &plan.CheckoutEnabled)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && plan.BillingModel != "free" {
 		if policy.Onboarding.AllowWithoutSubscription || policy.Onboarding.IneligibleAction != "reject" {
@@ -549,11 +550,11 @@ func ensureProductOnboarding(ctx context.Context, tx pgx.Tx, accountID, productI
 	transitionID := uuid.New()
 	digest := sha256.Sum256([]byte("onboarding:" + accountID.String() + ":" + plan.ID.String()))
 	requestHash := hex.EncodeToString(digest[:])
-	if _, err := tx.Exec(ctx, `INSERT INTO subscription_transitions(id,account_id,product_id,target_plan_id,target_plan_version,target_plan_name,
+	if _, err := tx.Exec(ctx, `INSERT INTO subscription_transitions(id,account_id,product_id,target_plan_id,target_plan_family_id,target_plan_version,target_plan_name,
 		target_plan_description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,entitlement_schema_version,entitlement_schema,operation,effective,status,
 		idempotency_key,request_hash,billing_policy,billing_policy_version)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'activate','immediate','processing',$16,$17,$18,$19)`, transitionID,
-		accountID, productID, plan.ID, plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency,
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'activate','immediate','processing',$17,$18,$19,$20)`, transitionID,
+		accountID, productID, plan.ID, plan.PlanFamilyID, plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency,
 		plan.BillingInterval, plan.IncludedCredits, plan.Entitlements, plan.EntitlementSchemaVersion, plan.EntitlementSchema, "onboarding:"+accountID.String(), requestHash, policy, policyVersion); err != nil {
 		return err
 	}
@@ -606,19 +607,19 @@ func (a *API) writeTransition(w http.ResponseWriter, r *http.Request, id uuid.UU
 	}
 	var transitionID, productID, planID uuid.UUID
 	var subscriptionID, paymentID *uuid.UUID
-	var operation, effective, status, planName, billingModel, currency, productSlug string
+	var operation, effective, status, planFamilyID, planName, billingModel, currency, productSlug string
 	var failureCode, providerOrderID, successURL, cancelURL *string
 	var price, revision, policyVersion int64
 	var checkoutExpiryPtr, effectiveAtPtr *time.Time
 	var policy products.BillingPolicy
-	err = a.pool.QueryRow(r.Context(), `SELECT t.id,t.product_id,t.subscription_id,t.target_plan_id,t.operation,t.effective,t.status,t.target_plan_name,
+	err = a.pool.QueryRow(r.Context(), `SELECT t.id,t.product_id,t.subscription_id,t.target_plan_id,t.target_plan_family_id,t.operation,t.effective,t.status,t.target_plan_name,
 		t.billing_model,t.price_minor,t.currency,t.checkout_expires_at,t.effective_at,t.failure_code,p.id,p.provider_order_id,
 		COALESCE(br.revision,1),pr.slug,t.billing_policy_version,t.success_url,t.cancel_url,t.billing_policy
 		FROM subscription_transitions t
 		JOIN products pr ON pr.id=t.product_id
 		LEFT JOIN payments p ON p.transition_id=t.id
 		LEFT JOIN billing_state_revisions br ON br.account_id=t.account_id AND br.product_id=t.product_id
-		WHERE t.id=$1 AND t.account_id=$2`, id, accountID).Scan(&transitionID, &productID, &subscriptionID, &planID, &operation, &effective,
+		WHERE t.id=$1 AND t.account_id=$2`, id, accountID).Scan(&transitionID, &productID, &subscriptionID, &planID, &planFamilyID, &operation, &effective,
 		&status, &planName, &billingModel, &price, &currency, &checkoutExpiryPtr, &effectiveAtPtr, &failureCode, &paymentID, &providerOrderID, &revision, &productSlug,
 		&policyVersion, &successURL, &cancelURL, &policy)
 	if err != nil {
@@ -626,7 +627,7 @@ func (a *API) writeTransition(w http.ResponseWriter, r *http.Request, id uuid.UU
 		return
 	}
 	result := subscriptionTransitionResponse{
-		ID: transitionID, SubscriptionID: subscriptionID, PlanID: planID, PlanName: planName,
+		ID: transitionID, SubscriptionID: subscriptionID, PlanID: planID, PlanFamilyID: planFamilyID, PlanName: planName,
 		Operation: operation, Effective: effective, Status: status, EffectiveAt: effectiveAtPtr,
 		FailureCode: failureCode, PaymentID: paymentID, Revision: revision,
 		BillingPolicyVersion: policyVersion,
@@ -785,24 +786,24 @@ func (a *API) billingSnapshot(w http.ResponseWriter, r *http.Request) {
 	var subscription *billingSnapshotSubscription
 	entitlements := map[string]any{}
 	var subID, planID uuid.UUID
-	var status, planName, planDescription, model, currency, interval string
+	var status, planFamilyID, planName, planDescription, model, currency, interval string
 	var start, end *time.Time
 	var cancelAtPeriodEnd bool
 	var price, credits, planVersion, subscriptionPolicyVersion, entitlementSchemaVersion int64
 	var rawEntitlements map[string]any
 	var snapshottedEntitlementSchema products.EntitlementSchema
 	var subscriptionPolicy products.BillingPolicy
-	err = tx.QueryRow(r.Context(), `SELECT id,plan_id,status,current_period_start,current_period_end,cancel_at_period_end,plan_name,plan_description,
+	err = tx.QueryRow(r.Context(), `SELECT id,plan_id,plan_family_id,status,current_period_start,current_period_end,cancel_at_period_end,plan_name,plan_description,
 		billing_model,price_minor,currency,billing_interval,included_credits,entitlements,entitlement_schema_version,entitlement_schema,plan_version,billing_policy,billing_policy_version
 		FROM subscriptions WHERE account_id=$1 AND product_id=$2 ORDER BY created_at DESC LIMIT 1`, accountID, productID).
-		Scan(&subID, &planID, &status, &start, &end, &cancelAtPeriodEnd, &planName, &planDescription, &model, &price, &currency,
+		Scan(&subID, &planID, &planFamilyID, &status, &start, &end, &cancelAtPeriodEnd, &planName, &planDescription, &model, &price, &currency,
 			&interval, &credits, &rawEntitlements, &entitlementSchemaVersion, &snapshottedEntitlementSchema, &planVersion, &subscriptionPolicy, &subscriptionPolicyVersion)
 	if err == nil {
 		subscription = &billingSnapshotSubscription{
 			ID: subID, Status: status, CurrentPeriodStart: start, CurrentPeriodEnd: end,
 			CancelAtPeriodEnd: cancelAtPeriodEnd,
 			BillingPolicy:     subscriptionPolicy, BillingPolicyVersion: subscriptionPolicyVersion,
-			EffectivePlan: billingSnapshotEffectivePlan{ID: planID, Version: planVersion, Name: planName, Description: planDescription,
+			EffectivePlan: billingSnapshotEffectivePlan{ID: planID, PlanFamilyID: planFamilyID, Version: planVersion, Name: planName, Description: planDescription,
 				BillingModel: model, PriceMinor: price, Currency: currency, BillingInterval: interval,
 				IncludedCredits: credits, EntitlementSchemaVersion: entitlementSchemaVersion, EntitlementSchema: snapshottedEntitlementSchema, Entitlements: rawEntitlements},
 		}
@@ -830,15 +831,15 @@ func (a *API) billingSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	var pending *billingSnapshotPendingTransition
 	var transitionID, targetPlanID uuid.UUID
-	var transitionStatus, operation, effective string
+	var pendingPlanFamilyID, transitionStatus, operation, effective string
 	var transitionPolicyVersion int64
 	var transitionEffectiveAt, checkoutExpires *time.Time
-	err = tx.QueryRow(r.Context(), `SELECT id,target_plan_id,status,operation,effective,effective_at,checkout_expires_at,billing_policy_version
+	err = tx.QueryRow(r.Context(), `SELECT id,target_plan_id,target_plan_family_id,status,operation,effective,effective_at,checkout_expires_at,billing_policy_version
 		FROM subscription_transitions WHERE account_id=$1 AND product_id=$2 AND status IN ('requires_payment','processing')
-		ORDER BY created_at DESC LIMIT 1`, accountID, productID).Scan(&transitionID, &targetPlanID, &transitionStatus, &operation, &effective,
+		ORDER BY created_at DESC LIMIT 1`, accountID, productID).Scan(&transitionID, &targetPlanID, &pendingPlanFamilyID, &transitionStatus, &operation, &effective,
 		&transitionEffectiveAt, &checkoutExpires, &transitionPolicyVersion)
 	if err == nil {
-		pending = &billingSnapshotPendingTransition{ID: transitionID, TargetPlanID: targetPlanID, Status: transitionStatus, Operation: operation,
+		pending = &billingSnapshotPendingTransition{ID: transitionID, TargetPlanID: targetPlanID, PlanFamilyID: pendingPlanFamilyID, Status: transitionStatus, Operation: operation,
 			Effective: effective, EffectiveAt: transitionEffectiveAt, CheckoutExpiresAt: checkoutExpires,
 			BillingPolicyVersion: transitionPolicyVersion}
 	} else if errors.Is(err, pgx.ErrNoRows) {
@@ -1003,15 +1004,15 @@ func applySubscriptionTransition(ctx context.Context, tx pgx.Tx, transitionID uu
 	var accountID, productID, targetPlanID uuid.UUID
 	var subscriptionID *uuid.UUID
 	var targetVersion, price, credits, policyVersion, entitlementSchemaVersion int64
-	var name, description, model, currency, interval, operation, effective, status string
+	var planFamilyID, name, description, model, currency, interval, operation, effective, status string
 	var entitlements map[string]any
 	var entitlementSchema products.EntitlementSchema
 	var policy products.BillingPolicy
 	var effectiveAt *time.Time
-	err := tx.QueryRow(ctx, `SELECT account_id,product_id,subscription_id,target_plan_id,target_plan_version,target_plan_name,target_plan_description,
+	err := tx.QueryRow(ctx, `SELECT account_id,product_id,subscription_id,target_plan_id,target_plan_family_id,target_plan_version,target_plan_name,target_plan_description,
 		billing_model,price_minor,currency,billing_interval,included_credits,entitlements,entitlement_schema_version,entitlement_schema,operation,effective,status,effective_at,billing_policy,billing_policy_version
 		FROM subscription_transitions WHERE id=$1 FOR UPDATE`, transitionID).Scan(&accountID, &productID, &subscriptionID, &targetPlanID,
-		&targetVersion, &name, &description, &model, &price, &currency, &interval, &credits, &entitlements, &entitlementSchemaVersion, &entitlementSchema, &operation, &effective, &status, &effectiveAt,
+		&planFamilyID, &targetVersion, &name, &description, &model, &price, &currency, &interval, &credits, &entitlements, &entitlementSchemaVersion, &entitlementSchema, &operation, &effective, &status, &effectiveAt,
 		&policy, &policyVersion)
 	if err != nil {
 		return err
@@ -1030,23 +1031,23 @@ func applySubscriptionTransition(ctx context.Context, tx pgx.Tx, transitionID uu
 	var resultingSubscription uuid.UUID
 	activateNewPeriod := subscriptionID == nil || operation == "activate" || operation == "reactivate"
 	if subscriptionID == nil {
-		err = tx.QueryRow(ctx, `INSERT INTO subscriptions(account_id,plan_id,product_id,status,current_period_start,current_period_end,price_minor,currency,
+		err = tx.QueryRow(ctx, `INSERT INTO subscriptions(account_id,plan_id,product_id,plan_family_id,status,current_period_start,current_period_end,price_minor,currency,
 			billing_interval,included_credits,entitlements,entitlement_schema_version,entitlement_schema,plan_version,plan_name,plan_description,billing_model,billing_policy,billing_policy_version)
-			VALUES($1,$2,$3,'active',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`, accountID, targetPlanID, productID,
+			VALUES($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`, accountID, targetPlanID, productID, planFamilyID,
 			now, periodEnd, price, currency, interval, credits, entitlements, entitlementSchemaVersion, entitlementSchema, targetVersion, name, description, model, policy, policyVersion).Scan(&resultingSubscription)
 	} else {
 		resultingSubscription = *subscriptionID
 		if activateNewPeriod {
-			_, err = tx.Exec(ctx, `UPDATE subscriptions SET plan_id=$2,status='active',current_period_start=$3,current_period_end=$4,cancel_at_period_end=false,
-				cancelled_at=NULL,grace_period_end=NULL,price_minor=$5,currency=$6,billing_interval=$7,included_credits=$8,entitlements=$9,entitlement_schema_version=$10,entitlement_schema=$11,
-				plan_version=$12,plan_name=$13,plan_description=$14,billing_model=$15,billing_policy=$16,billing_policy_version=$17,
+			_, err = tx.Exec(ctx, `UPDATE subscriptions SET plan_id=$2,plan_family_id=$3,status='active',current_period_start=$4,current_period_end=$5,cancel_at_period_end=false,
+				cancelled_at=NULL,grace_period_end=NULL,price_minor=$6,currency=$7,billing_interval=$8,included_credits=$9,entitlements=$10,entitlement_schema_version=$11,entitlement_schema=$12,
+				plan_version=$13,plan_name=$14,plan_description=$15,billing_model=$16,billing_policy=$17,billing_policy_version=$18,
 				version=version+1,updated_at=now() WHERE id=$1`,
-				resultingSubscription, targetPlanID, now, periodEnd, price, currency, interval, credits, entitlements, entitlementSchemaVersion, entitlementSchema, targetVersion, name, description, model, policy, policyVersion)
+				resultingSubscription, targetPlanID, planFamilyID, now, periodEnd, price, currency, interval, credits, entitlements, entitlementSchemaVersion, entitlementSchema, targetVersion, name, description, model, policy, policyVersion)
 		} else {
-			_, err = tx.Exec(ctx, `UPDATE subscriptions SET plan_id=$2,price_minor=$3,currency=$4,billing_interval=$5,included_credits=$6,entitlements=$7,entitlement_schema_version=$8,entitlement_schema=$9,
-				plan_version=$10,plan_name=$11,plan_description=$12,billing_model=$13,billing_policy=$14,billing_policy_version=$15,
+			_, err = tx.Exec(ctx, `UPDATE subscriptions SET plan_id=$2,plan_family_id=$3,price_minor=$4,currency=$5,billing_interval=$6,included_credits=$7,entitlements=$8,entitlement_schema_version=$9,entitlement_schema=$10,
+				plan_version=$11,plan_name=$12,plan_description=$13,billing_model=$14,billing_policy=$15,billing_policy_version=$16,
 				version=version+1,updated_at=now() WHERE id=$1`,
-				resultingSubscription, targetPlanID, price, currency, interval, credits, entitlements, entitlementSchemaVersion, entitlementSchema, targetVersion, name, description, model, policy, policyVersion)
+				resultingSubscription, targetPlanID, planFamilyID, price, currency, interval, credits, entitlements, entitlementSchemaVersion, entitlementSchema, targetVersion, name, description, model, policy, policyVersion)
 		}
 	}
 	if err != nil {

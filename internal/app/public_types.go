@@ -68,6 +68,7 @@ type subscriptionTransitionResponse struct {
 	ID                   uuid.UUID         `json:"id"`
 	SubscriptionID       *uuid.UUID        `json:"subscription_id"`
 	PlanID               uuid.UUID         `json:"plan_id"`
+	PlanFamilyID         string            `json:"plan_family_id"`
 	PlanName             string            `json:"plan_name"`
 	Operation            string            `json:"operation"`
 	Effective            string            `json:"effective"`
@@ -89,6 +90,7 @@ type billingSnapshotAccount struct {
 
 type billingSnapshotEffectivePlan struct {
 	ID                       uuid.UUID                  `json:"id"`
+	PlanFamilyID             string                     `json:"plan_family_id"`
 	Version                  int64                      `json:"version"`
 	Name                     string                     `json:"name"`
 	Description              string                     `json:"description"`
@@ -131,6 +133,7 @@ type billingSnapshotResourceLimit struct {
 type billingSnapshotPendingTransition struct {
 	ID                   uuid.UUID  `json:"id"`
 	TargetPlanID         uuid.UUID  `json:"target_plan_id"`
+	PlanFamilyID         string     `json:"plan_family_id"`
 	Status               string     `json:"status"`
 	Operation            string     `json:"operation"`
 	Effective            string     `json:"effective"`

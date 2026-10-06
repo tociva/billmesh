@@ -18,6 +18,7 @@ type catalogueResponse struct {
 	} `json:"product"`
 	Plans []struct {
 		ID           string `json:"id"`
+		PlanFamilyID string `json:"plan_family_id"`
 		BillingModel string `json:"billing_model"`
 		PriceMinor   int64  `json:"price_minor"`
 		Currency     string `json:"currency"`
@@ -27,6 +28,7 @@ type catalogueResponse struct {
 type transitionResponse struct {
 	ID                   string `json:"id"`
 	SubscriptionID       string `json:"subscription_id"`
+	PlanFamilyID         string `json:"plan_family_id"`
 	Status               string `json:"status"`
 	BillingPolicyVersion int64  `json:"billing_policy_version"`
 	Checkout             *struct {
@@ -44,8 +46,9 @@ type snapshotResponse struct {
 		Version int64 `json:"version"`
 	} `json:"product_policy"`
 	PendingTransition *struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID           string `json:"id"`
+		PlanFamilyID string `json:"plan_family_id"`
+		Status       string `json:"status"`
 	} `json:"pending_transition"`
 	Subscription *struct {
 		ID                   string `json:"id"`
@@ -54,6 +57,7 @@ type snapshotResponse struct {
 		BillingPolicyVersion int64  `json:"billing_policy_version"`
 		EffectivePlan        struct {
 			ID           string `json:"id"`
+			PlanFamilyID string `json:"plan_family_id"`
 			BillingModel string `json:"billing_model"`
 		} `json:"effective_plan"`
 	} `json:"subscription"`
@@ -81,10 +85,11 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	if catalogue.Product.BillingPolicyVersion < 1 {
 		t.Fatalf("catalogue omitted the product billing policy version: %s", catalogueRaw)
 	}
-	var paidPlan string
+	var paidPlan, paidPlanFamily string
 	for _, plan := range catalogue.Plans {
 		if plan.BillingModel == "paid" && plan.PriceMinor > 0 {
 			paidPlan = plan.ID
+			paidPlanFamily = plan.PlanFamilyID
 			break
 		}
 	}
@@ -110,6 +115,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	if transition.BillingPolicyVersion != catalogue.Product.BillingPolicyVersion {
 		t.Fatalf("transition policy version = %d, catalogue policy version = %d", transition.BillingPolicyVersion, catalogue.Product.BillingPolicyVersion)
 	}
+	if transition.PlanFamilyID == "" || transition.PlanFamilyID != paidPlanFamily {
+		t.Fatalf("transition plan family = %q, want %q", transition.PlanFamilyID, paidPlanFamily)
+	}
 
 	status, replayRaw, _ := h.JSONWithHeaders(t, http.MethodPost, "/v1/subscription-transitions", map[string]any{"plan_id": paidPlan}, token, headers)
 	if status != http.StatusOK || testkit.Decode[transitionResponse](t, replayRaw).ID != transition.ID {
@@ -123,6 +131,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	snapshot := testkit.Decode[snapshotResponse](t, snapshotRaw)
 	if snapshot.Subscription != nil || snapshot.PendingTransition == nil || snapshot.PendingTransition.ID != transition.ID {
 		t.Fatalf("snapshot did not expose the pending transition without granting a subscription: %s", snapshotRaw)
+	}
+	if snapshot.PendingTransition.PlanFamilyID != paidPlanFamily {
+		t.Fatalf("pending transition plan family = %q, want %q", snapshot.PendingTransition.PlanFamilyID, paidPlanFamily)
 	}
 	if snapshot.ProductPolicy.Version != catalogue.Product.BillingPolicyVersion {
 		t.Fatalf("snapshot policy version = %d, want %d", snapshot.ProductPolicy.Version, catalogue.Product.BillingPolicyVersion)
@@ -153,6 +164,9 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	active := testkit.Decode[snapshotResponse](t, activeRaw)
 	if active.Subscription == nil || active.Subscription.Status != "active" || active.Subscription.EffectivePlan.BillingModel != "paid" {
 		t.Fatalf("snapshot does not contain the verified paid subscription: %s", activeRaw)
+	}
+	if active.Subscription.EffectivePlan.PlanFamilyID != paidPlanFamily {
+		t.Fatalf("effective plan family = %q, want %q", active.Subscription.EffectivePlan.PlanFamilyID, paidPlanFamily)
 	}
 	if active.Subscription.BillingPolicyVersion != catalogue.Product.BillingPolicyVersion {
 		t.Fatalf("subscription policy version = %d, want %d", active.Subscription.BillingPolicyVersion, catalogue.Product.BillingPolicyVersion)

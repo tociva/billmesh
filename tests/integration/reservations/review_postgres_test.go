@@ -405,8 +405,9 @@ func reviewSubscription(t *testing.T) (context.Context, *pgxpool.Pool, uuid.UUID
 	var accountID, productID, planID, subscriptionID uuid.UUID
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO billing_accounts(name,external_ref) VALUES('subscription-review',$1) RETURNING id`, uuid.NewString()).Scan(&accountID))
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products(slug,name) VALUES($1,'Subscription Review') RETURNING id`, "subscription-"+uuid.NewString()).Scan(&productID))
-	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO plans(product_id,slug,name,price_minor,currency,included_credits,billing_interval) VALUES($1,$2,'Review Plan',0,'INR',100,'monthly') RETURNING id`, productID, "plan-"+uuid.NewString()).Scan(&planID))
-	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO subscriptions(account_id,plan_id,product_id,status,current_period_start,current_period_end,price_minor,currency,billing_interval) VALUES($1,$2,$3,'active',now(),now()+interval '1 month',0,'INR','monthly') RETURNING id`, accountID, planID, productID).Scan(&subscriptionID))
+	planSlug := "plan-" + uuid.NewString()
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO plans(product_id,slug,plan_family_id,name,price_minor,currency,included_credits,billing_interval) VALUES($1,$2,$2,'Review Plan',0,'INR',100,'monthly') RETURNING id`, productID, planSlug).Scan(&planID))
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO subscriptions(account_id,plan_id,product_id,plan_family_id,status,current_period_start,current_period_end,price_minor,currency,billing_interval) VALUES($1,$2,$3,$4,'active',now(),now()+interval '1 month',0,'INR','monthly') RETURNING id`, accountID, planID, productID, planSlug).Scan(&subscriptionID))
 	return ctx, pool, subscriptionID, planID
 }
 

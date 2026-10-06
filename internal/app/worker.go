@@ -437,11 +437,11 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 func expireSubscriptionByPolicy(ctx context.Context, tx pgx.Tx, subscriptionID, accountID, productID uuid.UUID, periodEnd time.Time, policy products.BillingPolicy, policyVersion int64) error {
 	if policy.Lifecycle.Expiration == "downgrade_to_default" {
 		var plan transitionPlan
-		err := tx.QueryRow(ctx, `SELECT p.id,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,p.billing_interval,p.included_credits,
+		err := tx.QueryRow(ctx, `SELECT p.id,p.plan_family_id,p.version,p.name,p.description,p.billing_model,p.price_minor,p.currency,p.billing_interval,p.included_credits,
 			p.entitlements,pr.entitlement_schema_version,pr.entitlement_schema,p.checkout_enabled
 			FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.product_id=$1 AND p.active AND p.selectable AND p.default_for_product AND p.billing_model='free'
 			AND effective_from<=now() AND (effective_to IS NULL OR effective_to>now())`, productID).
-			Scan(&plan.ID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor, &plan.Currency,
+			Scan(&plan.ID, &plan.PlanFamilyID, &plan.Version, &plan.Name, &plan.Description, &plan.BillingModel, &plan.PriceMinor, &plan.Currency,
 				&plan.BillingInterval, &plan.IncludedCredits, &plan.Entitlements, &plan.EntitlementSchemaVersion, &plan.EntitlementSchema, &plan.CheckoutEnabled)
 		if err == nil {
 			var customerID *uuid.UUID
@@ -460,12 +460,12 @@ func expireSubscriptionByPolicy(ctx context.Context, tx pgx.Tx, subscriptionID, 
 			if eligible {
 				transitionID := uuid.New()
 				digest := sha256.Sum256([]byte("expiration:" + subscriptionID.String() + ":" + periodEnd.UTC().Format(time.RFC3339Nano)))
-				if _, err := tx.Exec(ctx, `INSERT INTO subscription_transitions(id,account_id,product_id,subscription_id,target_plan_id,target_plan_version,
+				if _, err := tx.Exec(ctx, `INSERT INTO subscription_transitions(id,account_id,product_id,subscription_id,target_plan_id,target_plan_family_id,target_plan_version,
 					target_plan_name,target_plan_description,billing_model,price_minor,currency,billing_interval,included_credits,entitlements,
 					entitlement_schema_version,entitlement_schema,operation,effective,status,idempotency_key,request_hash,effective_at,billing_policy,billing_policy_version)
-					VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'downgrade','immediate','processing',$17,$18,now(),$19,$20)
+					VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'downgrade','immediate','processing',$18,$19,now(),$20,$21)
 					ON CONFLICT(account_id,product_id,idempotency_key) DO NOTHING`, transitionID, accountID, productID, subscriptionID, plan.ID,
-					plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency, plan.BillingInterval,
+					plan.PlanFamilyID, plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency, plan.BillingInterval,
 					plan.IncludedCredits, plan.Entitlements, plan.EntitlementSchemaVersion, plan.EntitlementSchema,
 					"expiration:"+periodEnd.UTC().Format(time.RFC3339Nano), hex.EncodeToString(digest[:]), policy, policyVersion); err != nil {
 					return err

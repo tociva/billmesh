@@ -12,6 +12,7 @@ var currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 type PlanInput struct {
 	PriceMinor, IncludedCredits int64
 	Currency, BillingInterval   string
+	PlanFamilyID                string
 }
 
 func ValidatePlan(v PlanInput) error {
@@ -26,6 +27,18 @@ func ValidatePlan(v PlanInput) error {
 	}
 	if v.BillingInterval != "" && v.BillingInterval != "monthly" && v.BillingInterval != "annual" {
 		return errors.New("billing interval must be monthly or annual")
+	}
+	if v.PlanFamilyID != "" {
+		if err := ValidatePlanFamilyID(v.PlanFamilyID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ValidatePlanFamilyID(value string) error {
+	if len(value) < 2 || len(value) > 63 || !slugPattern.MatchString(value) {
+		return errors.New("plan_family_id must be 2-63 lowercase letters, numbers, or single hyphens")
 	}
 	return nil
 }

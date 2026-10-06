@@ -658,7 +658,7 @@ func writeDBError(w http.ResponseWriter, err error) {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505":
+		case "23505", "23P01":
 			writeError(w, 409, "resource already exists")
 			return
 		case "23502", "23503", "23514", "22P02":

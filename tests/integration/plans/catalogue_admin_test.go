@@ -59,7 +59,7 @@ func TestPLAN019AndPLAN020PlanSlugScope(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products(slug,name) VALUES($1,'First') RETURNING id`, testkit.Unique("first-product")).Scan(&firstProduct))
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products(slug,name) VALUES($1,'Second') RETURNING id`, testkit.Unique("second-product")).Scan(&secondProduct))
 	slug := testkit.Unique("shared-plan")
-	insert := `INSERT INTO plans(product_id,slug,name,price_minor,currency,included_credits,billing_interval) VALUES($1,$2,'Shared',0,'INR',0,'monthly')`
+	insert := `INSERT INTO plans(product_id,slug,plan_family_id,name,price_minor,currency,included_credits,billing_interval) VALUES($1,$2,$2,'Shared',0,'INR',0,'monthly')`
 	_, err := pool.Exec(ctx, insert, firstProduct, slug)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, insert, firstProduct, slug)
@@ -74,11 +74,12 @@ func TestPRD018ArchivePreservesCatalogueAndBillingHistory(t *testing.T) {
 	var accountID, productID, planID, subscriptionID uuid.UUID
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO billing_accounts(name,external_ref) VALUES('Archive Customer',$1) RETURNING id`, testkit.Unique("archive-account")).Scan(&accountID))
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO products(slug,name) VALUES($1,'Archive Product') RETURNING id`, testkit.Unique("archive-product")).Scan(&productID))
-	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO plans(product_id,slug,name,price_minor,currency,included_credits,billing_interval,entitlements)
-		VALUES($1,$2,'Archive Plan',0,'INR',100,'monthly','{"reports":true}') RETURNING id`, productID, testkit.Unique("archive-plan")).Scan(&planID))
+	planSlug := testkit.Unique("archive-plan")
+	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO plans(product_id,slug,plan_family_id,name,price_minor,currency,included_credits,billing_interval,entitlements)
+		VALUES($1,$2,$2,'Archive Plan',0,'INR',100,'monthly','{"reports":true}') RETURNING id`, productID, planSlug).Scan(&planID))
 	require.NoError(t, pool.QueryRow(ctx, `INSERT INTO subscriptions(account_id,plan_id,product_id,status,current_period_start,current_period_end,
-		price_minor,currency,billing_interval,included_credits,entitlements)
-		VALUES($1,$2,$3,'active',now(),now()+interval '1 month',0,'INR','monthly',100,'{"reports":true}') RETURNING id`, accountID, planID, productID).Scan(&subscriptionID))
+		plan_family_id,price_minor,currency,billing_interval,included_credits,entitlements)
+		VALUES($1,$2,$3,'active',now(),now()+interval '1 month',$4,0,'INR','monthly',100,'{"reports":true}') RETURNING id`, accountID, planID, productID, planSlug).Scan(&subscriptionID))
 	_, err := pool.Exec(ctx, `UPDATE products SET active=false,version=version+1,updated_at=now() WHERE id=$1`, productID)
 	require.NoError(t, err)
 	var plans, subscriptions int

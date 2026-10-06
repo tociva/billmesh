@@ -25,7 +25,7 @@ func TestPRD006AndPRD007ProductSlugValidation(t *testing.T) {
 }
 
 func TestPLAN018CommercialValidation(t *testing.T) {
-	valid := products.PlanInput{PriceMinor: 100, IncludedCredits: 10, Currency: "INR", BillingInterval: "monthly"}
+	valid := products.PlanInput{PriceMinor: 100, IncludedCredits: 10, Currency: "INR", BillingInterval: "monthly", PlanFamilyID: "professional"}
 	require.NoError(t, products.ValidatePlan(valid))
 
 	cases := []products.PlanInput{
@@ -33,9 +33,19 @@ func TestPLAN018CommercialValidation(t *testing.T) {
 		{IncludedCredits: -1, Currency: "INR", BillingInterval: "monthly"},
 		{Currency: "inr", BillingInterval: "monthly"},
 		{Currency: "INR", BillingInterval: "weekly"},
+		{Currency: "INR", BillingInterval: "monthly", PlanFamilyID: "Professional Monthly"},
 	}
 	for _, input := range cases {
 		require.Error(t, products.ValidatePlan(input))
+	}
+}
+
+func TestPlanFamilyIDValidation(t *testing.T) {
+	for _, familyID := range []string{"basic", "professional-v2", "tier1"} {
+		require.NoError(t, products.ValidatePlanFamilyID(familyID), familyID)
+	}
+	for _, familyID := range []string{"", "a", "Basic", "basic_monthly", "basic--monthly", strings.Repeat("a", 64)} {
+		require.Error(t, products.ValidatePlanFamilyID(familyID), familyID)
 	}
 }
 

@@ -36,6 +36,7 @@ type planRecord struct {
 	ProductID       uuid.UUID      `json:"product_id"`
 	Product         string         `json:"product"`
 	Slug            string         `json:"slug"`
+	PlanFamilyID    string         `json:"plan_family_id"`
 	Name            string         `json:"name"`
 	Description     string         `json:"description"`
 	PriceMinor      int64          `json:"price_minor"`
@@ -86,7 +87,8 @@ func productState(value productRecord) map[string]any {
 
 func planState(value planRecord) map[string]any {
 	return map[string]any{
-		"id": value.ID, "product_id": value.ProductID, "slug": value.Slug, "name": value.Name, "description": value.Description,
+		"id": value.ID, "product_id": value.ProductID, "slug": value.Slug, "plan_family_id": value.PlanFamilyID,
+		"name": value.Name, "description": value.Description,
 		"price_minor": value.PriceMinor, "currency": value.Currency,
 		"included_credits": value.IncludedCredits, "entitlements": value.Entitlements,
 		"billing_interval": value.BillingInterval, "billing_model": value.BillingModel,
@@ -446,7 +448,7 @@ func (a *API) listAdminPlans(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.description,p.price_minor,p.currency,p.included_credits,
+	rows, err := a.pool.Query(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.plan_family_id,p.name,p.description,p.price_minor,p.currency,p.included_credits,
 		p.entitlements,p.billing_interval,p.billing_model,p.selectable,p.default_for_product,p.checkout_enabled,p.effective_from,p.effective_to,p.active,p.version,p.created_at,p.updated_at
 		FROM plans p JOIN products pr ON pr.id=p.product_id
 		WHERE p.product_id=$1 AND ($2='all' OR ($2='active' AND p.active) OR ($2 IN ('archived','inactive') AND NOT p.active))
@@ -477,7 +479,7 @@ func (a *API) getAdminPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid plan id")
 		return
 	}
-	row := a.pool.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.name,p.description,p.price_minor,p.currency,p.included_credits,
+	row := a.pool.QueryRow(r.Context(), `SELECT p.id,p.product_id,pr.slug,p.slug,p.plan_family_id,p.name,p.description,p.price_minor,p.currency,p.included_credits,
 		p.entitlements,p.billing_interval,p.billing_model,p.selectable,p.default_for_product,p.checkout_enabled,p.effective_from,p.effective_to,p.active,p.version,p.created_at,p.updated_at
 		FROM plans p JOIN products pr ON pr.id=p.product_id WHERE p.id=$1`, id)
 	item, err := scanPlan(row)
@@ -494,7 +496,7 @@ type rowScanner interface {
 
 func scanPlan(row rowScanner) (planRecord, error) {
 	var item planRecord
-	err := row.Scan(&item.ID, &item.ProductID, &item.Product, &item.Slug, &item.Name, &item.Description, &item.PriceMinor, &item.Currency,
+	err := row.Scan(&item.ID, &item.ProductID, &item.Product, &item.Slug, &item.PlanFamilyID, &item.Name, &item.Description, &item.PriceMinor, &item.Currency,
 		&item.IncludedCredits, &item.Entitlements, &item.BillingInterval, &item.BillingModel, &item.Selectable, &item.Default,
 		&item.CheckoutEnabled, &item.EffectiveFrom, &item.EffectiveTo, &item.Active, &item.Version, &item.CreatedAt, &item.UpdatedAt)
 	return item, err

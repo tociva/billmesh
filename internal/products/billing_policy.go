@@ -111,7 +111,11 @@ func DefaultBillingPolicy() BillingPolicy {
 			FailClosedOperations: []string{"subscription_change", "credit_purchase", "limit_increase"},
 			RefreshSeconds:       60, ReconciliationSeconds: 300,
 		},
-		Checkout: CheckoutPolicy{Presentation: "modal", Confirmation: "webhook"},
+		Checkout: CheckoutPolicy{
+			AllowedRedirectOrigins: []string{},
+			Presentation:           "modal",
+			Confirmation:           "webhook",
+		},
 	}
 }
 

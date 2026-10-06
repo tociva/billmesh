@@ -121,6 +121,7 @@ type planResponse struct {
 	ProductID       string         `json:"product_id"`
 	Product         string         `json:"product"`
 	Slug            string         `json:"slug"`
+	PlanFamilyID    string         `json:"plan_family_id"`
 	Name            string         `json:"name"`
 	PriceMinor      int64          `json:"price_minor"`
 	Currency        string         `json:"currency"`
@@ -261,7 +262,7 @@ func TestPLAN013ThroughPLAN029PlanAdminContract(t *testing.T) {
 		t.Fatalf("PLAN-016: free annual Plan response is wrong: %+v", freeAnnual)
 	}
 
-	if active.ProductID != product.ID || active.Product != product.Slug || active.Version != 1 {
+	if active.ProductID != product.ID || active.Product != product.Slug || active.PlanFamilyID != active.Slug || active.Version != 1 {
 		t.Fatalf("PLAN-016: incomplete plan response: %+v", active)
 	}
 	all := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/products/"+product.ID+"/plans?status=all", nil, admin)
@@ -347,6 +348,7 @@ func TestPLAN018PlanValidationAndMassAssignment(t *testing.T) {
 		{"slug": "negative-credits", "name": "Invalid", "included_credits": -1, "currency": "INR"},
 		{"slug": "bad-currency", "name": "Invalid", "currency": "inr"},
 		{"slug": "bad-interval", "name": "Invalid", "currency": "INR", "billing_interval": "weekly"},
+		{"slug": "bad-family", "plan_family_id": "Basic Monthly", "name": "Invalid", "currency": "INR"},
 		{"slug": "unknown-field", "name": "Invalid", "currency": "INR", "product_id": "00000000-0000-0000-0000-000000000001"},
 	}
 	for _, body := range cases {
@@ -358,6 +360,50 @@ func TestPLAN018PlanValidationAndMassAssignment(t *testing.T) {
 	plan := createAdminPlan(t, h, admin, product, true)
 	h.RequireStatus(t, http.StatusBadRequest, http.MethodPatch, "/v1/admin/plans/"+plan.ID, map[string]any{
 		"slug": "changed-slug", "version": plan.Version,
+	}, admin)
+}
+
+func TestPlanFamilyGroupsIntervalsAndRejectsOverlappingVariants(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	admin := h.IssueToken(t, testkit.Unique("plan-family-admin"), "daybook", testkit.AllPermissions(), nil)
+	product := createAdminProduct(t, h, admin, "plan-family-product")
+	viewer := h.IssueToken(t, testkit.Unique("plan-family-viewer"), product.Slug, []string{"billing:read"}, nil)
+
+	create := func(slug, interval string) planResponse {
+		t.Helper()
+		return testkit.Decode[planResponse](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
+			"slug": slug, "plan_family_id": "professional", "name": "Professional", "billing_model": "paid",
+			"price_minor": 1000, "currency": "INR", "billing_interval": interval,
+			"entitlements": map[string]any{"reports": true, "members": 5}, "entitlement_schema_version": product.EntitlementSchemaVersion,
+		}, admin))
+	}
+	monthly := create(testkit.Unique("professional-monthly"), "monthly")
+	annual := create(testkit.Unique("professional-annual"), "annual")
+	if monthly.PlanFamilyID != "professional" || annual.PlanFamilyID != monthly.PlanFamilyID {
+		t.Fatalf("interval variants did not retain their shared family: monthly=%+v annual=%+v", monthly, annual)
+	}
+
+	public := testkit.Decode[struct {
+		Plans []struct {
+			ID              string `json:"id"`
+			PlanFamilyID    string `json:"plan_family_id"`
+			BillingInterval string `json:"billing_interval"`
+		} `json:"plans"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+product.Slug, nil, viewer))
+	variants := map[string]string{}
+	for _, plan := range public.Plans {
+		if plan.PlanFamilyID == "professional" {
+			variants[plan.BillingInterval] = plan.ID
+		}
+	}
+	if variants["monthly"] != monthly.ID || variants["annual"] != annual.ID {
+		t.Fatalf("catalogue family variants are incomplete: %#v", variants)
+	}
+
+	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/admin/products/"+product.ID+"/plans", map[string]any{
+		"slug": testkit.Unique("professional-monthly-duplicate"), "plan_family_id": "professional", "name": "Professional duplicate",
+		"billing_model": "paid", "price_minor": 1200, "currency": "INR", "billing_interval": "monthly",
+		"entitlements": map[string]any{"reports": true, "members": 5}, "entitlement_schema_version": product.EntitlementSchemaVersion,
 	}, admin)
 }
 
