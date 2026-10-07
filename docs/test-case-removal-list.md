@@ -59,7 +59,7 @@ Generated from actual `_test.go` files plus checklist cases loaded through `test
 | `AUTH-015` | E | Prevent runtime clients from modifying prices or subscriptions. | Passes when the operation is refused with the expected client/error response and no invalid state change is committed. |
 | `AUTH-016` | E | Verify tenant and environment isolation across all relevant APIs. | Passes when the stated behavior is observed without data loss or contract violation. |
 | `AUTH-017` | E | Reject an OIDC ID token presented as an API access token. | Passes when the operation is refused with the expected client/error response and no invalid state change is committed. |
-| `AUTH-018` | E | Reject a valid service token that lacks permission for the requested billing operation. | Passes when the operation is refused with the expected client/error response and no invalid state change is committed. |
+| `AUTH-018` | E | Reject a valid catalogue-client token used for an organization billing operation. | Passes when the operation is refused with the expected client/error response and no invalid state change is committed. |
 | `AUTH-019` | E | Reject requests that manipulate nested resource IDs to access another billing account. | Passes when the operation is refused with the expected client/error response and no invalid state change is committed. |
 ## `tests/e2e/entitlements/entitlements_test.go`
 

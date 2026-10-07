@@ -63,7 +63,7 @@ func run() error {
 	defer pool.Close()
 	switch os.Args[1] {
 	case "api":
-		verifier := auth.NewJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, nil)
+		verifier := auth.NewClientJWKSVerifier(cfg.OIDCIssuer, cfg.OIDCAudience, cfg.OIDCClients, nil)
 		api := app.NewAPI(pool, verifier, nil)
 		managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
 		for _, realm := range cfg.BFF.Realms {
@@ -113,6 +113,9 @@ func loadEnvironment(filenames ...string) error {
 func validateAPIAuthConfig(cfg config.Config) error {
 	if cfg.OIDCIssuer == "" || cfg.OIDCAudience == "" {
 		return errors.New("OIDC_ISSUER and OIDC_AUDIENCE are required for api")
+	}
+	if len(cfg.OIDCClients) == 0 {
+		return errors.New("OIDC_CLIENT_PROFILES is required for api")
 	}
 	if len(cfg.BFF.Realms) != 2 {
 		return errors.New("console and admin BFF configurations are required for api")

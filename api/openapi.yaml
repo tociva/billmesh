@@ -234,7 +234,7 @@ paths:
       operationId: createAccount
       tags: [Accounts]
       summary: Create or return a billing account for an identity
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IfMatch" }
       requestBody: { $ref: "#/components/requestBodies/CreateAccount" }
@@ -247,7 +247,7 @@ paths:
       operationId: getCurrentAccount
       tags: [Accounts]
       summary: Get the account linked to the caller
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       responses:
         "200": { $ref: "#/components/responses/Account" }
         default: { $ref: "#/components/responses/Error" }
@@ -256,7 +256,7 @@ paths:
       operationId: createAccountOwnershipTransfer
       tags: [Accounts]
       summary: Pre-authorize a billing account ownership transfer
-      x-required-permissions: ["billing:ownership"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
         - { $ref: "#/components/parameters/IfMatchRequired" }
@@ -275,7 +275,7 @@ paths:
       operationId: getAccountOwnershipTransfer
       tags: [Accounts]
       summary: Get an ownership transfer decision and status
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       responses:
         "200":
           description: Ownership transfer status.
@@ -290,7 +290,7 @@ paths:
       operationId: confirmAccountOwnershipTransfer
       tags: [Accounts]
       summary: Confirm a pre-authorized ownership transfer
-      x-required-permissions: ["billing:ownership"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
         - { $ref: "#/components/parameters/IfMatchRequired" }
@@ -308,7 +308,7 @@ paths:
       operationId: cancelAccountOwnershipTransfer
       tags: [Accounts]
       summary: Cancel a pending ownership transfer
-      x-required-permissions: ["billing:ownership"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
@@ -325,7 +325,7 @@ paths:
       operationId: createInstallation
       tags: [Installations]
       summary: Create or reactivate an application installation
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       requestBody: { $ref: "#/components/requestBodies/Installation" }
       responses:
         "201":
@@ -339,7 +339,7 @@ paths:
       operationId: getCatalogue
       tags: [Catalogue]
       summary: Get the authoritative customer catalogue
-      x-required-permissions-any: ["catalogue:read", "billing:read"]
+      x-required-client-profile: catalogue
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
         - { $ref: "#/components/parameters/IfNoneMatch" }
@@ -380,7 +380,7 @@ paths:
       operationId: listAdminProducts
       tags: [Administration, Catalogue]
       summary: List active and archived products
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       parameters:
         - name: status
           in: query
@@ -401,7 +401,7 @@ paths:
       operationId: createAdminProduct
       tags: [Administration, Catalogue]
       summary: Create a product
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/CreateProduct" }
       responses:
         "201":
@@ -415,7 +415,7 @@ paths:
       operationId: getProductPolicyMetadata
       tags: [Administration, Catalogue]
       summary: Get product billing-policy defaults, options, and constraints
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       responses:
         "200":
           description: Billing-policy form metadata.
@@ -430,7 +430,7 @@ paths:
       operationId: getAdminProduct
       tags: [Administration, Catalogue]
       summary: Get active or archived product detail
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       responses:
         "200":
           description: Product detail.
@@ -442,7 +442,7 @@ paths:
       operationId: updateAdminProduct
       tags: [Administration, Catalogue]
       summary: Update, archive, or reactivate a product
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/UpdateProduct" }
       responses:
         "200":
@@ -458,7 +458,7 @@ paths:
       operationId: listAdminProductPlans
       tags: [Administration, Catalogue]
       summary: List active and inactive plans for a product
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       parameters:
         - name: status
           in: query
@@ -478,7 +478,7 @@ paths:
       operationId: createAdminProductPlan
       tags: [Administration, Catalogue]
       summary: Create a plan for a product
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/CreateNestedPlan" }
       responses:
         "201":
@@ -494,7 +494,7 @@ paths:
       operationId: getAdminPlan
       tags: [Administration, Catalogue]
       summary: Get active or inactive plan detail
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       responses:
         "200":
           description: Plan detail.
@@ -506,7 +506,7 @@ paths:
       operationId: updateAdminPlan
       tags: [Administration, Catalogue]
       summary: Update, archive, or reactivate a plan
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/UpdateAdminPlan" }
       responses:
         "200":
@@ -520,7 +520,7 @@ paths:
       operationId: listCreditPacks
       tags: [Catalogue]
       summary: List active credit packs
-      x-required-permissions-any: ["catalogue:read", "billing:read"]
+      x-required-client-profile: catalogue
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
       responses:
@@ -537,7 +537,7 @@ paths:
       operationId: createCreditPack
       tags: [Administration, Catalogue]
       summary: Create a prepaid credit pack
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/CreateCreditPack" }
       responses:
         "201": { $ref: "#/components/responses/IDOnly" }
@@ -547,7 +547,7 @@ paths:
       operationId: requestCurrentSubscriptionCancellation
       tags: [Subscriptions]
       summary: Cancel the current subscription immediately or at period end
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { $ref: "#/components/requestBodies/Cancellation" }
@@ -563,7 +563,7 @@ paths:
       operationId: createSubscriptionTransition
       tags: [Subscriptions]
       summary: Select a plan and let Billmesh determine the required transition
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
         - { $ref: "#/components/parameters/IfMatch" }
@@ -591,7 +591,7 @@ paths:
       operationId: getSubscriptionTransition
       tags: [Subscriptions]
       summary: Get a subscription transition
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
@@ -611,7 +611,7 @@ paths:
       operationId: cancelSubscriptionTransition
       tags: [Subscriptions]
       summary: Cancel a pending subscription transition
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
@@ -628,7 +628,7 @@ paths:
       operationId: getBillingSnapshot
       tags: [Billing state]
       summary: Get the authoritative revisioned billing projection
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
         - { $ref: "#/components/parameters/IfNoneMatch" }
@@ -647,7 +647,7 @@ paths:
       operationId: getEntitlements
       tags: [Entitlements]
       summary: Get the effective entitlements for a product
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/ProductFilter" }
       responses:
@@ -662,7 +662,7 @@ paths:
       operationId: checkEntitlement
       tags: [Entitlements]
       summary: Check whether a feature is enabled
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - name: feature
           in: query
@@ -676,7 +676,7 @@ paths:
       operationId: createWallet
       tags: [Wallets]
       summary: Create or return an account's product wallet
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       requestBody: { $ref: "#/components/requestBodies/CreateWallet" }
       responses:
         "201": { $ref: "#/components/responses/Wallet" }
@@ -688,7 +688,7 @@ paths:
       operationId: getWallet
       tags: [Wallets]
       summary: Get wallet balances
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       responses:
         "200": { $ref: "#/components/responses/Wallet" }
         default: { $ref: "#/components/responses/Error" }
@@ -699,7 +699,7 @@ paths:
       operationId: listWalletLedger
       tags: [Wallets]
       summary: List a wallet's credit ledger
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/Limit" }
       responses:
@@ -718,7 +718,7 @@ paths:
       operationId: grantCredits
       tags: [Wallets]
       summary: Grant credits to a wallet idempotently
-      x-required-permissions: ["credits:grant"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/GrantCredits" }
       responses:
         "200": { $ref: "#/components/responses/Wallet" }
@@ -731,7 +731,7 @@ paths:
       tags: [Reservations]
       summary: Reserve credits for an execution
       description: The tuple `(wallet ID, execution_id, operation_seq)` is idempotent.
-      x-required-permissions: ["credits:reserve"]
+      x-required-client-profile: runtime
       requestBody: { $ref: "#/components/requestBodies/ReserveCredits" }
       responses:
         "201": { $ref: "#/components/responses/Reservation" }
@@ -743,7 +743,7 @@ paths:
       operationId: settleReservation
       tags: [Reservations]
       summary: Settle a reservation with actual credit usage
-      x-required-permissions: ["credits:settle"]
+      x-required-client-profile: runtime
       requestBody: { $ref: "#/components/requestBodies/Settlement" }
       responses:
         "200": { $ref: "#/components/responses/Reservation" }
@@ -755,7 +755,7 @@ paths:
       operationId: releaseReservation
       tags: [Reservations]
       summary: Release all credits held by a reservation
-      x-required-permissions: ["credits:settle"]
+      x-required-client-profile: runtime
       responses:
         "200": { $ref: "#/components/responses/Reservation" }
         default: { $ref: "#/components/responses/Error" }
@@ -766,7 +766,7 @@ paths:
       operationId: extendReservation
       tags: [Reservations]
       summary: Extend a reservation's expiry
-      x-required-permissions: ["credits:reserve"]
+      x-required-client-profile: runtime
       requestBody: { $ref: "#/components/requestBodies/ExtendReservation" }
       responses:
         "200": { $ref: "#/components/responses/Reservation" }
@@ -776,7 +776,7 @@ paths:
       operationId: authorizeExecution
       tags: [Reservations]
       summary: Authorize an execution against an installation or funded wallet
-      x-required-permissions: ["credits:reserve"]
+      x-required-client-profile: runtime
       requestBody: { $ref: "#/components/requestBodies/AuthorizeExecution" }
       responses:
         "201":
@@ -792,7 +792,7 @@ paths:
       operationId: revokeInstallation
       tags: [Installations]
       summary: Revoke an application installation
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
@@ -803,7 +803,7 @@ paths:
       operationId: settleInstallationExecution
       tags: [Installations]
       summary: Clear and settle an installation's active execution
-      x-required-permissions: ["credits:settle"]
+      x-required-client-profile: runtime
       requestBody: { $ref: "#/components/requestBodies/Settlement" }
       responses:
         "200":
@@ -823,7 +823,7 @@ paths:
       tags: [Usage]
       summary: Record one or more usage events
       description: Accepts a single event, an array, or an object containing an `events` array of at most 1000 items.
-      x-required-permissions: ["credits:settle"]
+      x-required-client-profile: runtime
       requestBody:
         required: true
         content:
@@ -859,7 +859,7 @@ paths:
       operationId: listUsageEvents
       tags: [Usage]
       summary: List usage events for the caller's account
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { name: meter, in: query, schema: { type: string } }
         - { $ref: "#/components/parameters/ProductFilter" }
@@ -881,7 +881,7 @@ paths:
       operationId: getLimits
       tags: [Usage]
       summary: Get wallet usage and credit limits
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       responses:
         "200":
           description: Wallet limits visible to the caller.
@@ -896,7 +896,7 @@ paths:
       operationId: createPaymentOrder
       tags: [Payments]
       summary: Create a payment-provider order for a credit pack
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { $ref: "#/components/requestBodies/CreatePaymentOrder" }
@@ -938,7 +938,7 @@ paths:
       operationId: listPayments
       tags: [Payments]
       summary: List payments for the caller's account
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
@@ -954,7 +954,7 @@ paths:
       operationId: listInvoices
       tags: [Payments]
       summary: List invoices for the caller's account
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - { $ref: "#/components/parameters/Limit" }
         - { $ref: "#/components/parameters/Cursor" }
@@ -970,7 +970,7 @@ paths:
       operationId: registerWebhook
       tags: [Webhooks]
       summary: Register or replace an application webhook
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       requestBody: { $ref: "#/components/requestBodies/RegisterWebhook" }
       responses:
         "201":
@@ -983,7 +983,7 @@ paths:
       operationId: listWebhooks
       tags: [Webhooks]
       summary: List registered webhooks
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       responses:
         "200":
           description: Registered webhooks.
@@ -1000,7 +1000,7 @@ paths:
       operationId: updateWebhook
       tags: [Webhooks]
       summary: Update or disable a webhook endpoint
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       requestBody: { $ref: "#/components/requestBodies/UpdateWebhook" }
       responses:
         "200":
@@ -1013,7 +1013,7 @@ paths:
       operationId: deleteWebhook
       tags: [Webhooks]
       summary: Disable a webhook endpoint
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
@@ -1024,7 +1024,7 @@ paths:
       operationId: rotateWebhookSecret
       tags: [Webhooks]
       summary: Rotate a webhook signing secret
-      x-required-permissions: ["billing:write"]
+      x-required-client-profile: billing
       requestBody: { $ref: "#/components/requestBodies/RotateWebhookSecret" }
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -1034,7 +1034,7 @@ paths:
       operationId: createAdminAdjustment
       tags: [Administration]
       summary: Grant an audited administrative credit adjustment
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       requestBody: { $ref: "#/components/requestBodies/AdminAdjustment" }
       responses:
         "201":
@@ -1052,7 +1052,7 @@ paths:
       operationId: listAuditEvents
       tags: [Administration]
       summary: List account audit events
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       parameters:
         - { $ref: "#/components/parameters/Limit" }
       responses:
@@ -1071,7 +1071,7 @@ paths:
       operationId: replayWebhookDelivery
       tags: [Administration, Webhooks]
       summary: Queue a webhook delivery for replay
-      x-required-permissions: ["billing:admin"]
+      x-required-client-profile: admin
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
@@ -1084,7 +1084,7 @@ paths:
         Replays events after `Last-Event-ID`, then streams new events. A cursor
         that has fallen out of retained history returns `410`. Each account may
         hold at most eight concurrent streams.
-      x-required-permissions: ["billing:read"]
+      x-required-client-profile: billing
       parameters:
         - name: Last-Event-ID
           in: header
@@ -1106,10 +1106,11 @@ components:
       bearerFormat: JWT
       description: >-
         RS256 IdNest OIDC access token with required iss, aud, sub, iat, exp,
-        app, environment, actor_type, and a permissions string array. exp may be
-        at most one hour after iat and no additional clock-skew leeway is applied.
-        Catalogue tokens use actor_type=service and catalogue:read. Organization
-        billing tokens additionally carry org_id and billing:read and/or billing:write.
+        client_id, app, environment, and actor_type. exp may be at most one hour
+        after iat and no additional clock-skew leeway is applied. Billmesh maps
+        the signed client_id to a configured catalogue, billing, runtime, or admin
+        profile and verifies that app and environment match that registration.
+        Organization billing and runtime tokens additionally carry org_id.
         A human owner is represented only by actor_type=user on a delegated token;
         a generic service-token sub is never treated as the owner.
     consoleBrowserSession:
@@ -1655,7 +1656,7 @@ components:
         cancelled_at: { type: [string, "null"], format: date-time }
     BrowserSession:
       type: object
-      required: [authenticated, user, context, permissions, csrfToken, expiresAt]
+      required: [authenticated, user, context, csrfToken, expiresAt]
       properties:
         authenticated: { type: boolean, const: true }
         user:
@@ -1672,9 +1673,6 @@ components:
             organization_id: { type: string }
             application: { type: string }
             environment: { type: string }
-        permissions:
-          type: array
-          items: { type: string }
         csrfToken: { type: string, writeOnly: true }
         expiresAt: { type: string, format: date-time }
     EntitlementOption:

@@ -354,7 +354,7 @@ func (a *API) listUsage(w http.ResponseWriter, r *http.Request) {
 		WHERE w.account_id=$1 AND ($2='' OR u.meter=$2) AND ($3='' OR p.slug=$3) AND ($4='' OR u.application=$4)
 		AND (p.slug=$8 OR $9)
 		AND ($5::timestamptz IS NULL OR u.occurred_at >= $5) AND ($6::timestamptz IS NULL OR u.occurred_at < $6)
-		ORDER BY u.occurred_at DESC LIMIT $7`, accountID, meter, product, application, from, to, parseLimit(r), claims.App, claims.Has("billing:link"))
+		ORDER BY u.occurred_at DESC LIMIT $7`, accountID, meter, product, application, from, to, parseLimit(r), claims.App, claims.CanLinkProducts())
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -379,7 +379,7 @@ func (a *API) getLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	rows, err := a.pool.Query(r.Context(), `SELECT w.id,p.slug,w.available,w.reserved,COALESCE(sum(g.amount),0) FROM wallets w JOIN products p ON p.id=w.product_id LEFT JOIN credit_grants g ON g.wallet_id=w.id WHERE w.account_id=$1 AND (p.slug=$2 OR $3) GROUP BY w.id,p.slug ORDER BY p.slug`, accountID, claims.App, claims.Has("billing:link"))
+	rows, err := a.pool.Query(r.Context(), `SELECT w.id,p.slug,w.available,w.reserved,COALESCE(sum(g.amount),0) FROM wallets w JOIN products p ON p.id=w.product_id LEFT JOIN credit_grants g ON g.wallet_id=w.id WHERE w.account_id=$1 AND (p.slug=$2 OR $3) GROUP BY w.id,p.slug ORDER BY p.slug`, accountID, claims.App, claims.CanLinkProducts())
 	if err != nil {
 		writeDBError(w, err)
 		return

@@ -21,7 +21,7 @@ staging acceptance. Production publication still requires deployment-specific
 work that cannot be completed in this repository alone:
 
 1. configure and verify the IdNest issuer, Billmesh audience, token claims, and
-   permissions in every target environment;
+   client-profile registrations in every target environment;
 2. configure Razorpay public and secret credentials, webhook secret, and any
    hosted-checkout URL without exposing secrets to consuming applications;
 3. seed and review each application's product, billing policy, entitlement
@@ -76,8 +76,7 @@ billing state.
   as an invalidation signal and refetch the snapshot.
 - Do not let stale state grant a new capability, raise a limit, or restore a
   revoked capability.
-- Do not issue `billing:payment-verify`, `billing:admin`, or other internal
-  permissions to an application integration.
+- Do not register an application integration as an administrative client.
 - Do not implement direct subscription create, plan-change, reactivation, or
   renewal calls. They are not part of the API. Use subscription transitions and
   the current-account cancellation operation.
@@ -92,6 +91,8 @@ concepts:
 
 - `iss`: the configured IdNest issuer;
 - `aud`: the Billmesh resource audience;
+- `client_id`: the signed OAuth client identity, registered by Billmesh for one
+  fixed API profile and product/environment;
 - `sub`: a stable actor or owner subject when the product's customer scope is
   `identity`;
 - `org_id`: the consumer's stable organization ID;
@@ -99,18 +100,16 @@ concepts:
 - `environment`: the isolated deployment context;
 - `actor_type`: `user` for a delegated owner or `service` for an application
   service;
-- `permissions`: least-privilege Billmesh permissions such as `billing:read`
-  and `billing:write`;
 - `billing_customer_id`: a stable trusted customer reference only when the
   product policy uses `external_customer` scope.
 
 The `sub` of a generic application service token is never used as a human
 owner. Identity-scoped account creation requires `actor_type=user`.
 
-An application must use an organization-scoped token for account commands. For
-catalogue discovery before an organization context exists, use a service token
-with `catalogue:read`, `app`, and `environment`, or the public catalogue when
-the product policy explicitly permits it.
+An application must use its registered billing client and an organization-scoped
+token for account commands. For catalogue discovery before an organization
+context exists, use the product's registered catalogue client, or the public
+catalogue when the product policy explicitly permits it.
 
 ## Canonical integration flow
 
@@ -120,8 +119,8 @@ Before making requests, the application team obtains the following from the
 Billmesh team:
 
 - the Billmesh base URL for each environment;
-- the IdNest issuer, Billmesh audience, supported token type, claims, and allowed
-  permissions;
+- the IdNest issuer, Billmesh audience, supported token type, claims, and
+  registered client profile;
 - the configured product identity and billing policy;
 - seeded plans, entitlements, and optional credit packs;
 - the supported Razorpay test checkout configuration;
@@ -137,7 +136,7 @@ Use one of these operations, according to the product's catalogue policy:
 
 - `GET /v1/public/catalog?product={application}` for an explicitly public
   catalogue; or
-- `GET /v1/catalog?product={application}` with `billing:read`.
+- `GET /v1/catalog?product={application}` with the product's catalogue client.
 
 Store the response `ETag` and use `If-None-Match` on refresh. Render the returned
 plans and credit packs. Submit only the selected opaque `plan_id` or
@@ -169,7 +168,7 @@ rechecks eligibility atomically at confirmation.
 
 ### 4. Read and store the billing snapshot
 
-Call `GET /v1/billing-snapshot?product={application}` with `billing:read`.
+Call `GET /v1/billing-snapshot?product={application}` with the product's billing client.
 Persist, at minimum:
 
 - the response body as a non-authoritative projection;
@@ -340,8 +339,8 @@ Before approving an application for production, the Billmesh team must confirm:
 - the product, policy, entitlement schema, plans, and credit packs are reviewed
   and seeded independently in each environment;
 - the chosen customer scope and stable identity mapping are documented;
-- only the required permissions are issued, and no internal/admin payment
-  permission is present;
+- each OAuth client is registered for exactly one required API profile and no
+  consumer client is registered as an administrator;
 - catalogue, onboarding, transitions, cancellation, snapshot, checkout, and
   webhook scenarios pass against the consumer's staging deployment;
 - snapshot and webhook schemas used by the consumer are versioned and frozen;

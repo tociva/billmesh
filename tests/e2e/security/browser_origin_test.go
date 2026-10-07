@@ -14,7 +14,7 @@ import (
 // There is no cookie-backed session or cross-origin allowlist in this contract.
 func TestSecurityBrowserOriginContract(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	token := h.IssueToken(t, testkit.Unique("browser-origin"), "daybook", []string{"billing:read"}, nil)
+	token := h.IssueToken(t, "", "daybook", []string{"catalogue:read"}, nil)
 	sameOrigin, err := http.NewRequest(http.MethodGet, h.BaseURL+"/v1/catalog", nil)
 	if err != nil {
 		t.Fatal(err)

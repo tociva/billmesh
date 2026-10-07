@@ -13,7 +13,7 @@ import (
 	"github.com/tociva/billmesh/tests/testkit"
 )
 
-func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
+func TestSecurityMutationClientProfileMatrixAndSideEffects(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	resetMockFailure(t, h)
 	org := testkit.Unique("mutation-matrix")
@@ -108,20 +108,16 @@ func TestSecurityMutationPermissionMatrixAndSideEffects(t *testing.T) {
 	before := snapshot()
 	providerBefore := providerCalls()
 	roles := []struct {
-		name        string
-		permissions []string
-		subject     string
-		want        int
+		name, clientID, subject string
+		want                    int
 	}{
-		{"viewer", []string{"billing:read"}, "viewer", http.StatusForbidden},
-		{"runtime", []string{"credits:reserve", "credits:settle"}, "service:runtime", http.StatusForbidden},
-		{"service", []string{"billing:read"}, "service:worker", http.StatusForbidden},
-		{"empty", nil, "user:empty", http.StatusUnauthorized},
-		{"unknown", []string{"billing:superuser"}, "user:unknown", http.StatusForbidden},
+		{"catalogue", "daybook-catalogue-test", "service:catalogue", http.StatusForbidden},
+		{"runtime", "daybook-runtime-test", "service:runtime", http.StatusForbidden},
+		{"unknown", "unknown-client", "service:unknown", http.StatusUnauthorized},
 	}
 	deniedAuditRoles := 0
 	for _, role := range roles {
-		roleToken := h.IssueToken(t, org, "daybook", role.permissions, map[string]any{"sub": role.subject})
+		roleToken := h.IssueToken(t, org, "daybook", nil, map[string]any{"sub": role.subject, "client_id": role.clientID})
 		if role.want == http.StatusForbidden {
 			deniedAuditRoles++
 		}

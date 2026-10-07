@@ -124,9 +124,9 @@ func TestSecurityMissingTokenContextIsRejected(t *testing.T) {
 	}
 }
 
-func TestSecurityIssuedPermissionsRemainUntilTokenExpiry(t *testing.T) {
+func TestSecurityIssuedClientProfileRemainsUntilTokenExpiry(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	org := testkit.Unique("permission-snapshot")
+	org := testkit.Unique("client-profile-snapshot")
 	subject := testkit.Unique("same-principal")
 	setup := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"sub": subject})
 	testkit.CreateFixtureAccount(t, h, org, setup)
@@ -141,11 +141,11 @@ func TestSecurityIssuedPermissionsRemainUntilTokenExpiry(t *testing.T) {
 			return
 		}
 		if status != http.StatusOK {
-			t.Fatalf("GAP-AUTH-008: old permission snapshot returned %d before expiry", status)
+			t.Fatalf("GAP-AUTH-008: old client profile returned %d before expiry", status)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("GAP-AUTH-008: previously issued permissions remained usable past token expiry")
+	t.Fatal("GAP-AUTH-008: previously issued client profile remained usable past token expiry")
 }
 
 func TestSecurityJSONParserRejectsAmbiguity(t *testing.T) {

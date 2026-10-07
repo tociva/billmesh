@@ -15,7 +15,7 @@ type limitTestVerifier struct{}
 
 func (limitTestVerifier) Verify(_ context.Context, token string) (*auth.Claims, error) {
 	if token == "tenant-a" || token == "tenant-b" {
-		return &auth.Claims{OrgID: token, App: "daybook", Permissions: []string{"billing:admin"}}, nil
+		return &auth.Claims{OrgID: token, App: "daybook", Environment: "test", ClientType: auth.ClientAdmin}, nil
 	}
 	return nil, errors.New("invalid test token")
 }

@@ -127,19 +127,7 @@ func validateConfig(cfg config.BFFConfig) error {
 	if !defaultAllowed {
 		return errors.New("BFF default return path must match the realm return path policy")
 	}
-	if cfg.Realm == "admin" && !containsScope(cfg.Scope, "billing:admin") {
-		return errors.New("BFF_ADMIN_SCOPE must include billing:admin")
-	}
 	return nil
-}
-
-func containsScope(value, expected string) bool {
-	for _, scope := range strings.Fields(value) {
-		if scope == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func validReturnPath(value string) bool {
@@ -299,7 +287,6 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 		m.redirectLoginError(w, r)
 		return
 	}
-	claims.AddPermissions(tokens.Scope)
 	if err := m.validateRealmClaims(claims); err != nil {
 		m.log.Warn("BFF received an unauthorized access token", "realm", m.config.Realm, "error", err)
 		m.redirectLoginError(w, r)
@@ -329,7 +316,7 @@ func (m *Manager) callback(w http.ResponseWriter, r *http.Request) {
 	session := browserSession{
 		SchemaVersion: schemaVersion, Realm: m.config.Realm, SessionID: sessionID, Subject: claims.Subject,
 		Email: identity.Email, Name: identity.Name, OrgID: claims.OrgID, App: claims.App,
-		Environment: claims.Environment, Permissions: []string(claims.Permissions), CSRFToken: csrf,
+		Environment: claims.Environment, CSRFToken: csrf,
 		AllowedOrigin: strings.TrimRight(m.config.AppOrigin, "/"), CreatedAt: m.now(),
 		AbsoluteExpiry: m.now().Add(m.config.SessionAbsoluteTTL), AccessToken: tokens.AccessToken,
 		AccessExpiry: claims.ExpiresAt.Time, RefreshToken: tokens.RefreshToken, IDToken: tokens.IDToken,
@@ -461,9 +448,6 @@ func (m *Manager) authenticate(r *http.Request) (*browserSession, *auth.Claims, 
 		_ = m.store.deleteSession(r.Context(), cookie.Value)
 		return nil, nil, http.StatusUnauthorized, errors.New("browser access token no longer matches session")
 	}
-	if m.config.Realm == "admin" {
-		claims.AddPermissions(session.Permissions...)
-	}
 	if err := m.validateRealmClaims(claims); err != nil {
 		m.log.Warn("BFF stored access token is unauthorized", "realm", m.config.Realm, "error", err)
 		_ = m.store.deleteSession(r.Context(), cookie.Value)
@@ -530,10 +514,6 @@ func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (
 	if claims.ExpiresAt == nil {
 		return nil, errors.New("refreshed access token is missing expiration")
 	}
-	claims.AddPermissions(tokens.Scope)
-	if m.config.Realm == "admin" && tokens.Scope == "" {
-		claims.AddPermissions(latest.Permissions...)
-	}
 	if err := m.validateRealmClaims(claims); err != nil {
 		return nil, fmt.Errorf("refreshed access token is unauthorized: %w", err)
 	}
@@ -553,7 +533,6 @@ func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (
 	}
 	latest.AccessToken = tokens.AccessToken
 	latest.AccessExpiry = claims.ExpiresAt.Time
-	latest.Permissions = []string(claims.Permissions)
 	if tokens.RefreshToken != "" {
 		latest.RefreshToken = tokens.RefreshToken
 	}
@@ -565,8 +544,16 @@ func (m *Manager) refreshIfNeeded(ctx context.Context, session browserSession) (
 }
 
 func (m *Manager) validateRealmClaims(claims *auth.Claims) error {
-	if m.config.Realm == "admin" && !claims.Has("billing:admin") {
-		return errors.New("missing billing:admin permission")
+	if claims.ClientID != m.config.ClientID {
+		return errors.New("access token client_id does not match the BFF client")
+	}
+	switch m.config.Realm {
+	case "admin":
+		claims.ClientType = auth.ClientAdmin
+	case "console":
+		claims.ClientType = auth.ClientConsole
+	default:
+		return errors.New("unsupported BFF realm")
 	}
 	return nil
 }

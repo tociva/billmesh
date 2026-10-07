@@ -67,11 +67,12 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("authoritative-paid")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, map[string]any{"sub": testkit.Unique("paid-customer")})
+	catalogueToken := testkit.CatalogueToken(t, h, "daybook")
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
 		"name": "Authoritative Paid", "external_ref": testkit.Unique("authoritative-paid"),
 	}, token)
 
-	status, catalogueRaw, catalogueHeaders := h.JSON(t, http.MethodGet, "/v1/catalog?product=daybook", nil, token)
+	status, catalogueRaw, catalogueHeaders := h.JSON(t, http.MethodGet, "/v1/catalog?product=daybook", nil, catalogueToken)
 	if status != http.StatusOK {
 		t.Fatalf("catalogue returned %d: %s", status, catalogueRaw)
 	}
@@ -207,6 +208,7 @@ func TestAuthoritativePaidTransitionSnapshotAndCancellation(t *testing.T) {
 
 func TestFreeEligibilityIsCustomerScoped(t *testing.T) {
 	h := testkit.NewHTTP(t)
+	catalogueToken := testkit.CatalogueToken(t, h, "daybook")
 	sharedSubject := testkit.Unique("free-customer")
 	var freePlan string
 	for index := 0; index < 2; index++ {
@@ -216,7 +218,7 @@ func TestFreeEligibilityIsCustomerScoped(t *testing.T) {
 			"name": "Free Eligibility", "external_ref": testkit.Unique("free-eligibility"),
 		}, token)
 		if freePlan == "" {
-			catalogue := testkit.Decode[catalogueResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token))
+			catalogue := testkit.Decode[catalogueResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, catalogueToken))
 			for _, plan := range catalogue.Plans {
 				if plan.BillingModel == "free" {
 					freePlan = plan.ID
@@ -242,12 +244,13 @@ func TestTransitionCancellationAndWebhookManagement(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("transition-cancel")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, nil)
+	catalogueToken := testkit.CatalogueToken(t, h, "daybook")
 	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{
 		"name": "Transition Cancellation", "external_ref": testkit.Unique("transition-cancel"),
 	}, token)
-	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/credit-packs?product=daybook", nil, token)
+	h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/credit-packs?product=daybook", nil, catalogueToken)
 
-	catalogue := testkit.Decode[catalogueResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token))
+	catalogue := testkit.Decode[catalogueResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, catalogueToken))
 	var paidPlan string
 	for _, plan := range catalogue.Plans {
 		if plan.BillingModel == "paid" {

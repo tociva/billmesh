@@ -39,7 +39,7 @@ func assertRouteJSONError(t *testing.T, response *httptest.ResponseRecorder, sta
 }
 
 func (routeTestBrowserAuth) Authenticate(*http.Request) (*auth.Claims, int, error) {
-	return &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook", Environment: "test"}, 0, nil
+	return &auth.Claims{ClientType: auth.ClientConsole, OrgID: "browser-org", App: "daybook", Environment: "test"}, 0, nil
 }
 
 func (routeTestBrowserAuth) AuthHandler() http.Handler {
@@ -48,7 +48,7 @@ func (routeTestBrowserAuth) AuthHandler() http.Handler {
 
 func (routeTestBrowserAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := &auth.Claims{Permissions: []string{"billing:read"}, OrgID: "browser-org", App: "daybook", Environment: "test"}
+		claims := &auth.Claims{ClientType: auth.ClientConsole, OrgID: "browser-org", App: "daybook", Environment: "test"}
 		next.ServeHTTP(w, r.WithContext(auth.WithClaims(r.Context(), claims)))
 	})
 }
@@ -60,12 +60,17 @@ func (routeTestVerifier) Verify(_ context.Context, token string) (*auth.Claims, 
 		return &auth.Claims{}, nil
 	}
 	if strings.HasPrefix(token, "with:") {
-		return &auth.Claims{Permissions: []string{strings.TrimPrefix(token, "with:")}, OrgID: "route-test", App: "daybook", Environment: "test"}, nil
+		clientType := auth.ClientType(strings.TrimPrefix(token, "with:"))
+		actorType := "service"
+		if clientType == auth.ClientAdmin {
+			actorType = "user"
+		}
+		return &auth.Claims{ClientType: clientType, ActorType: actorType, OrgID: "route-test", App: "daybook", Environment: "test"}, nil
 	}
 	return nil, context.Canceled
 }
 
-func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
+func TestSecurityProtectedRouteAuthenticationAndClientMatrix(t *testing.T) {
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve source")
@@ -83,22 +88,18 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 	handler := a.Handler()
 	for _, route := range routes {
 		method, path, registration := route[1], route[2], route[3]
-		permission := ""
+		clientType := ""
 		switch {
-		case strings.HasPrefix(registration, "auth.RequireAnyApplication("):
-			match := regexp.MustCompile(`auth\.RequireAnyApplication\(\[\]string\{"([^\"]+)"`).FindStringSubmatch(registration)
-			if len(match) != 2 {
-				t.Fatalf("cannot parse permissions for %s %s", method, path)
-			}
-			permission = match[1]
-		case strings.HasPrefix(registration, "auth.Require("):
-			match := regexp.MustCompile(`auth\.Require\("([^\"]+)"`).FindStringSubmatch(registration)
-			if len(match) != 2 {
-				t.Fatalf("cannot parse permission for %s %s", method, path)
-			}
-			permission = match[1]
+		case strings.HasPrefix(registration, "auth.RequireClient(catalogueClients,"):
+			clientType = string(auth.ClientCatalogue)
+		case strings.HasPrefix(registration, "auth.RequireClient(billingClients,"):
+			clientType = string(auth.ClientBilling)
+		case strings.HasPrefix(registration, "auth.RequireClient(runtimeClients,"):
+			clientType = string(auth.ClientRuntime)
+		case strings.HasPrefix(registration, "auth.RequireClient([]auth.ClientType{auth.ClientAdmin},"):
+			clientType = string(auth.ClientAdmin)
 		case strings.HasPrefix(registration, "a.requireAdmin("), strings.HasPrefix(registration, "a.requireCatalogueAdmin("):
-			permission = "billing:admin"
+			clientType = string(auth.ClientAdmin)
 		case !strings.HasPrefix(registration, "a."):
 			t.Fatalf("cannot parse handler for %s %s: %s", method, path, registration)
 		}
@@ -113,23 +114,36 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 				handler.ServeHTTP(resp, req)
 				assertRouteJSONError(t, resp, http.StatusUnauthorized)
 			}
-			if permission != "" {
+			if clientType != "" {
 				req := httptest.NewRequest(method, path, nil)
 				req.Header.Set("Authorization", "Bearer valid")
 				resp := httptest.NewRecorder()
 				handler.ServeHTTP(resp, req)
 				assertRouteJSONError(t, resp, http.StatusForbidden)
 			}
+			for _, candidate := range []auth.ClientType{auth.ClientCatalogue, auth.ClientBilling, auth.ClientRuntime} {
+				req := httptest.NewRequest(method, path, nil)
+				req.Header.Set("Authorization", "Bearer with:"+string(candidate))
+				resp := httptest.NewRecorder()
+				handler.ServeHTTP(resp, req)
+				if string(candidate) == clientType {
+					if resp.Code == http.StatusUnauthorized || resp.Code == http.StatusForbidden {
+						t.Fatalf("allowed %s client was stopped before the handler: %d %s", candidate, resp.Code, resp.Body.String())
+					}
+					continue
+				}
+				assertRouteJSONError(t, resp, http.StatusForbidden)
+			}
 			authorized := "valid"
-			if permission != "" {
-				authorized = "with:" + permission
+			if clientType != "" {
+				authorized = "with:" + clientType
 			}
 			req := httptest.NewRequest(method, path, nil)
 			req.Header.Set("Authorization", "Bearer "+authorized)
 			resp := httptest.NewRecorder()
 			handler.ServeHTTP(resp, req)
 			if resp.Code == http.StatusUnauthorized || resp.Code == http.StatusNotFound {
-				t.Fatalf("correct %s permission did not reach route handler: %d %q", permission, resp.Code, resp.Body.String())
+				t.Fatalf("correct %s client did not reach route handler: %d %q", clientType, resp.Code, resp.Body.String())
 			}
 		})
 	}
@@ -137,6 +151,38 @@ func TestSecurityProtectedRouteAuthenticationAndPermissionMatrix(t *testing.T) {
 	handler.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if resp.Code != http.StatusOK {
 		t.Fatalf("public health route returned %d", resp.Code)
+	}
+}
+
+func TestSecurityProductClientsCannotCrossAPISurfaces(t *testing.T) {
+	a := NewAPI(nil, routeTestVerifier{}, nil)
+	a.ConfigureRequestLimits(1000, 1000, 1000)
+	handler := a.Handler()
+	cases := []struct {
+		name, method, path string
+		allowed            auth.ClientType
+	}{
+		{"catalogue", http.MethodGet, "/v1/catalog", auth.ClientCatalogue},
+		{"billing", http.MethodGet, "/v1/accounts/current", auth.ClientBilling},
+		{"runtime", http.MethodPost, "/v1/executions/authorize", auth.ClientRuntime},
+	}
+	clients := []auth.ClientType{auth.ClientCatalogue, auth.ClientBilling, auth.ClientRuntime}
+	for _, endpoint := range cases {
+		for _, clientType := range clients {
+			t.Run(string(clientType)+"/"+endpoint.name, func(t *testing.T) {
+				req := httptest.NewRequest(endpoint.method, endpoint.path, nil)
+				req.Header.Set("Authorization", "Bearer with:"+string(clientType))
+				resp := httptest.NewRecorder()
+				handler.ServeHTTP(resp, req)
+				if clientType == endpoint.allowed {
+					if resp.Code == http.StatusUnauthorized || resp.Code == http.StatusForbidden {
+						t.Fatalf("allowed %s client was stopped before the handler: %d %s", clientType, resp.Code, resp.Body.String())
+					}
+					return
+				}
+				assertRouteJSONError(t, resp, http.StatusForbidden)
+			})
+		}
 	}
 }
 

@@ -32,6 +32,21 @@ func TestLoadRejectsInvalidRequestLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadClientProfiles(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"daybook-billing","type":"billing","app":"daybook","environment":"production"}]`)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "billing", string(cfg.OIDCClients["daybook-billing"].Type))
+}
+
+func TestLoadRejectsInvalidClientProfiles(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"duplicate","type":"billing","app":"daybook","environment":"production"},{"client_id":"duplicate","type":"runtime","app":"daybook","environment":"production"}]`)
+	_, err := Load()
+	require.ErrorContains(t, err, "duplicate client_id")
+}
 func TestLoadRequiresDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	clearDatabaseComponents(t)
@@ -127,9 +142,6 @@ func setBFFRealmEnvironment(t *testing.T, realm, appOrigin string) {
 	t.Setenv(prefix+"_CLIENT_ID", "billmesh-"+strings.ToLower(realm))
 	t.Setenv(prefix+"_CLIENT_SECRET", "secret")
 	t.Setenv(prefix+"_AUDIENCE", "billmesh")
-	if realm == "ADMIN" {
-		t.Setenv(prefix+"_SCOPE", "openid profile email offline_access billing:admin")
-	}
 	t.Setenv(prefix+"_REDIRECT_URI", "https://api.billmesh.example/api/v1/auth/"+strings.ToLower(realm)+"/callback")
 	t.Setenv(prefix+"_POST_LOGOUT_REDIRECT_URI", "https://api.billmesh.example/api/v1/auth/"+strings.ToLower(realm)+"/logout/callback")
 	t.Setenv(prefix+"_STANDALONE_LOGOUT_URI", "https://auth.idnest.example/logout")

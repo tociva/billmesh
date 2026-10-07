@@ -21,12 +21,13 @@ import (
 )
 
 type Claims struct {
-	Permissions       jwt.ClaimStrings `json:"permissions"`
-	ActorType         string           `json:"actor_type"`
-	OrgID             string           `json:"org_id"`
-	App               string           `json:"app"`
-	Environment       string           `json:"environment"`
-	BillingCustomerID string           `json:"billing_customer_id"`
+	ClientID          string     `json:"client_id"`
+	ClientType        ClientType `json:"-"`
+	ActorType         string     `json:"actor_type"`
+	OrgID             string     `json:"org_id"`
+	App               string     `json:"app"`
+	Environment       string     `json:"environment"`
+	BillingCustomerID string     `json:"billing_customer_id"`
 	jwt.RegisteredClaims
 }
 
@@ -38,21 +39,13 @@ type IDTokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-func (c Claims) Has(permission string) bool {
-	for _, p := range c.Permissions {
-		if p == permission {
-			return true
-		}
-	}
-	return false
-}
-
 type TokenVerifier interface {
 	Verify(context.Context, string) (*Claims, error)
 }
 
 type JWKSVerifier struct {
 	issuer, audience string
+	clients          ClientRegistry
 	client           *http.Client
 	requireContext   bool
 	mu               sync.RWMutex
@@ -71,6 +64,14 @@ const maxServiceTokenLifetime = time.Hour
 
 func NewJWKSVerifier(issuer, audience string, client *http.Client) *JWKSVerifier {
 	return newJWKSVerifier(issuer, audience, client, true)
+}
+
+// NewClientJWKSVerifier authenticates service access tokens and resolves their
+// signed client_id to a deployment-configured Billmesh client profile.
+func NewClientJWKSVerifier(issuer, audience string, clients ClientRegistry, client *http.Client) *JWKSVerifier {
+	verifier := newJWKSVerifier(issuer, audience, client, true)
+	verifier.clients = clients
+	return verifier
 }
 
 // NewOIDCJWKSVerifier validates the standard JWT access-token contract used by
@@ -112,11 +113,6 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	if v.requireContext {
-		if err := validateCanonicalPermissionsClaim(raw); err != nil {
-			return nil, err
-		}
-	}
 	if claims.Subject == "" {
 		return nil, errors.New("missing token subject")
 	}
@@ -129,61 +125,15 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if v.requireContext && (claims.App == "" || claims.Environment == "") {
 		return nil, errors.New("missing application or environment context")
 	}
+	if v.clients != nil {
+		if err := v.clients.authenticate(claims); err != nil {
+			return nil, err
+		}
+	}
 	if v.requireContext && claims.ActorType != "user" && claims.ActorType != "service" {
 		return nil, errors.New("actor_type must be user or service")
 	}
-	for _, permission := range claims.Permissions {
-		if permission == "" || len(strings.Fields(permission)) != 1 {
-			return nil, errors.New("permissions must be an array of individual permission strings")
-		}
-	}
 	return claims, nil
-}
-
-func validateCanonicalPermissionsClaim(raw string) error {
-	parts := strings.Split(raw, ".")
-	if len(parts) != 3 {
-		return errors.New("invalid token encoding")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return errors.New("invalid token payload encoding")
-	}
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &document); err != nil {
-		return errors.New("invalid token payload")
-	}
-	rawPermissions, ok := document["permissions"]
-	if !ok || len(rawPermissions) == 0 || rawPermissions[0] != '[' {
-		return errors.New("permissions must be an array of individual permission strings")
-	}
-	var permissions []string
-	if err := json.Unmarshal(rawPermissions, &permissions); err != nil {
-		return errors.New("permissions must be an array of individual permission strings")
-	}
-	return nil
-}
-
-// AddPermissions adds explicitly supplied OAuth response scopes to browser
-// session claims. Service access tokens use only the canonical permissions
-// array and never call this as a token-claim compatibility fallback.
-func (c *Claims) AddPermissions(scopes ...string) {
-	seen := make(map[string]struct{})
-	permissions := make(jwt.ClaimStrings, 0, len(c.Permissions)+len(scopes))
-	add := func(values ...string) {
-		for _, value := range values {
-			for _, permission := range strings.Fields(value) {
-				if _, exists := seen[permission]; exists {
-					continue
-				}
-				seen[permission] = struct{}{}
-				permissions = append(permissions, permission)
-			}
-		}
-	}
-	add(c.Permissions...)
-	add(scopes...)
-	c.Permissions = permissions
 }
 
 // VerifyIDToken validates an OIDC ID token issued for a confidential browser
@@ -402,47 +352,13 @@ func FromContext(ctx context.Context) (*Claims, bool) {
 	return c, ok
 }
 
-func Require(permission string, next http.HandlerFunc) http.HandlerFunc {
+func RequireClient(clientTypes []ClientType, requireOrganization bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := FromContext(r.Context())
-		if !ok || claims.App == "" || claims.Environment == "" || claims.OrgID == "" || !claims.Has(permission) {
+		if !ok || claims.App == "" || claims.Environment == "" || (requireOrganization && claims.OrgID == "") || !claims.IsClient(clientTypes...) {
 			httpresponse.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next(w, r)
-	}
-}
-
-// RequireApplication authorizes an application-scoped operation. Unlike
-// organization billing commands, application operations such as catalogue
-// discovery do not require an org_id claim.
-func RequireApplication(permission string, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := FromContext(r.Context())
-		if !ok || claims.App == "" || claims.Environment == "" || !claims.Has(permission) {
-			httpresponse.Error(w, http.StatusForbidden, "forbidden")
-			return
-		}
-		next(w, r)
-	}
-}
-
-// RequireAnyApplication accepts either the dedicated catalogue permission on an
-// application token or billing:read on an organization token without weakening
-// organization-scoped command authorization.
-func RequireAnyApplication(permissions []string, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := FromContext(r.Context())
-		if !ok || claims.App == "" || claims.Environment == "" {
-			httpresponse.Error(w, http.StatusForbidden, "forbidden")
-			return
-		}
-		for _, permission := range permissions {
-			if claims.Has(permission) {
-				next(w, r)
-				return
-			}
-		}
-		httpresponse.Error(w, http.StatusForbidden, "forbidden")
 	}
 }

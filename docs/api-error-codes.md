@@ -10,7 +10,7 @@ Every response also returns `X-Request-ID`.
 | --- | --- | --- |
 | `invalid_request` | 400 | The request is malformed or violates the base contract |
 | `unauthenticated` | 401 | The bearer token or provider signature is missing or invalid |
-| `forbidden` | 403 | Authenticated actor lacks context or permission |
+| `forbidden` | 403 | Authenticated client has the wrong API profile, context, or resource ownership |
 | `not_found` | 404 | Resource is absent or intentionally hidden by isolation |
 | `method_not_allowed` | 405 | Route exists but does not accept this method |
 | `conflict` | 409 | Current resource or policy state rejects the operation |

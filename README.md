@@ -5,7 +5,7 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 ## What is included
 
 - One `billmesh` binary with `api`, `worker`, `migrate`, and `healthcheck` commands.
-- `net/http` API with OIDC/JWKS signature, issuer, audience, expiry, organization, application, and permission checks.
+- `net/http` API with OIDC/JWKS signature, issuer, audience, expiry, OAuth-client profile, organization, application, and environment checks.
 - PostgreSQL schema for accounts, products/plans, subscriptions, isolated wallets, grants, reservations, ledger, usage, payments, provider deduplication, outbox events, and webhook delivery.
 - Row-locked credit reservations, idempotent grants/reservations/settlement, and append-only ledger writes.
 - Durable SSE history with `Last-Event-ID` replay and a retrying webhook worker.
@@ -116,7 +116,7 @@ printf 'v1:'; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'; printf '\n'
 
 Hexadecimal database passwords can be placed directly in a PostgreSQL URL without percent-encoding. Replace the checked-in local-only passwords in deployment configuration; do not commit generated secrets.
 
-The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected endpoints require a signed token from the configured issuer and the permission named by the handler.
+The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected endpoints require a signed token from the configured issuer and a client registered for the route's API profile.
 
 ### API documentation
 
@@ -185,7 +185,7 @@ BFF_ADMIN_ISSUER=https://idnest.example
 BFF_ADMIN_CLIENT_ID=replace-with-idnest-admin-client-id
 BFF_ADMIN_CLIENT_SECRET=replace-with-idnest-admin-client-secret
 BFF_ADMIN_AUDIENCE=billmesh
-BFF_ADMIN_SCOPE=openid profile email offline_access billing:admin
+BFF_ADMIN_SCOPE=openid profile email offline_access
 BFF_ADMIN_REDIRECT_URI=https://api.billme.sh/api/v1/auth/admin/callback
 BFF_ADMIN_POST_LOGOUT_REDIRECT_URI=https://api.billme.sh/api/v1/auth/admin/logout/callback
 BFF_ADMIN_STANDALONE_LOGOUT_URI=https://auth.idnest.example/logout
@@ -199,8 +199,8 @@ file. Register each realm's redirect and post-logout redirect URI exactly.
 
 Each realm has its own issuer, audience, client, scope, and token verifier. The
 default scope requests a refresh token by including `offline_access`; both
-IdNest clients must be allowed to issue it. The Admin client should include the
-`billing:admin` permission required by privileged Billmesh operations.
+IdNest clients must be allowed to issue it. Billmesh recognizes administrative
+sessions by the configured Admin client ID rather than an API permission scope.
 
 `BFF_SESSION_ENCRYPTION_KEYS` is a Billmesh secret rather than an IdNest
 credential. Generate it with the command in the local setup section above. The
@@ -213,7 +213,7 @@ Get a development token from the test-only fake issuer:
 
 ```sh
 curl -s http://localhost:8090/test/token -X POST -H 'content-type: application/json' \
-  -d '{"org_id":"org-1","app":"daybook","permissions":["billing:read","billing:write","billing:admin","credits:grant","credits:reserve","credits:settle"]}'
+  -d '{"org_id":"org-1","app":"daybook","client_id":"daybook-billing-test"}'
 ```
 
 ## Test

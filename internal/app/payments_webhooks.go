@@ -622,7 +622,7 @@ func (a *API) listPayments(w http.ResponseWriter, r *http.Request) {
 		JOIN products p ON p.id=COALESCE(cp.product_id,st.product_id)
 		WHERE pay.account_id=$1 AND (p.slug=$2 OR $3)
 		AND ($4::timestamptz IS NULL OR (pay.created_at,pay.id)<($4,$5))
-		ORDER BY pay.created_at DESC,pay.id DESC LIMIT $6`, account, claims.App, claims.Has("billing:link"), beforeTime, beforeID, limit+1)
+		ORDER BY pay.created_at DESC,pay.id DESC LIMIT $6`, account, claims.App, claims.CanLinkProducts(), beforeTime, beforeID, limit+1)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -667,7 +667,7 @@ func (a *API) listInvoices(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN subscriptions s ON s.id=i.subscription_id LEFT JOIN products p ON p.id=COALESCE(cp.product_id,s.product_id)
 		WHERE i.account_id=$1 AND (p.slug=$2 OR $3)
 		AND ($4::timestamptz IS NULL OR (i.created_at,i.id)<($4,$5))
-		ORDER BY i.created_at DESC,i.id DESC LIMIT $6`, account, claims.App, claims.Has("billing:link"), beforeTime, beforeID, limit+1)
+		ORDER BY i.created_at DESC,i.id DESC LIMIT $6`, account, claims.App, claims.CanLinkProducts(), beforeTime, beforeID, limit+1)
 	if err != nil {
 		writeDBError(w, err)
 		return

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tociva/billmesh/internal/auth"
 )
 
 type Config struct {
@@ -16,6 +18,7 @@ type Config struct {
 	DatabaseURL           string
 	OIDCIssuer            string
 	OIDCAudience          string
+	OIDCClients           auth.ClientRegistry
 	WebhookTimeout        time.Duration
 	WorkerInterval        time.Duration
 	AuthFailuresPerMinute int
@@ -60,6 +63,11 @@ func Load() (Config, error) {
 		DatabaseURL:  databaseURL,
 		OIDCIssuer:   os.Getenv("OIDC_ISSUER"),
 		OIDCAudience: os.Getenv("OIDC_AUDIENCE"),
+	}
+	if rawClients := strings.TrimSpace(os.Getenv("OIDC_CLIENT_PROFILES")); rawClients != "" {
+		if c.OIDCClients, err = auth.ParseClientRegistry(rawClients); err != nil {
+			return Config{}, err
+		}
 	}
 	parsed, err := url.Parse(databaseURL)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {

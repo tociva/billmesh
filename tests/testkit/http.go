@@ -311,10 +311,10 @@ func exerciseSpecificRejection(t *testing.T, h *HTTP, tc PlanCase, org, token st
 		return true
 	case "WH-002":
 		createFixtureAccount(t, h, org, token)
-		viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
+		catalogue := CatalogueToken(t, h, "daybook")
 		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{
 			"target_url": h.MockURL + "/receivers/daybook", "secret": "test-secret-0123456789abcdef012345",
-		}, viewer)
+		}, catalogue)
 		return true
 	default:
 		return false
@@ -362,6 +362,29 @@ func allPermissions() []string {
 
 func AllPermissions() []string { return allPermissions() }
 
+// CatalogueToken returns the fixed catalogue client for seeded products. Tests
+// that create products dynamically use the test-only global admin registration
+// because client registrations are intentionally immutable at API runtime.
+func CatalogueToken(t *testing.T, h *HTTP, product string) string {
+	t.Helper()
+	clientID := product + "-catalogue-test"
+	if product != "daybook" && product != "taskmesh" {
+		clientID = "billmesh-global-admin-test"
+	}
+	return h.IssueToken(t, "", product, nil, map[string]any{
+		"client_id": clientID, "sub": "service:" + product + "-catalogue", "actor_type": "service",
+	})
+}
+
+// RuntimeToken returns the product-scoped runtime client used for reservation,
+// settlement, and usage-ingestion APIs.
+func RuntimeToken(t *testing.T, h *HTTP, org, product string) string {
+	t.Helper()
+	return h.IssueToken(t, org, product, nil, map[string]any{
+		"client_id": product + "-runtime-test", "sub": "service:" + product + "-runtime", "actor_type": "service",
+	})
+}
+
 func CreateFixtureAccount(t *testing.T, h *HTTP, org, token string) string {
 	t.Helper()
 	return createFixtureAccount(t, h, org, token)
@@ -381,13 +404,14 @@ func CreateFixtureSubscription(t *testing.T, h *HTTP, account, token string) str
 // create a server-priced transition, and confirm it with a signed provider event.
 func ActivatePaidSubscription(t *testing.T, h *HTTP, product, planSlug, token string) string {
 	t.Helper()
+	catalogueToken := CatalogueToken(t, h, product)
 	plans := Decode[struct {
 		Plans []struct {
 			ID           string `json:"id"`
 			Name         string `json:"name"`
 			BillingModel string `json:"billing_model"`
 		} `json:"plans"`
-	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, token)).Plans
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, catalogueToken)).Plans
 	var planID string
 	wanted := strings.ToLower(strings.ReplaceAll(planSlug, "-", " "))
 	for _, plan := range plans {
@@ -505,9 +529,9 @@ func createFixtureAccount(t *testing.T, h *HTTP, org, token string) string {
 	}](t, raw)
 	return out.ID
 }
-func fixtureProduct(t *testing.T, h *HTTP, slug, token string) string {
+func fixtureProduct(t *testing.T, h *HTTP, slug, _ string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(slug), nil, token)
+	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(slug), nil, CatalogueToken(t, h, slug))
 	product := Decode[struct {
 		Product struct {
 			ID   string `json:"id"`
@@ -520,9 +544,9 @@ func fixtureProduct(t *testing.T, h *HTTP, slug, token string) string {
 	return product.ID
 }
 
-func FixtureCreditPack(t *testing.T, h *HTTP, product string, credits int64, token string) string {
+func FixtureCreditPack(t *testing.T, h *HTTP, product string, credits int64, _ string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, token)
+	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, CatalogueToken(t, h, product))
 	packs := Decode[struct {
 		CreditPacks []struct {
 			ID      string `json:"id"`
@@ -538,9 +562,9 @@ func FixtureCreditPack(t *testing.T, h *HTTP, product string, credits int64, tok
 	return ""
 }
 
-func FixturePlan(t *testing.T, h *HTTP, product, billingModel string, token string) string {
+func FixturePlan(t *testing.T, h *HTTP, product, billingModel string, _ string) string {
 	t.Helper()
-	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, token)
+	raw := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product="+url.QueryEscape(product), nil, CatalogueToken(t, h, product))
 	plans := Decode[struct {
 		Plans []struct {
 			ID           string `json:"id"`
@@ -563,7 +587,7 @@ func createFixtureSubscription(t *testing.T, h *HTTP, account, token string) str
 			ID           string `json:"id"`
 			BillingModel string `json:"billing_model"`
 		} `json:"plans"`
-	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, token))
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog?product=daybook", nil, CatalogueToken(t, h, "daybook")))
 	var planID string
 	for _, plan := range catalogue.Plans {
 		if plan.BillingModel == "free" {
@@ -726,7 +750,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	case "AUTH-017":
 		token = h.IssueToken(t, org, "daybook", permissions, map[string]any{"token_use": "id", "audience": "billmesh-browser-client"})
 	case "AUTH-018":
-		token = h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
+		token = h.IssueToken(t, org, "daybook", nil, map[string]any{"client_id": "daybook-catalogue-test"})
 		status, raw, _ := h.JSON(t, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": "00000000-0000-0000-0000-000000000001"}, token)
 		if status != http.StatusForbidden {
 			t.Fatalf("%s: want 403, got %d: %s", tc.ID, status, raw)
@@ -759,7 +783,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 	case "AUTH-004":
 		unknown := h.IssueToken(t, org, "daybook", permissions, map[string]any{"unknown_key": true})
 		h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, path, nil, unknown)
-		token = tamperJWTPayload(t, h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil), map[string]any{"permissions": []string{"billing:admin"}})
+		token = tamperJWTPayload(t, h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil), map[string]any{"client_id": "billmesh-global-admin-test"})
 	case "AUTH-005":
 		overrides["issuer"] = "https://untrusted.invalid"
 		token = h.IssueToken(t, org, "daybook", permissions, overrides)
@@ -767,7 +791,7 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		overrides["audience"] = "wrong-audience"
 		token = h.IssueToken(t, org, "daybook", permissions, overrides)
 	case "AUTH-009":
-		service := h.IssueToken(t, org, "daybook", []string{"billing:read"}, map[string]any{"sub": "service:metering-worker"})
+		service := h.IssueToken(t, "", "daybook", []string{"catalogue:read"}, map[string]any{"sub": "service:catalogue"})
 		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, service)
 		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/admin/audit", nil, service)
 		owner := h.IssueToken(t, org, "daybook", allPermissions(), nil)
@@ -841,16 +865,14 @@ func ExerciseAuthContract(t *testing.T, tc PlanCase) {
 		}
 		return
 	case "AUTH-014":
-		writer := h.IssueToken(t, org, "daybook", permissions, nil)
-		account := createFixtureAccount(t, h, org, writer)
-		viewer := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/catalog", nil, viewer)
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, viewer)
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, viewer)
-		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/invoices", nil, viewer)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/accounts", map[string]any{"name": "viewer write", "external_ref": Unique("viewer")}, viewer)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/payments/orders", map[string]any{"credit_pack_id": FixtureCreditPack(t, h, "daybook", 500, viewer)}, viewer)
-		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/webhooks", map[string]any{"target_url": h.MockURL + "/receivers/daybook", "secret": "viewer-secret-0123456789abcdef012345"}, viewer)
+		billing := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, nil)
+		account := createFixtureAccount(t, h, org, billing)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/accounts/current", nil, billing)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/payments", nil, billing)
+		h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/invoices", nil, billing)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/catalog", nil, billing)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/executions/authorize", map[string]any{"execution_id": Unique("wrong-client"), "credits": 1}, billing)
+		h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/admin/audit", nil, billing)
 		_ = account
 		return
 	case "AUTH-015":

@@ -16,7 +16,6 @@ func testManagers(t *testing.T) (*Manager, *Manager, *Router) {
 	adminConfig.Realm = "admin"
 	adminConfig.AppOrigin = "https://admin.billmesh.example"
 	adminConfig.ClientID = "billmesh-admin"
-	adminConfig.Scope += " billing:admin"
 	adminConfig.RedirectURI = "https://api.billmesh.example/api/v1/auth/admin/callback"
 	adminConfig.PostLogoutRedirectURI = "https://api.billmesh.example/api/v1/auth/admin/logout/callback"
 	console := &Manager{config: consoleConfig}

@@ -21,7 +21,7 @@ type securityProduct struct {
 	Version int64  `json:"version"`
 }
 
-func TestCATSEC001Through006CataloguePermissionMatrixAndNoSideEffects(t *testing.T) {
+func TestCATSEC001Through006CatalogueClientProfileMatrixAndNoSideEffects(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("catalogue-security")
 	admin := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), map[string]any{"sub": "user:catalogue-admin"})
@@ -48,18 +48,16 @@ func TestCATSEC001Through006CataloguePermissionMatrixAndNoSideEffects(t *testing
 
 	h.RequireStatus(t, http.StatusUnauthorized, http.MethodGet, "/v1/admin/products", nil, "")
 	roles := []struct {
-		name        string
-		permissions []string
-		subject     string
+		name, clientID, subject string
 	}{
-		{"reader", []string{"billing:read"}, "user:reader"},
-		{"writer", []string{"billing:write"}, "user:writer"},
-		{"runtime", []string{"credits:reserve", "credits:settle"}, "service:runtime"},
-		{"service-admin", []string{"billing:admin"}, "service:catalogue"},
+		{"catalogue", "daybook-catalogue-test", "service:catalogue"},
+		{"billing", "daybook-billing-test", "service:billing"},
+		{"runtime", "daybook-runtime-test", "service:runtime"},
+		{"service-admin", "billmesh-global-admin-test", "service:admin"},
 	}
 	for _, role := range roles {
 		t.Run(role.name, func(t *testing.T) {
-			token := h.IssueToken(t, org, "daybook", role.permissions, map[string]any{"sub": role.subject})
+			token := h.IssueToken(t, org, "daybook", nil, map[string]any{"client_id": role.clientID, "sub": role.subject, "actor_type": "service"})
 			h.RequireStatus(t, http.StatusForbidden, http.MethodPatch, "/v1/admin/products/"+product.ID, map[string]any{
 				"name": "Unauthorized Name", "version": product.Version,
 			}, token)

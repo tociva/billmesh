@@ -102,15 +102,17 @@ func TestBrowserRedirectHasNoResponseBody(t *testing.T) {
 	require.Equal(t, "https://console.billmesh.example/auth/error?reason=login_failed", response.Header().Get("Location"))
 }
 
-func TestAdminRealmRequiresBillingAdminPermission(t *testing.T) {
+func TestAdminRealmRequiresMatchingClientID(t *testing.T) {
 	cfg := testConfig()
 	cfg.Realm = "admin"
 	manager := &Manager{config: cfg}
-	require.ErrorContains(t, manager.validateRealmClaims(&auth.Claims{}), "billing:admin")
-	require.NoError(t, manager.validateRealmClaims(&auth.Claims{Permissions: []string{"billing:admin"}}))
+	require.ErrorContains(t, manager.validateRealmClaims(&auth.Claims{}), "client_id")
+	claims := &auth.Claims{ClientID: cfg.ClientID}
+	require.NoError(t, manager.validateRealmClaims(claims))
+	require.Equal(t, auth.ClientAdmin, claims.ClientType)
 }
 
-func TestBrowserSessionResponseIncludesPermissions(t *testing.T) {
+func TestBrowserSessionResponseIncludesIdentityContext(t *testing.T) {
 	expiresAt := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	response := newBrowserSessionResponse(browserSession{
 		Subject:        "user-1",
@@ -119,13 +121,11 @@ func TestBrowserSessionResponseIncludesPermissions(t *testing.T) {
 		OrgID:          "org-1",
 		App:            "daybook",
 		Environment:    "development",
-		Permissions:    []string{"billing:read", "billing:admin"},
 		CSRFToken:      "csrf-value",
 		AbsoluteExpiry: expiresAt,
 	})
 
 	require.True(t, response.Authenticated)
-	require.Equal(t, []string{"billing:read", "billing:admin"}, response.Permissions)
 	require.Equal(t, "user-1", response.User.Subject)
 	require.Equal(t, "org-1", response.Context.OrganizationID)
 	require.Equal(t, expiresAt, response.ExpiresAt)

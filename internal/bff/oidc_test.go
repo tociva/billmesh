@@ -27,14 +27,14 @@ func TestTokenExchangeUsesConfidentialClientAndPKCE(t *testing.T) {
 		require.Equal(t, "verifier", request.Form.Get("code_verifier"))
 		return &http.Response{
 			StatusCode: http.StatusOK, Header: make(http.Header),
-			Body: io.NopCloser(strings.NewReader(`{"access_token":"access","refresh_token":"refresh","id_token":"id","token_type":"Bearer","scope":"openid billing:admin"}`)),
+			Body: io.NopCloser(strings.NewReader(`{"access_token":"access","refresh_token":"refresh","id_token":"id","token_type":"Bearer","scope":"openid profile"}`)),
 		}, nil
 	})}
 	oidc := newOIDCClient(cfg, client)
 	oidc.meta = &providerMetadata{Issuer: cfg.Issuer, AuthorizationEndpoint: "https://identity.example/authorize", TokenEndpoint: "https://identity.example/token"}
 	tokens, err := oidc.exchange(context.Background(), "code", "verifier")
 	require.NoError(t, err)
-	require.Equal(t, tokenSet{AccessToken: "access", RefreshToken: "refresh", IDToken: "id", Scope: "openid billing:admin"}, tokens)
+	require.Equal(t, tokenSet{AccessToken: "access", RefreshToken: "refresh", IDToken: "id"}, tokens)
 }
 
 func TestAuthorizationURLContainsOIDCSecurityParameters(t *testing.T) {

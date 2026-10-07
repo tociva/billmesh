@@ -55,6 +55,12 @@ type browserAuth interface {
 
 const maxSSEConnectionsPerAccount = 8
 
+var (
+	catalogueClients = []auth.ClientType{auth.ClientCatalogue, auth.ClientConsole, auth.ClientAdmin}
+	billingClients   = []auth.ClientType{auth.ClientBilling, auth.ClientConsole, auth.ClientAdmin}
+	runtimeClients   = []auth.ClientType{auth.ClientRuntime, auth.ClientAdmin}
+)
+
 func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *API {
 	if log == nil {
 		log = slog.Default()
@@ -88,13 +94,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/payments/webhook", a.paymentWebhook)
 	mux.HandleFunc("GET /v1/public/catalog", a.publicCatalogue)
 	protected := http.NewServeMux()
-	protected.HandleFunc("POST /v1/accounts", auth.Require("billing:write", a.createAccount))
-	protected.HandleFunc("GET /v1/accounts/current", auth.Require("billing:read", a.getCurrentAccount))
-	protected.HandleFunc("POST /v1/account-ownership-transfers", auth.Require("billing:ownership", a.createOwnershipTransfer))
-	protected.HandleFunc("GET /v1/account-ownership-transfers/{id}", auth.Require("billing:read", a.getOwnershipTransfer))
-	protected.HandleFunc("POST /v1/account-ownership-transfers/{id}/confirm", auth.Require("billing:ownership", a.confirmOwnershipTransfer))
-	protected.HandleFunc("POST /v1/account-ownership-transfers/{id}/cancel", auth.Require("billing:ownership", a.cancelOwnershipTransfer))
-	protected.HandleFunc("GET /v1/catalog", auth.RequireAnyApplication([]string{"catalogue:read", "billing:read"}, a.catalogue))
+	protected.HandleFunc("POST /v1/accounts", auth.RequireClient(billingClients, true, a.createAccount))
+	protected.HandleFunc("GET /v1/accounts/current", auth.RequireClient(billingClients, true, a.getCurrentAccount))
+	protected.HandleFunc("POST /v1/account-ownership-transfers", auth.RequireClient(billingClients, true, a.createOwnershipTransfer))
+	protected.HandleFunc("GET /v1/account-ownership-transfers/{id}", auth.RequireClient(billingClients, true, a.getOwnershipTransfer))
+	protected.HandleFunc("POST /v1/account-ownership-transfers/{id}/confirm", auth.RequireClient(billingClients, true, a.confirmOwnershipTransfer))
+	protected.HandleFunc("POST /v1/account-ownership-transfers/{id}/cancel", auth.RequireClient(billingClients, true, a.cancelOwnershipTransfer))
+	protected.HandleFunc("GET /v1/catalog", auth.RequireClient(catalogueClients, false, a.catalogue))
 	protected.HandleFunc("GET /v1/admin/products", a.requireCatalogueAdmin("product.list", "product", a.listAdminProducts))
 	protected.HandleFunc("GET /v1/admin/product-policy-metadata", a.requireCatalogueAdmin("product.read", "product", a.productPolicyMetadata))
 	protected.HandleFunc("POST /v1/admin/products", a.requireCatalogueAdmin("product.create", "product", a.createProduct))
@@ -105,41 +111,41 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("GET /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.read", "plan", a.getAdminPlan))
 	protected.HandleFunc("PATCH /v1/admin/plans/{id}", a.requireCatalogueAdmin("plan.update", "plan", a.updatePlan))
 	protected.HandleFunc("POST /v1/admin/credit-packs", a.requireAdmin("credit_pack.create", "credit_pack", a.createCreditPack))
-	protected.HandleFunc("GET /v1/credit-packs", auth.RequireAnyApplication([]string{"catalogue:read", "billing:read"}, a.listCreditPacks))
-	protected.HandleFunc("POST /v1/subscriptions/current/cancellation", auth.Require("billing:write", a.requestCurrentCancellation))
-	protected.HandleFunc("POST /v1/subscription-transitions", auth.Require("billing:write", a.createSubscriptionTransition))
-	protected.HandleFunc("GET /v1/subscription-transitions/{id}", auth.Require("billing:read", a.getSubscriptionTransition))
-	protected.HandleFunc("POST /v1/subscription-transitions/{id}/cancel", auth.Require("billing:write", a.cancelSubscriptionTransition))
-	protected.HandleFunc("GET /v1/billing-snapshot", auth.Require("billing:read", a.billingSnapshot))
-	protected.HandleFunc("GET /v1/entitlements", auth.Require("billing:read", a.getEntitlements))
-	protected.HandleFunc("GET /v1/entitlements/check", auth.Require("billing:read", a.checkEntitlement))
-	protected.HandleFunc("POST /v1/wallets", auth.Require("billing:write", a.createWallet))
-	protected.HandleFunc("GET /v1/wallets/{id}", auth.Require("billing:read", a.getWallet))
-	protected.HandleFunc("GET /v1/wallets/{id}/ledger", auth.Require("billing:read", a.walletLedger))
-	protected.HandleFunc("POST /v1/wallets/{id}/grants", auth.Require("credits:grant", a.grant))
-	protected.HandleFunc("POST /v1/wallets/{id}/reservations", auth.Require("credits:reserve", a.reserve))
-	protected.HandleFunc("POST /v1/reservations/{id}/settle", auth.Require("credits:settle", a.settle))
-	protected.HandleFunc("POST /v1/reservations/{id}/release", auth.Require("credits:settle", a.releaseReservation))
-	protected.HandleFunc("POST /v1/reservations/{id}/extend", auth.Require("credits:reserve", a.extendReservation))
-	protected.HandleFunc("POST /v1/executions/authorize", auth.Require("credits:reserve", a.authorizeExecution))
-	protected.HandleFunc("POST /v1/accounts/{id}/installations", auth.Require("billing:write", a.createInstallation))
-	protected.HandleFunc("POST /v1/installations/{id}/revoke", auth.Require("billing:write", a.revokeInstallation))
-	protected.HandleFunc("POST /v1/installations/{id}/settle-active", auth.Require("credits:settle", a.settleInstallationExecution))
-	protected.HandleFunc("POST /v1/usage-events", auth.Require("credits:settle", a.recordUsage))
-	protected.HandleFunc("GET /v1/usage-events", auth.Require("billing:read", a.listUsage))
-	protected.HandleFunc("POST /v1/payments/orders", auth.Require("billing:write", a.createPaymentOrder))
-	protected.HandleFunc("GET /v1/payments", auth.Require("billing:read", a.listPayments))
-	protected.HandleFunc("GET /v1/invoices", auth.Require("billing:read", a.listInvoices))
-	protected.HandleFunc("POST /v1/webhooks", auth.Require("billing:write", a.registerWebhook))
-	protected.HandleFunc("GET /v1/webhooks", auth.Require("billing:read", a.listWebhooks))
-	protected.HandleFunc("PATCH /v1/webhooks/{id}", auth.Require("billing:write", a.updateWebhook))
-	protected.HandleFunc("DELETE /v1/webhooks/{id}", auth.Require("billing:write", a.deleteWebhook))
-	protected.HandleFunc("POST /v1/webhooks/{id}/rotate-secret", auth.Require("billing:write", a.rotateWebhookSecret))
-	protected.HandleFunc("GET /v1/limits", auth.Require("billing:read", a.getLimits))
+	protected.HandleFunc("GET /v1/credit-packs", auth.RequireClient(catalogueClients, false, a.listCreditPacks))
+	protected.HandleFunc("POST /v1/subscriptions/current/cancellation", auth.RequireClient(billingClients, true, a.requestCurrentCancellation))
+	protected.HandleFunc("POST /v1/subscription-transitions", auth.RequireClient(billingClients, true, a.createSubscriptionTransition))
+	protected.HandleFunc("GET /v1/subscription-transitions/{id}", auth.RequireClient(billingClients, true, a.getSubscriptionTransition))
+	protected.HandleFunc("POST /v1/subscription-transitions/{id}/cancel", auth.RequireClient(billingClients, true, a.cancelSubscriptionTransition))
+	protected.HandleFunc("GET /v1/billing-snapshot", auth.RequireClient(billingClients, true, a.billingSnapshot))
+	protected.HandleFunc("GET /v1/entitlements", auth.RequireClient(billingClients, true, a.getEntitlements))
+	protected.HandleFunc("GET /v1/entitlements/check", auth.RequireClient(billingClients, true, a.checkEntitlement))
+	protected.HandleFunc("POST /v1/wallets", auth.RequireClient(billingClients, true, a.createWallet))
+	protected.HandleFunc("GET /v1/wallets/{id}", auth.RequireClient(billingClients, true, a.getWallet))
+	protected.HandleFunc("GET /v1/wallets/{id}/ledger", auth.RequireClient(billingClients, true, a.walletLedger))
+	protected.HandleFunc("POST /v1/wallets/{id}/grants", auth.RequireClient([]auth.ClientType{auth.ClientAdmin}, true, a.grant))
+	protected.HandleFunc("POST /v1/wallets/{id}/reservations", auth.RequireClient(runtimeClients, true, a.reserve))
+	protected.HandleFunc("POST /v1/reservations/{id}/settle", auth.RequireClient(runtimeClients, true, a.settle))
+	protected.HandleFunc("POST /v1/reservations/{id}/release", auth.RequireClient(runtimeClients, true, a.releaseReservation))
+	protected.HandleFunc("POST /v1/reservations/{id}/extend", auth.RequireClient(runtimeClients, true, a.extendReservation))
+	protected.HandleFunc("POST /v1/executions/authorize", auth.RequireClient(runtimeClients, true, a.authorizeExecution))
+	protected.HandleFunc("POST /v1/accounts/{id}/installations", auth.RequireClient(billingClients, true, a.createInstallation))
+	protected.HandleFunc("POST /v1/installations/{id}/revoke", auth.RequireClient(billingClients, true, a.revokeInstallation))
+	protected.HandleFunc("POST /v1/installations/{id}/settle-active", auth.RequireClient(runtimeClients, true, a.settleInstallationExecution))
+	protected.HandleFunc("POST /v1/usage-events", auth.RequireClient(runtimeClients, true, a.recordUsage))
+	protected.HandleFunc("GET /v1/usage-events", auth.RequireClient(billingClients, true, a.listUsage))
+	protected.HandleFunc("POST /v1/payments/orders", auth.RequireClient(billingClients, true, a.createPaymentOrder))
+	protected.HandleFunc("GET /v1/payments", auth.RequireClient(billingClients, true, a.listPayments))
+	protected.HandleFunc("GET /v1/invoices", auth.RequireClient(billingClients, true, a.listInvoices))
+	protected.HandleFunc("POST /v1/webhooks", auth.RequireClient(billingClients, true, a.registerWebhook))
+	protected.HandleFunc("GET /v1/webhooks", auth.RequireClient(billingClients, true, a.listWebhooks))
+	protected.HandleFunc("PATCH /v1/webhooks/{id}", auth.RequireClient(billingClients, true, a.updateWebhook))
+	protected.HandleFunc("DELETE /v1/webhooks/{id}", auth.RequireClient(billingClients, true, a.deleteWebhook))
+	protected.HandleFunc("POST /v1/webhooks/{id}/rotate-secret", auth.RequireClient(billingClients, true, a.rotateWebhookSecret))
+	protected.HandleFunc("GET /v1/limits", auth.RequireClient(billingClients, true, a.getLimits))
 	protected.HandleFunc("POST /v1/admin/adjustments", a.requireAdmin("credit.adjust", "wallet", a.adminAdjustment))
 	protected.HandleFunc("GET /v1/admin/audit", a.requireAdmin("audit.read", "audit_log", a.listAudit))
 	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", a.requireAdmin("webhook.replay", "webhook_delivery", a.replayWebhook))
-	protected.HandleFunc("GET /v1/events", auth.Require("billing:read", a.events))
+	protected.HandleFunc("GET /v1/events", auth.RequireClient(billingClients, true, a.events))
 	protectedAPI := httpresponse.JSONFallbacks(protected)
 	if a.auth != nil {
 		mux.Handle("/v1/", auth.MiddlewareWithHooks(a.auth, a.requestLimitHooks())(protectedAPI))
@@ -475,7 +481,7 @@ func (a *API) canAccessProduct(r *http.Request, productID uuid.UUID) bool {
 
 func canReadProductSlug(r *http.Request, slug string) bool {
 	claims, ok := auth.FromContext(r.Context())
-	return ok && (slug == claims.App || claims.Has("billing:link"))
+	return ok && (slug == claims.App || claims.CanLinkProducts())
 }
 
 func (a *API) events(w http.ResponseWriter, r *http.Request) {
@@ -499,7 +505,7 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var exists, owned bool
-		if err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM outbox_events WHERE sequence=$1), EXISTS(SELECT 1 FROM outbox_events e WHERE e.sequence=$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id WHERE w.id=e.aggregate_id AND w.account_id=$2 AND (p.slug=$3 OR $4))) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=e.aggregate_id AND s.account_id=$2 AND (p.slug=$3 OR $4)))))`, after, accountID, claims.App, claims.Has("billing:link")).Scan(&exists, &owned); err != nil {
+		if err := a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM outbox_events WHERE sequence=$1), EXISTS(SELECT 1 FROM outbox_events e WHERE e.sequence=$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id WHERE w.id=e.aggregate_id AND w.account_id=$2 AND (p.slug=$3 OR $4))) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=e.aggregate_id AND s.account_id=$2 AND (p.slug=$3 OR $4)))))`, after, accountID, claims.App, claims.CanLinkProducts()).Scan(&exists, &owned); err != nil {
 			writeDBError(w, err)
 			return
 		}
@@ -525,7 +531,7 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 		if claims.ExpiresAt != nil && !time.Now().Before(claims.ExpiresAt.Time) {
 			return
 		}
-		rows, err := a.pool.Query(r.Context(), `SELECT e.sequence,e.event_type,e.payload FROM outbox_events e WHERE e.sequence>$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id WHERE w.id=e.aggregate_id AND w.account_id=$2 AND (p.slug=$3 OR $4))) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=e.aggregate_id AND s.account_id=$2 AND (p.slug=$3 OR $4)))) ORDER BY e.sequence LIMIT 100`, after, accountID, claims.App, claims.Has("billing:link"))
+		rows, err := a.pool.Query(r.Context(), `SELECT e.sequence,e.event_type,e.payload FROM outbox_events e WHERE e.sequence>$1 AND ((e.aggregate_type='wallet' AND EXISTS(SELECT 1 FROM wallets w JOIN products p ON p.id=w.product_id WHERE w.id=e.aggregate_id AND w.account_id=$2 AND (p.slug=$3 OR $4))) OR (e.aggregate_type='account' AND e.aggregate_id=$2) OR (e.aggregate_type='subscription' AND EXISTS(SELECT 1 FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=e.aggregate_id AND s.account_id=$2 AND (p.slug=$3 OR $4)))) ORDER BY e.sequence LIMIT 100`, after, accountID, claims.App, claims.CanLinkProducts())
 		if err != nil {
 			return
 		}

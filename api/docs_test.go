@@ -18,9 +18,32 @@ type openAPIDocument struct {
 }
 
 type operation struct {
-	OperationID string                    `yaml:"operationId"`
-	Tags        []string                  `yaml:"tags"`
-	Responses   map[string]map[string]any `yaml:"responses"`
+	OperationID           string                    `yaml:"operationId"`
+	Tags                  []string                  `yaml:"tags"`
+	Responses             map[string]map[string]any `yaml:"responses"`
+	RequiredClientProfile string                    `yaml:"x-required-client-profile"`
+}
+
+func TestOpenAPIProtectedServiceRoutesDeclareClientProfiles(t *testing.T) {
+	document := loadDocument(t)
+	valid := map[string]bool{"catalogue": true, "billing": true, "runtime": true, "admin": true}
+	for path, item := range document.Paths {
+		if !strings.HasPrefix(path, "/v1/") || path == "/v1/public/catalog" || path == "/v1/payments/webhook" {
+			continue
+		}
+		for method, node := range item {
+			if method == "parameters" {
+				continue
+			}
+			var operation operation
+			if err := node.Decode(&operation); err != nil {
+				t.Fatalf("decode %s %s: %v", method, path, err)
+			}
+			if !valid[operation.RequiredClientProfile] {
+				t.Errorf("%s %s has invalid or missing client profile %q", strings.ToUpper(method), path, operation.RequiredClientProfile)
+			}
+		}
+	}
 }
 
 func loadDocument(t *testing.T) openAPIDocument {

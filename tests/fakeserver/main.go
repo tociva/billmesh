@@ -179,8 +179,8 @@ func (s *server) browserTokens(grant oauthGrant) (string, string, error) {
 	accessClaims := jwt.MapClaims{
 		"iss": mockIssuer, "aud": "billmesh-test", "sub": grant.Subject,
 		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "token_use": "access",
-		"org_id": "bff-org", "app": "daybook", "environment": "test", "actor_type": "user",
-		"permissions": []string{"billing:read", "billing:write", "billing:admin", "billing:link", "credits:grant", "credits:reserve", "credits:settle"},
+		"client_id": grant.ClientID,
+		"org_id":    "bff-org", "app": "daybook", "environment": "test", "actor_type": "user",
 	}
 	access, err := s.sign(accessClaims)
 	if err != nil {
@@ -244,6 +244,7 @@ func (s *server) jwks(w http.ResponseWriter, _ *http.Request) {
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Subject          string         `json:"sub"`
+		ClientID         string         `json:"client_id"`
 		OrgID            string         `json:"org_id"`
 		App              string         `json:"app"`
 		Permissions      []string       `json:"permissions"`
@@ -281,7 +282,11 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if tokenUse == "" {
 		tokenUse = "access"
 	}
-	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "actor_type": in.ActorType, "permissions": in.Permissions}
+	clientID := in.ClientID
+	if clientID == "" {
+		clientID = clientIDForPermissions(in.App, in.Environment, in.Permissions)
+	}
+	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "client_id": clientID, "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "actor_type": in.ActorType}
 	if !in.OmitTokenUse {
 		claims["token_use"] = tokenUse
 	}
@@ -307,6 +312,36 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	write(w, map[string]string{"access_token": raw, "token_type": "Bearer"})
+}
+
+func clientIDForPermissions(app, environment string, permissions []string) string {
+	if app != "daybook" && app != "taskmesh" {
+		return "billmesh-global-admin-test"
+	}
+	clientType := "billing"
+	hasBilling := false
+	for _, permission := range permissions {
+		switch permission {
+		case "billing:admin", "credits:grant":
+			return "billmesh-global-admin-test"
+		case "billing:read", "billing:write", "billing:ownership", "billing:link":
+			hasBilling = true
+		case "catalogue:read":
+			clientType = "catalogue"
+		}
+	}
+	if !hasBilling {
+		for _, permission := range permissions {
+			if permission == "credits:reserve" || permission == "credits:settle" {
+				clientType = "runtime"
+				break
+			}
+		}
+	}
+	if environment == "staging" {
+		return app + "-" + clientType + "-staging-test"
+	}
+	return app + "-" + clientType + "-test"
 }
 func (s *server) rotateKey(w http.ResponseWriter, _ *http.Request) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

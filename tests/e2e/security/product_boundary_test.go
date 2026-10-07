@@ -24,6 +24,7 @@ func TestSecuritySharedAccountProductBoundaries(t *testing.T) {
 	linker := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
 	daybook := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
 	taskmesh := h.IssueToken(t, org, "taskmesh", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
+	taskmeshRuntime := testkit.RuntimeToken(t, h, org, "taskmesh")
 	account := testkit.CreateFixtureAccount(t, h, org, linker)
 	taskmeshAccount := testkit.CreateFixtureAccount(t, h, org, taskmesh)
 	daybookSub := testkit.CreateFixtureSubscription(t, h, account, daybook)
@@ -65,9 +66,9 @@ func TestSecuritySharedAccountProductBoundaries(t *testing.T) {
 	if taskmeshWallet == "" {
 		t.Fatal("taskmesh subscription did not fund a wallet")
 	}
-	reservation := testkit.ReserveFixture(t, h, taskmeshWallet, taskmesh)
+	reservation := testkit.ReserveFixture(t, h, taskmeshWallet, taskmeshRuntime)
 	usageRef := testkit.Unique("taskmesh-usage")
-	h.RequireStatus(t, http.StatusAccepted, http.MethodPost, "/v1/usage-events", map[string]any{"event_id": usageRef, "reservation_id": reservation, "meter": "workflow.execution", "application": "taskmesh", "quantity": 1}, taskmesh)
+	h.RequireStatus(t, http.StatusAccepted, http.MethodPost, "/v1/usage-events", map[string]any{"event_id": usageRef, "reservation_id": reservation, "meter": "workflow.execution", "application": "taskmesh", "quantity": 1}, taskmeshRuntime)
 	for _, path := range []string{"/v1/usage-events?product=taskmesh&application=taskmesh&limit=1", "/v1/usage-events?application=taskmesh&limit=200"} {
 		if body := h.RequireStatus(t, http.StatusOK, http.MethodGet, path, nil, daybook); strings.Contains(string(body), usageRef) {
 			t.Fatalf("GAP-AUTHZ-006: foreign product usage leaked: %s", body)

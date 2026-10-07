@@ -23,7 +23,7 @@ import (
 func securityToken(t *testing.T, key *rsa.PrivateKey, kid, issuer string, now time.Time, mutate func(*Claims)) string {
 	t.Helper()
 	claims := Claims{
-		Permissions: []string{"billing:read"}, ActorType: "user", OrgID: "org-1", App: "daybook", Environment: "test",
+		ClientID: "daybook-billing", ActorType: "user", OrgID: "org-1", App: "daybook", Environment: "test",
 		RegisteredClaims: jwt.RegisteredClaims{Issuer: issuer, Audience: jwt.ClaimStrings{"billmesh-test"}, Subject: "user-1", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))},
 	}
 	if mutate != nil {
@@ -255,7 +255,7 @@ func TestSecurityVerifierRejectsUnusableAndMissingKeyIDs(t *testing.T) {
 func TestSecurityVerifierRejectsWrongClaimTypes(t *testing.T) {
 	f := newJWKSFixture(t)
 	defer f.close()
-	base := jwt.MapClaims{"iss": f.issuer, "aud": "billmesh-test", "sub": "user-1", "exp": time.Now().Add(time.Hour).Unix(), "org_id": "org-1", "app": "daybook", "permissions": []string{"billing:read"}}
+	base := jwt.MapClaims{"iss": f.issuer, "aud": "billmesh-test", "sub": "user-1", "exp": time.Now().Add(time.Hour).Unix(), "org_id": "org-1", "app": "daybook", "client_id": "daybook-billing"}
 	for _, tc := range []struct {
 		name, claim string
 		value       any
@@ -292,29 +292,29 @@ func TestSecurityVerifierRejectsMalformedJWTShapes(t *testing.T) {
 	}
 }
 
-func TestSecurityIssuedPermissionSnapshotRemainsValidUntilExpiry(t *testing.T) {
+func TestSecurityIssuedClientIdentityRemainsValidUntilExpiry(t *testing.T) {
 	f := newJWKSFixture(t)
 	defer f.close()
 	now := time.Now().UTC().Truncate(time.Second)
 	v := NewJWKSVerifier(f.issuer, "billmesh-test", nil)
 	v.now = func() time.Time { return now }
 	old := f.token(t, func(c *Claims) {
-		c.Permissions = []string{"billing:admin"}
+		c.ClientID = "daybook-billing"
 		c.ExpiresAt = jwt.NewNumericDate(now.Add(time.Minute))
 	})
 	newToken := f.token(t, func(c *Claims) {
-		c.Permissions = []string{"billing:read"}
+		c.ClientID = "daybook-runtime"
 		c.ExpiresAt = jwt.NewNumericDate(now.Add(time.Minute))
 	})
 	oldClaims, err := v.Verify(context.Background(), old)
 	require.NoError(t, err)
-	require.True(t, oldClaims.Has("billing:admin"))
+	require.Equal(t, "daybook-billing", oldClaims.ClientID)
 	newClaims, err := v.Verify(context.Background(), newToken)
 	require.NoError(t, err)
-	require.False(t, newClaims.Has("billing:admin"))
+	require.Equal(t, "daybook-runtime", newClaims.ClientID)
 	_, err = v.Verify(context.Background(), old)
 	require.NoError(t, err, "there is no live issuer revocation check for an already signed token")
 	now = now.Add(time.Minute)
 	_, err = v.Verify(context.Background(), old)
-	require.Error(t, err, "permission snapshot must stop at token expiry")
+	require.Error(t, err, "client identity must stop at token expiry")
 }

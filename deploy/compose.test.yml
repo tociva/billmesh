@@ -65,6 +65,7 @@ services:
       DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
       OIDC_ISSUER: https://mock-external:8090
       OIDC_AUDIENCE: billmesh-test
+      OIDC_CLIENT_PROFILES: '[{"client_id":"daybook-catalogue-test","type":"catalogue","app":"daybook","environment":"production"},{"client_id":"daybook-billing-test","type":"billing","app":"daybook","environment":"production"},{"client_id":"daybook-runtime-test","type":"runtime","app":"daybook","environment":"production"},{"client_id":"daybook-billing-staging-test","type":"billing","app":"daybook","environment":"staging"},{"client_id":"taskmesh-catalogue-test","type":"catalogue","app":"taskmesh","environment":"production"},{"client_id":"taskmesh-billing-test","type":"billing","app":"taskmesh","environment":"production"},{"client_id":"taskmesh-runtime-test","type":"runtime","app":"taskmesh","environment":"production"},{"client_id":"taskmesh-billing-staging-test","type":"billing","app":"taskmesh","environment":"staging"},{"client_id":"billmesh-global-admin-test","type":"admin","app":"*","environment":"*"}]'
       SSL_CERT_FILE: /certs/ca.crt
       CONSOLE_APP_ORIGIN: https://console.test
       ADMIN_APP_ORIGIN: https://admin.test
@@ -79,7 +80,7 @@ services:
       BFF_ADMIN_CLIENT_ID: billmesh-admin-test
       BFF_ADMIN_CLIENT_SECRET: test-secret
       BFF_ADMIN_AUDIENCE: billmesh-test
-      BFF_ADMIN_SCOPE: openid profile email offline_access billing:admin
+      BFF_ADMIN_SCOPE: openid profile email offline_access
       BFF_ADMIN_REDIRECT_URI: https://api.test/api/v1/auth/admin/callback
       BFF_ADMIN_POST_LOGOUT_REDIRECT_URI: https://api.test/api/v1/auth/admin/logout/callback
       BFF_ADMIN_STANDALONE_LOGOUT_URI: https://mock-external:8090/logout

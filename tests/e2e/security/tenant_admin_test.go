@@ -58,21 +58,19 @@ func TestSecurityTenantAdministratorCannotAdjustOrReplayForeignResources(t *test
 		t.Fatal(err)
 	}
 	for _, restricted := range []struct {
-		name        string
-		permissions []string
-		subject     string
+		name, clientID, subject string
 	}{
-		{"viewer", []string{"billing:read"}, "viewer"},
-		{"runtime", []string{"credits:reserve"}, "service:runtime"},
-		{"service", []string{"billing:read"}, "service:worker"},
+		{"catalogue", "daybook-catalogue-test", "service:catalogue"},
+		{"runtime", "daybook-runtime-test", "service:runtime"},
+		{"billing", "daybook-billing-test", "service:billing"},
 	} {
 		t.Run(restricted.name+" privileged routes", func(t *testing.T) {
-			token := h.IssueToken(t, orgB, "daybook", restricted.permissions, map[string]any{"sub": restricted.subject})
+			token := h.IssueToken(t, orgB, "daybook", nil, map[string]any{"client_id": restricted.clientID, "sub": restricted.subject, "actor_type": "service"})
 			h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/admin/audit", nil, token)
 			h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/admin/adjustments", map[string]any{"wallet_id": walletB, "amount": 1, "reason": "forbidden"}, token)
 			h.RequireStatus(t, http.StatusForbidden, http.MethodPost, "/v1/admin/webhooks/"+deliveryB+"/replay", nil, token)
 			var count int
-			if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE account_id=$1 AND actor_subject=$2 AND reason='missing_permission' AND action IN ('audit.read.denied','credit.adjust.denied','webhook.replay.denied')`, accountB, restricted.subject).Scan(&count); err != nil {
+			if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE account_id=$1 AND actor_subject=$2 AND reason='client_not_allowed' AND action IN ('audit.read.denied','credit.adjust.denied','webhook.replay.denied')`, accountB, restricted.subject).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
 			if count != 3 {

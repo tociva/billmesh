@@ -3471,7 +3471,7 @@ These cases are exercised by the current test suites and were omitted from the c
 | --- | --- | --- |
 | ACC-010 | I | Keep identical external organization IDs separate across applications. |
 | AUTH-017 | E | Reject an OIDC ID token presented as an API access token. |
-| AUTH-018 | E | Reject a valid service token that lacks permission for the requested billing operation. |
+| AUTH-018 | E | Reject a valid catalogue-client token used for an organization billing operation. |
 | AUTH-019 | E | Reject requests that manipulate nested resource IDs to access another billing account. |
 | FND-011 | I | Preserve subscriptions, ledger entries, and pending reservations through backup and restore. |
 | FND-012 | I | Keep schema migrations compatible with the supported deployment sequence. |

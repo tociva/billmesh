@@ -29,7 +29,7 @@ func (a *API) createInstallation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	if (in.Application != claims.App || in.OrganizationID != claims.OrgID) && !claims.Has("billing:link") {
+	if (in.Application != claims.App || in.OrganizationID != claims.OrgID) && !claims.CanLinkProducts() {
 		writeError(w, 403, "installation identity not accessible")
 		return
 	}
@@ -100,6 +100,6 @@ func (a *API) accessibleInstallation(r *http.Request) (uuid.UUID, bool) {
 	var found bool
 	err = a.pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM application_installations i JOIN account_links l ON l.account_id=i.account_id
 		WHERE i.id=$1 AND l.application=$2 AND l.organization_id=$3 AND l.environment=$4
-		AND ((i.application=$2 AND i.organization_id=$3) OR $5))`, id, claims.App, claims.OrgID, environment, claims.Has("billing:link")).Scan(&found)
+		AND ((i.application=$2 AND i.organization_id=$3) OR $5))`, id, claims.App, claims.OrgID, environment, claims.CanLinkProducts()).Scan(&found)
 	return id, err == nil && found
 }

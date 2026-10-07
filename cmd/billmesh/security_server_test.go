@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tociva/billmesh/internal/app"
+	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/config"
 )
 
@@ -21,6 +22,7 @@ func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *test
 			t.Setenv("DATABASE_URL", "postgres://unreachable.invalid:5432/billmesh")
 			t.Setenv("OIDC_ISSUER", "https://issuer.example")
 			t.Setenv("OIDC_AUDIENCE", "billmesh")
+			t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"test-client","type":"billing","app":"daybook","environment":"test"}]`)
 			t.Setenv(missing, "")
 			originalArgs := os.Args
 			os.Args = []string{"billmesh", "api"}
@@ -36,6 +38,7 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 	key := make([]byte, 32)
 	cfg := config.Config{
 		OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh",
+		OIDCClients: auth.ClientRegistry{"test-client": {ClientID: "test-client", Type: auth.ClientBilling, App: "daybook", Environment: "test"}},
 		BFF: config.BrowserAuthConfig{Realms: []config.BFFConfig{{
 			Realm: "console", AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
 			ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",
@@ -51,7 +54,7 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 	admin := cfg.BFF.Realms[0]
 	admin.Realm = "admin"
 	admin.AppOrigin = "https://admin.billmesh.example"
-	admin.Scope = "openid billing:admin"
+	admin.Scope = "openid profile email"
 	admin.RedirectURI = "https://api.billmesh.example/api/v1/auth/admin/callback"
 	admin.PostLogoutRedirectURI = "https://api.billmesh.example/api/v1/auth/admin/logout/callback"
 	cfg.BFF.Realms = append(cfg.BFF.Realms, admin)
@@ -61,9 +64,16 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 }
 
 func TestSecurityAPIRequiresBothBFFRealms(t *testing.T) {
-	cfg := config.Config{OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh"}
+	cfg := config.Config{OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh", OIDCClients: auth.ClientRegistry{"test-client": {ClientID: "test-client", Type: auth.ClientBilling, App: "daybook", Environment: "test"}}}
 	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "console and admin") {
 		t.Fatalf("missing BFF realms should fail before database access, got %v", err)
+	}
+}
+
+func TestSecurityAPIRequiresClientProfiles(t *testing.T) {
+	cfg := config.Config{OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh"}
+	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "OIDC_CLIENT_PROFILES") {
+		t.Fatalf("missing client profiles should fail before database access, got %v", err)
 	}
 }
 
@@ -71,6 +81,7 @@ func TestSecurityAPIRequiresBFFCredentials(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("OIDC_ISSUER", "https://issuer.example")
 	t.Setenv("OIDC_AUDIENCE", "billmesh")
+	t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"test-client","type":"billing","app":"daybook","environment":"test"}]`)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)

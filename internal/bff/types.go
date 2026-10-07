@@ -40,7 +40,6 @@ type browserSession struct {
 	OrgID          string    `json:"org_id"`
 	App            string    `json:"app"`
 	Environment    string    `json:"environment"`
-	Permissions    []string  `json:"permissions"`
 	CSRFToken      string    `json:"csrf_token"`
 	AllowedOrigin  string    `json:"allowed_origin"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -55,7 +54,6 @@ type browserSessionResponse struct {
 	Authenticated bool                          `json:"authenticated"`
 	User          browserSessionUserResponse    `json:"user"`
 	Context       browserSessionContextResponse `json:"context"`
-	Permissions   []string                      `json:"permissions"`
 	CSRFToken     string                        `json:"csrfToken"`
 	ExpiresAt     time.Time                     `json:"expiresAt"`
 }
@@ -85,9 +83,8 @@ func newBrowserSessionResponse(session browserSession) browserSessionResponse {
 			Application:    session.App,
 			Environment:    session.Environment,
 		},
-		Permissions: append([]string(nil), session.Permissions...),
-		CSRFToken:   session.CSRFToken,
-		ExpiresAt:   session.AbsoluteExpiry,
+		CSRFToken: session.CSRFToken,
+		ExpiresAt: session.AbsoluteExpiry,
 	}
 }
 
@@ -102,5 +99,4 @@ type tokenSet struct {
 	AccessToken  string
 	RefreshToken string
 	IDToken      string
-	Scope        string
 }

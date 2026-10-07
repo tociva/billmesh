@@ -41,8 +41,7 @@ func TestDaybookAccountCreateIsRecoverable(t *testing.T) {
 
 func TestDaybookCatalogueExposesOrganizationLimits(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	org := testkit.Unique("daybook-catalogue")
-	token := h.IssueToken(t, org, "daybook", []string{"billing:read"}, nil)
+	token := testkit.CatalogueToken(t, h, "daybook")
 	plans := testkit.Decode[struct {
 		Plans []struct {
 			Name         string         `json:"name"`
@@ -70,29 +69,31 @@ func TestJourney2ExhaustionAndTopUp(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("journey-2")
 	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "credits:reserve", "credits:settle"}, nil)
+	runtime := testkit.RuntimeToken(t, h, org, "daybook")
 	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Two", "external_ref": testkit.Unique("j2")}, token)
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, accountRaw).ID
 	testkit.CreateFixtureSubscription(t, h, account, token)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 100, "execution_id": testkit.Unique("exhaust")}, token)
-	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 1, "execution_id": testkit.Unique("blocked")}, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 100, "execution_id": testkit.Unique("exhaust")}, runtime)
+	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 1, "execution_id": testkit.Unique("blocked")}, runtime)
 	order := testkit.CreateCreditPackOrder(t, h, "daybook", 500, token)
 	config := order.Checkout.ClientConfig
 	require.NotEmpty(t, config.OrderID)
 	require.Equal(t, http.StatusNoContent, h.SignedWebhook(t, "/v1/payments/webhook", map[string]any{"id": testkit.Unique("event"), "type": "payment.captured", "payment_id": testkit.Unique("payment"), "order_id": config.OrderID, "status": "captured", "amount_minor": config.AmountMinor, "currency": config.Currency}, "test-webhook-secret"))
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 1, "execution_id": testkit.Unique("top-up")}, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"credits": 1, "execution_id": testkit.Unique("top-up")}, runtime)
 }
 func TestJourney3IndependentTaskmeshSubscription(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("journey-3")
 	token := h.IssueToken(t, org, "taskmesh", []string{"billing:read", "billing:write", "billing:link", "credits:reserve"}, nil)
+	runtime := testkit.RuntimeToken(t, h, org, "taskmesh")
 	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Three", "external_ref": testkit.Unique("j3")}, token)
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
 	}](t, accountRaw).ID
 	testkit.ActivatePaidSubscription(t, h, "taskmesh", "professional", token)
-	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"context": "standalone", "execution_id": testkit.Unique("standalone"), "credits": 10}, token)
+	h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/executions/authorize", map[string]any{"context": "standalone", "execution_id": testkit.Unique("standalone"), "credits": 10}, runtime)
 	h.RequireStatusWithHeaders(t, http.StatusOK, http.MethodPost, "/v1/subscriptions/current/cancellation", map[string]any{"effective": "immediate"}, token,
 		http.Header{"Idempotency-Key": []string{testkit.Unique("taskmesh-cancel")}})
 	_ = account
@@ -100,7 +101,8 @@ func TestJourney3IndependentTaskmeshSubscription(t *testing.T) {
 func TestJourney4ConcurrentExecution(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("journey-4")
-	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write", "credits:grant", "credits:reserve", "credits:settle"}, nil)
+	token := h.IssueToken(t, org, "daybook", []string{"billing:read", "billing:write"}, nil)
+	runtime := testkit.RuntimeToken(t, h, org, "daybook")
 	accountRaw := h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/accounts", map[string]any{"name": "Journey Four", "external_ref": testkit.Unique("j4")}, token)
 	account := testkit.Decode[struct {
 		ID string `json:"id"`
@@ -112,7 +114,7 @@ func TestJourney4ConcurrentExecution(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			statuses[i], _, _ = h.JSON(t, http.MethodPost, "/v1/executions/authorize", map[string]any{"execution_id": testkit.Unique("concurrent"), "credits": 80}, token)
+			statuses[i], _, _ = h.JSON(t, http.MethodPost, "/v1/executions/authorize", map[string]any{"execution_id": testkit.Unique("concurrent"), "credits": 80}, runtime)
 		}()
 	}
 	wg.Wait()
