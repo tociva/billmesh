@@ -32,17 +32,17 @@ claim do not select or expand a Billmesh API profile.
 Development requires two interactive clients and three service clients for
 each consuming application:
 
-| Client ID | Kind | Billmesh profile | Application | Required |
-| --- | --- | --- | --- | --- |
-| `billmesh-console-bff-dev` | Confidential Authorization Code | `console` | Billmesh Console | Yes |
-| `billmesh-admin-bff-dev` | Confidential Authorization Code | `admin` | Billmesh Admin | Yes |
-| `daybook-billmesh-catalogue-dev` | Confidential M2M | `catalogue` | Daybook | Yes |
-| `daybook-billmesh-billing-dev` | Confidential M2M | `billing` | Daybook | Yes |
-| `daybook-billmesh-runtime-dev` | Confidential M2M | `runtime` | Daybook | Yes |
-| `taskmesh-billmesh-catalogue-dev` | Confidential M2M | `catalogue` | Taskmesh | Yes |
-| `taskmesh-billmesh-billing-dev` | Confidential M2M | `billing` | Taskmesh | Yes |
-| `taskmesh-billmesh-runtime-dev` | Confidential M2M | `runtime` | Taskmesh | Yes |
-| `billmesh-service-admin-dev` | Confidential M2M | `admin` | Billmesh operations | Only if non-browser administrative automation is deployed |
+| Client ID | Kind/profile | Used by and why it is needed | Required |
+| --- | --- | --- | --- |
+| `billmesh-console-bff-dev` | Confidential Authorization Code; `console` | Billmesh Console signs organization users in through the backend-for-frontend. It is needed to create an isolated Console session, bind it to the selected organization, and call catalogue and billing routes without exposing provider tokens or a client secret to browser code. | Yes |
+| `billmesh-admin-bff-dev` | Confidential Authorization Code; `admin` | Billmesh Admin signs explicitly assigned operational administrators in through a separate BFF realm. It is needed for product and plan management, credit adjustments, audit access, webhook replay, and other privileged operations without granting those rights to Console users. | Yes |
+| `daybook-billmesh-catalogue-dev` | Confidential M2M; `catalogue` | The Daybook backend reads Daybook plans and credit packs, including before an organization context exists. A separate read-only client prevents catalogue discovery from gaining account, payment, subscription, usage, runtime, or administrative access. | Yes |
+| `daybook-billmesh-billing-dev` | Confidential M2M; `billing` | The Daybook backend performs organization billing control-plane work: account onboarding, subscriptions, snapshots, entitlements, payments, invoices, limits, events, webhooks, and ownership coordination. It is separate because these organization-scoped operations are broader than catalogue reads but must not gain runtime or administrative access. | Yes |
+| `daybook-billmesh-runtime-dev` | Confidential M2M; `runtime` | Trusted Daybook execution services authorize executions, reserve and settle credits, settle installations, and record usage. It is isolated from the billing client so a compromised runtime worker cannot change subscriptions, initiate payments, manage webhooks, or administer Billmesh. | Yes |
+| `taskmesh-billmesh-catalogue-dev` | Confidential M2M; `catalogue` | The Taskmesh backend reads only the Taskmesh catalogue and credit packs. It is a distinct client so its tokens are cryptographically attributable to Taskmesh and cannot read Daybook catalogue data or perform organization mutations. | Yes |
+| `taskmesh-billmesh-billing-dev` | Confidential M2M; `billing` | The Taskmesh backend manages Taskmesh organization accounts, subscriptions, snapshots, entitlements, payments, invoices, limits, events, webhooks, and ownership workflows. Its separate identity enforces the Taskmesh application and organization boundaries. | Yes |
+| `taskmesh-billmesh-runtime-dev` | Confidential M2M; `runtime` | Trusted Taskmesh execution services authorize work, manage credit reservations and settlement, settle installations, and report usage. It is needed to keep high-frequency runtime credentials least-privileged and separate from Taskmesh billing credentials. | Yes |
+| `billmesh-service-admin-dev` | Confidential M2M; `admin` | A Billmesh-owned automation service performs explicitly approved cross-application operational actions such as credit grants, adjustments, audit reads, or webhook replay. It is omitted unless such automation exists because it is highly privileged and cannot replace the interactive Admin client for product or plan mutations. | Conditional |
 
 Do not reuse a client across profiles, applications, or environments. Do not
 create one client per organization. An organization is selected by the trusted
@@ -233,10 +233,92 @@ contain:
 | `actor_type` | `user` or `service` |
 | `org_id` | Required for organization billing and runtime operations |
 
-Billmesh rejects ID tokens on the service API, unknown clients, a client whose
-application or environment does not match its registry entry, tokens addressed
-to the broker audience, and tokens that attempt to select access with scopes or
-permissions.
+Billmesh validates the signature, RS256 algorithm, key ID, issuer, audience,
+expiration, issued-at time, maximum lifetime, client registration, application,
+environment, and actor type. It applies zero additional clock-skew leeway. A
+legacy `permissions` claim, when present, never expands the registered client's
+profile.
+
+Billmesh rejects ID tokens on the service API, unknown clients, missing or
+malformed required claims, a client whose application or environment does not
+match its registry entry, tokens addressed to the broker audience, and tokens
+that attempt to select access with scopes or permissions.
+
+## Profile-specific token requirements
+
+### Catalogue tokens
+
+A catalogue token has `actor_type=service`, uses a client registered with the
+`catalogue` profile, and does not require `org_id`. It may call protected
+catalogue and credit-pack discovery only for the client registration's `app`
+and `environment`.
+
+It cannot create accounts, read billing snapshots, mutate subscriptions,
+purchase credits, manage webhooks, report usage, reserve credits, or invoke
+administrative operations.
+
+### Billing tokens and customer identity
+
+A billing token uses a client registered with the `billing` profile and
+contains `org_id`. The consuming application must authorize the current user or
+persisted system operation before it requests this token. Billmesh does not use
+the OAuth scope or a `permissions` claim as application authorization.
+
+When the product customer scope is `identity`, account creation requires a
+delegated token with `actor_type=user`; `sub` is the stable customer identity.
+The `sub` of a generic service token is never treated as a human owner.
+
+When the customer scope is `external_customer`, a trusted service token may
+contain the opaque `billing_customer_id` assigned by the consuming application.
+Billmesh never accepts that identifier from a normal account-creation request
+body.
+
+### Ownership service tokens
+
+Ownership-transfer creation and confirmation require all of the following:
+
+- `actor_type=service`;
+- a client registered with the `billing` profile;
+- the same `app`, `environment`, and `org_id` as the billing account; and
+- an opaque `new_owner_ref` in the request body, obtained by the consuming
+  application from trusted IdNest or ownership data.
+
+Ownership operations must not be exposed directly to browsers, end users, or
+generic background workers.
+
+### Runtime tokens
+
+A runtime token has `actor_type=service`, uses a client registered with the
+`runtime` profile, and contains `org_id`. Its `app` and `environment` must match
+the client registration and every affected installation, wallet, reservation,
+execution, and usage event.
+
+### Interactive Console and Admin tokens
+
+Console and Admin use their separately configured confidential OIDC clients.
+The BFF verifies the access token, the ID token, the exact signed `client_id`,
+the ID-token nonce, and the ID-token access-token hash when present. Access and
+refresh tokens remain in encrypted server-side sessions and are never returned
+to browser code.
+
+Admin access is established by the configured Admin client ID and IdNest's
+authorized-identity assignment, not by a token scope or permission claim.
+OIDC callback routes do not accept normal Billmesh bearer tokens; the BFF
+validates the login transaction, authorization-code exchange, access token, and
+ID token before it creates a session.
+
+## Signing-key rotation and failure behavior
+
+IdNest publishes signing keys through OIDC discovery and JWKS. Billmesh
+refreshes its key cache for an unknown key ID and keeps only a short, bounded
+outage grace period for a previously validated cached key. IdNest must overlap
+old and new public keys for at least the maximum access-token lifetime plus the
+deployment clock-skew allowance before retiring the old key.
+
+An invalid, expired, wrongly addressed, incorrectly signed, unknown-client, or
+mismatched client-context token receives a stable authentication or
+authorization error. Billmesh never falls back to another application,
+environment, organization, client profile, issuer, or audience.
 
 ## Development verification checklist
 
@@ -260,6 +342,3 @@ permissions.
 - `urn:idnest:token-broker` is never accepted as the Billmesh API audience.
 - Tokens, client secrets, Basic Authorization values, refresh tokens, session
   encryption keys, and webhook secrets are absent from application logs.
-
-The detailed resource-token validation rules are defined in
-[IdNest Token Profile for Billmesh](./idnest-token-profile.md).

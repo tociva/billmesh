@@ -86,8 +86,8 @@ billing state.
 ## Required identity context
 
 Service API calls use the IdNest bearer access-token profile defined in
-[`idnest-token-profile.md`](idnest-token-profile.md). It contains these verified
-concepts:
+[`idnest-auth-development.md`](idnest-auth-development.md). It contains these
+verified concepts:
 
 - `iss`: the configured IdNest issuer;
 - `aud`: the Billmesh resource audience;

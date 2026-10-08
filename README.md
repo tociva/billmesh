@@ -143,7 +143,6 @@ allowlist is documented in
 
 The service identity, event-delivery, and failure contracts are documented in
 [`docs/idnest-auth-development.md`](docs/idnest-auth-development.md),
-[`docs/idnest-token-profile.md`](docs/idnest-token-profile.md),
 [`docs/webhook-contract.md`](docs/webhook-contract.md), and
 [`docs/api-error-codes.md`](docs/api-error-codes.md).
 
