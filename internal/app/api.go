@@ -218,6 +218,12 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issuer := claims.Issuer
+	authorizerClientID := claims.AuthorizerClientID
+	if authorizerClientID == "" {
+		// Browser BFF sessions are outside Delegated Access and are isolated by
+		// their confidential client instead of an authorizer client.
+		authorizerClientID = claims.ClientID
+	}
 	subject := claims.Subject
 	switch policy.Customer.Scope {
 	case "identity":
@@ -227,9 +233,11 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	case "organization":
 		issuer = "urn:billmesh:organization:" + application + ":" + environment
+		authorizerClientID = ""
 		subject = organizationID
 	case "external_customer":
 		issuer = "urn:billmesh:external-customer:" + application + ":" + environment
+		authorizerClientID = ""
 		subject = strings.TrimSpace(claims.BillingCustomerID)
 		if subject == "" {
 			writeError(w, http.StatusForbidden, "billing_customer_id claim is required by product policy")
@@ -250,8 +258,8 @@ func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var customerID uuid.UUID
-	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_customers(issuer,external_subject)
-		VALUES($1,$2) ON CONFLICT(issuer,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, subject).Scan(&customerID); err != nil {
+	if err = tx.QueryRow(r.Context(), `INSERT INTO billing_customers(issuer,authorizer_client_id,external_subject)
+		VALUES($1,$2,$3) ON CONFLICT(issuer,authorizer_client_id,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, authorizerClientID, subject).Scan(&customerID); err != nil {
 		writeDBError(w, err)
 		return
 	}

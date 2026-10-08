@@ -19,8 +19,8 @@ import (
 
 func (a *API) createOwnershipTransfer(w http.ResponseWriter, r *http.Request) {
 	claims, _ := auth.FromContext(r.Context())
-	if claims.ActorType != "service" {
-		writeCodedError(w, http.StatusForbidden, "trusted_service_required", "ownership changes require a trusted application service token")
+	if claims.ActorType != "service" || claims.AuthorizerClientID == "" {
+		writeCodedError(w, http.StatusForbidden, "trusted_service_required", "ownership changes require a trusted delegated service actor")
 		return
 	}
 	if strings.TrimSpace(r.Header.Get("If-Match")) == "" {
@@ -110,12 +110,14 @@ func (a *API) createOwnershipTransfer(w http.ResponseWriter, r *http.Request) {
 			return errOwnershipCustomerMissing
 		}
 		issuer := claims.Issuer
+		authorizerClientID := claims.AuthorizerClientID
 		if policy.Customer.Scope == "external_customer" {
 			issuer = "urn:billmesh:external-customer:" + claims.App + ":" + claims.Environment
+			authorizerClientID = ""
 		}
 		var proposedCustomerID uuid.UUID
-		if err := tx.QueryRow(r.Context(), `INSERT INTO billing_customers(issuer,external_subject)
-			VALUES($1,$2) ON CONFLICT(issuer,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, in.NewOwnerRef).Scan(&proposedCustomerID); err != nil {
+		if err := tx.QueryRow(r.Context(), `INSERT INTO billing_customers(issuer,authorizer_client_id,external_subject)
+			VALUES($1,$2,$3) ON CONFLICT(issuer,authorizer_client_id,external_subject) DO UPDATE SET updated_at=now() RETURNING id`, issuer, authorizerClientID, in.NewOwnerRef).Scan(&proposedCustomerID); err != nil {
 			return err
 		}
 		if proposedCustomerID == *currentCustomerID {
@@ -232,8 +234,8 @@ func (a *API) finishOwnershipTransfer(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 	claims, _ := auth.FromContext(r.Context())
-	if claims.ActorType != "service" {
-		writeCodedError(w, http.StatusForbidden, "trusted_service_required", "ownership changes require a trusted application service token")
+	if claims.ActorType != "service" || claims.AuthorizerClientID == "" {
+		writeCodedError(w, http.StatusForbidden, "trusted_service_required", "ownership changes require a trusted delegated service actor")
 		return
 	}
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {

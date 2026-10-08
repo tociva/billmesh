@@ -9,13 +9,13 @@ the allowlist below.
 
 | Capability | Operations | Token context |
 | --- | --- | --- |
-| Catalogue | `GET /v1/public/catalog`, `GET /v1/catalog`, `GET /v1/credit-packs` | Public when policy permits, otherwise application token with `catalogue:read` or `billing:read` |
-| Account | `POST /v1/accounts`, `GET /v1/accounts/current` | Organization token; account creation uses `billing:write` |
-| Ownership | `POST /v1/account-ownership-transfers`, `GET /v1/account-ownership-transfers/{id}`, `POST .../{id}/confirm`, `POST .../{id}/cancel` | Trusted service token with `billing:ownership`; status reads use `billing:read` |
-| Subscription | `POST /v1/subscription-transitions`, `GET /v1/subscription-transitions/{id}`, `POST .../{id}/cancel`, `POST /v1/subscriptions/current/cancellation` | Organization token with `billing:read` or `billing:write` as specified |
-| Authoritative state | `GET /v1/billing-snapshot` | Organization token with `billing:read` |
-| Purchases | `POST /v1/payments/orders`, `GET /v1/payments`, `GET /v1/invoices` | Organization billing token |
-| Webhooks | `POST /v1/webhooks`, `GET /v1/webhooks`, `PATCH /v1/webhooks/{id}`, `DELETE /v1/webhooks/{id}`, `POST /v1/webhooks/{id}/rotate-secret` | Organization billing token |
+| Catalogue | `GET /v1/public/catalog`, `GET /v1/catalog`, `GET /v1/credit-packs` | Public when policy permits, otherwise `billmesh.catalogue` delegated token |
+| Account | `POST /v1/accounts`, `GET /v1/accounts/current` | Organization context with `billmesh.billing`; identity onboarding also requires a user actor |
+| Ownership | `POST /v1/account-ownership-transfers`, `GET /v1/account-ownership-transfers/{id}`, `POST .../{id}/confirm`, `POST .../{id}/cancel` | `billmesh.billing` or administrative authority; mutations require a registered service actor |
+| Subscription | `POST /v1/subscription-transitions`, `GET /v1/subscription-transitions/{id}`, `POST .../{id}/cancel`, `POST /v1/subscriptions/current/cancellation` | Organization context with `billmesh.billing` |
+| Authoritative state | `GET /v1/billing-snapshot` | Organization context with `billmesh.billing` |
+| Purchases | `POST /v1/payments/orders`, `GET /v1/payments`, `GET /v1/invoices` | Organization context with `billmesh.billing` |
+| Webhooks | `POST /v1/webhooks`, `GET /v1/webhooks`, `PATCH /v1/webhooks/{id}`, `DELETE /v1/webhooks/{id}`, `POST /v1/webhooks/{id}/rotate-secret` | Organization context with `billmesh.billing` |
 
 The snapshot is the canonical enforcement read model. Separate entitlement,
 limit, wallet, reservation, installation, usage, and SSE operations remain

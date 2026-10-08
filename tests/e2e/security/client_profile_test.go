@@ -42,11 +42,15 @@ func TestOAuthClientIdentityIsBoundToProductAndEnvironment(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique("client-binding")
 	for name, overrides := range map[string]map[string]any{
-		"unknown client": {"client_id": "unknown-client"},
-		"missing client": {"omit_claims": []string{"client_id"}},
-		"wrong product":  {"client_id": "taskmesh-billing-test"},
+		"unknown client":   {"client_id": "unknown-client"},
+		"missing client":   {"omit_claims": []string{"client_id"}},
+		"wrong product":    {"client_id": "taskmesh-billing-test", "authorizer_client_id": "daybook-billmesh-authorizer-test"},
+		"wrong authorizer": {"authorizer_client_id": "taskmesh-billmesh-authorizer-test"},
 		"wrong environment": {
-			"environment": "staging", "client_id": "daybook-billing-test",
+			"client_id": "daybook-billing-test",
+			"claim_overrides": map[string]any{
+				"environment": "staging",
+			},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -56,9 +60,9 @@ func TestOAuthClientIdentityIsBoundToProductAndEnvironment(t *testing.T) {
 	}
 }
 
-func TestLegacyPermissionsCannotExpandClientProfile(t *testing.T) {
+func TestDelegatedClientProfileCannotExpandAcrossSurfaces(t *testing.T) {
 	h := testkit.NewHTTP(t)
-	token := h.IssueToken(t, testkit.Unique("legacy-permissions"), "daybook", testkit.AllPermissions(), map[string]any{
+	token := h.IssueToken(t, testkit.Unique("profile-boundary"), "daybook", testkit.AllPermissions(), map[string]any{
 		"client_id": "daybook-catalogue-test",
 	})
 	h.RequireStatus(t, http.StatusForbidden, http.MethodGet, "/v1/accounts/current", nil, token)

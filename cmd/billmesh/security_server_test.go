@@ -16,18 +16,19 @@ import (
 	"github.com/tociva/billmesh/internal/config"
 )
 
-func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *testing.T) {
-	for _, missing := range []string{"OIDC_ISSUER", "OIDC_AUDIENCE"} {
+func TestSecurityAPIRejectsMissingDelegationConfigurationBeforeOpeningDatabase(t *testing.T) {
+	for _, missing := range []string{"DELEGATION_ISSUER", "DELEGATION_AUDIENCE", "DELEGATION_DISCOVERY_URL"} {
 		t.Run(missing, func(t *testing.T) {
 			t.Setenv("DATABASE_URL", "postgres://unreachable.invalid:5432/billmesh")
-			t.Setenv("OIDC_ISSUER", "https://issuer.example")
-			t.Setenv("OIDC_AUDIENCE", "billmesh")
-			t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"test-client","type":"billing","app":"daybook","environment":"test"}]`)
+			t.Setenv("DELEGATION_ISSUER", "https://issuer.example/delegation")
+			t.Setenv("DELEGATION_AUDIENCE", "https://api.billmesh.example")
+			t.Setenv("DELEGATION_DISCOVERY_URL", "https://issuer.example/.well-known/idnest-delegation-configuration")
+			t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"authorizer","actor_client_id":"test-client","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"test"}]`)
 			t.Setenv(missing, "")
 			originalArgs := os.Args
 			os.Args = []string{"billmesh", "api"}
 			defer func() { os.Args = originalArgs }()
-			if err := run(); err == nil || !strings.Contains(err.Error(), "OIDC_ISSUER and OIDC_AUDIENCE are required") {
+			if err := run(); err == nil || !strings.Contains(err.Error(), "DELEGATION_ISSUER") {
 				t.Fatalf("missing %s should prevent API startup before database access, got %v", missing, err)
 			}
 		})
@@ -37,8 +38,9 @@ func TestSecurityAPIRejectsMissingOIDCConfigurationBeforeOpeningDatabase(t *test
 func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testing.T) {
 	key := make([]byte, 32)
 	cfg := config.Config{
-		OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh",
-		OIDCClients: auth.ClientRegistry{"test-client": {ClientID: "test-client", Type: auth.ClientBilling, App: "daybook", Environment: "test"}},
+		DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example",
+		DelegationDiscoveryURL: "https://issuer.example/.well-known/idnest-delegation-configuration",
+		DelegationClients:      auth.DelegationClientRegistry{"authorizer\x00test-client": {AuthorizerClientID: "authorizer", ActorClientID: "test-client", Scope: "billmesh.billing", Type: auth.ClientBilling, ActorType: "user", App: "daybook", Environment: "test"}},
 		BFF: config.BrowserAuthConfig{Realms: []config.BFFConfig{{
 			Realm: "console", AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
 			ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",
@@ -64,24 +66,25 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 }
 
 func TestSecurityAPIRequiresBothBFFRealms(t *testing.T) {
-	cfg := config.Config{OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh", OIDCClients: auth.ClientRegistry{"test-client": {ClientID: "test-client", Type: auth.ClientBilling, App: "daybook", Environment: "test"}}}
+	cfg := config.Config{DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example", DelegationDiscoveryURL: "https://issuer.example/discovery", DelegationClients: auth.DelegationClientRegistry{"authorizer\x00test-client": {AuthorizerClientID: "authorizer", ActorClientID: "test-client", Scope: "billmesh.billing", Type: auth.ClientBilling, ActorType: "user", App: "daybook", Environment: "test"}}}
 	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "console and admin") {
 		t.Fatalf("missing BFF realms should fail before database access, got %v", err)
 	}
 }
 
 func TestSecurityAPIRequiresClientProfiles(t *testing.T) {
-	cfg := config.Config{OIDCIssuer: "https://issuer.example", OIDCAudience: "billmesh"}
-	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "OIDC_CLIENT_PROFILES") {
+	cfg := config.Config{DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example", DelegationDiscoveryURL: "https://issuer.example/discovery"}
+	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "DELEGATION_CLIENT_PROFILES") {
 		t.Fatalf("missing client profiles should fail before database access, got %v", err)
 	}
 }
 
 func TestSecurityAPIRequiresBFFCredentials(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("OIDC_ISSUER", "https://issuer.example")
-	t.Setenv("OIDC_AUDIENCE", "billmesh")
-	t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"test-client","type":"billing","app":"daybook","environment":"test"}]`)
+	t.Setenv("DELEGATION_ISSUER", "https://issuer.example/delegation")
+	t.Setenv("DELEGATION_AUDIENCE", "https://api.billmesh.example")
+	t.Setenv("DELEGATION_DISCOVERY_URL", "https://issuer.example/discovery")
+	t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"authorizer","actor_client_id":"test-client","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"test"}]`)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)

@@ -75,31 +75,6 @@ func TestJWKSVerifier(t *testing.T) {
 	require.Equal(t, "org-1", got.OrgID)
 }
 
-func TestClientJWKSVerifierBindsClientToApplicationContext(t *testing.T) {
-	fixture := newJWKSFixture(t)
-	defer fixture.close()
-	registry := ClientRegistry{
-		"daybook-billing": {ClientID: "daybook-billing", Type: ClientBilling, App: "daybook", Environment: "test"},
-	}
-	verifier := NewClientJWKSVerifier(fixture.issuer, "billmesh-test", registry, nil)
-
-	claims, err := verifier.Verify(context.Background(), fixture.token(t, nil))
-	require.NoError(t, err)
-	require.Equal(t, ClientBilling, claims.ClientType)
-
-	for name, mutate := range map[string]func(*Claims){
-		"missing client":    func(c *Claims) { c.ClientID = "" },
-		"unknown client":    func(c *Claims) { c.ClientID = "unknown" },
-		"wrong application": func(c *Claims) { c.App = "taskmesh" },
-		"wrong environment": func(c *Claims) { c.Environment = "production" },
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := verifier.Verify(context.Background(), fixture.token(t, mutate))
-			require.Error(t, err)
-		})
-	}
-}
-
 func TestJWKSVerifierValidatesOIDCIDTokenNonceAndAccessTokenHash(t *testing.T) {
 	fixture := newJWKSFixture(t)
 	defer fixture.close()
@@ -306,26 +281,6 @@ func TestJWKSVerifierRejectsInvalidOIDCDiscovery(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
-}
-
-func TestClientJWKSVerifierIgnoresLegacyPermissionClaim(t *testing.T) {
-	fixture := newJWKSFixture(t)
-	defer fixture.close()
-	claims := jwt.MapClaims{"iss": fixture.issuer, "aud": "billmesh-test", "sub": "user-1", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Minute).Unix(), "org_id": "org-1", "app": "daybook", "environment": "test", "actor_type": "user", "permissions": "billing:read"}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = fixture.kid
-	raw, err := token.SignedString(fixture.key)
-	require.NoError(t, err)
-
-	registry := ClientRegistry{"daybook-billing": {ClientID: "daybook-billing", Type: ClientBilling, App: "daybook", Environment: "test"}}
-	claims["client_id"] = "daybook-billing"
-	token = jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = fixture.kid
-	raw, err = token.SignedString(fixture.key)
-	require.NoError(t, err)
-	got, err := NewClientJWKSVerifier(fixture.issuer, "billmesh-test", registry, nil).Verify(context.Background(), raw)
-	require.NoError(t, err)
-	require.Equal(t, ClientBilling, got.ClientType)
 }
 
 func TestJWKSVerifierEnforcesTimeBoundaries(t *testing.T) {

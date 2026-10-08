@@ -14,17 +14,18 @@ import (
 )
 
 type Config struct {
-	HTTPAddr              string
-	DatabaseURL           string
-	OIDCIssuer            string
-	OIDCAudience          string
-	OIDCClients           auth.ClientRegistry
-	WebhookTimeout        time.Duration
-	WorkerInterval        time.Duration
-	AuthFailuresPerMinute int
-	MutationRatePerSecond int
-	MutationBurst         int
-	BFF                   BrowserAuthConfig
+	HTTPAddr               string
+	DatabaseURL            string
+	DelegationIssuer       string
+	DelegationAudience     string
+	DelegationDiscoveryURL string
+	DelegationClients      auth.DelegationClientRegistry
+	WebhookTimeout         time.Duration
+	WorkerInterval         time.Duration
+	AuthFailuresPerMinute  int
+	MutationRatePerSecond  int
+	MutationBurst          int
+	BFF                    BrowserAuthConfig
 }
 
 type BrowserAuthConfig struct {
@@ -59,13 +60,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c := Config{
-		HTTPAddr:     value("HTTP_ADDR", ":8080"),
-		DatabaseURL:  databaseURL,
-		OIDCIssuer:   os.Getenv("OIDC_ISSUER"),
-		OIDCAudience: os.Getenv("OIDC_AUDIENCE"),
+		HTTPAddr:               value("HTTP_ADDR", ":8080"),
+		DatabaseURL:            databaseURL,
+		DelegationIssuer:       strings.TrimSpace(os.Getenv("DELEGATION_ISSUER")),
+		DelegationAudience:     strings.TrimSpace(os.Getenv("DELEGATION_AUDIENCE")),
+		DelegationDiscoveryURL: strings.TrimSpace(os.Getenv("DELEGATION_DISCOVERY_URL")),
 	}
-	if rawClients := strings.TrimSpace(os.Getenv("OIDC_CLIENT_PROFILES")); rawClients != "" {
-		if c.OIDCClients, err = auth.ParseClientRegistry(rawClients); err != nil {
+	if rawClients := strings.TrimSpace(os.Getenv("DELEGATION_CLIENT_PROFILES")); rawClients != "" {
+		if c.DelegationClients, err = auth.ParseDelegationClientRegistry(rawClients); err != nil {
 			return Config{}, err
 		}
 	}

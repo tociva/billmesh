@@ -35,17 +35,17 @@ func TestLoadRejectsInvalidRequestLimits(t *testing.T) {
 
 func TestLoadClientProfiles(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"daybook-billing","type":"billing","app":"daybook","environment":"production"}]`)
+	t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"daybook-authorizer","actor_client_id":"daybook-billing","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"production"}]`)
 	cfg, err := Load()
 	require.NoError(t, err)
-	require.Equal(t, "billing", string(cfg.OIDCClients["daybook-billing"].Type))
+	require.Len(t, cfg.DelegationClients, 1)
 }
 
 func TestLoadRejectsInvalidClientProfiles(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("OIDC_CLIENT_PROFILES", `[{"client_id":"duplicate","type":"billing","app":"daybook","environment":"production"},{"client_id":"duplicate","type":"runtime","app":"daybook","environment":"production"}]`)
+	t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"authorizer","actor_client_id":"duplicate","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"production"},{"authorizer_client_id":"authorizer","actor_client_id":"duplicate","scope":"billmesh.runtime","type":"runtime","actor_type":"service","app":"daybook","environment":"production"}]`)
 	_, err := Load()
-	require.ErrorContains(t, err, "duplicate client_id")
+	require.ErrorContains(t, err, "duplicate authorizer/actor pair")
 }
 func TestLoadRequiresDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")

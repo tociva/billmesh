@@ -1105,14 +1105,13 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: >-
-        RS256 IdNest OIDC access token with required iss, aud, sub, iat, exp,
-        client_id, app, environment, and actor_type. exp may be at most one hour
-        after iat and no additional clock-skew leeway is applied. Billmesh maps
-        the signed client_id to a configured catalogue, billing, runtime, or admin
-        profile and verifies that app and environment match that registration.
-        Organization billing and runtime tokens additionally carry org_id.
-        A human owner is represented only by actor_type=user on a delegated token;
-        a generic service-token sub is never treated as the owner.
+        ES256 IdNest delegated access token with typ=at+jwt and required iss,
+        aud, sub, iat, nbf, exp, jti, client_id, act, scope, and exactly one
+        urn:idnest:delegation authorization detail. Tokens live for at most five
+        minutes. Billmesh maps the signed authorizer_client_id/client_id pair to
+        a fixed application, environment, API profile, actor type, and scope.
+        Billing and runtime contexts carry org_id. Identity-scoped owners require
+        a user actor; generic service subjects are never treated as human owners.
     consoleBrowserSession:
       type: apiKey
       in: cookie
@@ -1291,7 +1290,7 @@ components:
                 type: string
                 minLength: 1
                 maxLength: 512
-                description: Opaque owner reference asserted by a trusted application service token.
+                description: Opaque owner reference asserted by a trusted delegated service actor.
     Installation:
       required: true
       content:

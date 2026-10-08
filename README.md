@@ -5,7 +5,7 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 ## What is included
 
 - One `billmesh` binary with `api`, `worker`, `migrate`, and `healthcheck` commands.
-- `net/http` API with OIDC/JWKS signature, issuer, audience, expiry, OAuth-client profile, organization, application, and environment checks.
+- `net/http` API with IdNest ES256 Delegated Access verification, pair-bound client profiles, structured organization/customer context, and isolated browser OIDC sessions.
 - PostgreSQL schema for accounts, products/plans, subscriptions, isolated wallets, grants, reservations, ledger, usage, payments, provider deduplication, outbox events, and webhook delivery.
 - Row-locked credit reservations, idempotent grants/reservations/settlement, and append-only ledger writes.
 - Durable SSE history with `Last-Event-ID` replay and a retrying webhook worker.
@@ -116,7 +116,7 @@ printf 'v1:'; openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'; printf '\n'
 
 Hexadecimal database passwords can be placed directly in a PostgreSQL URL without percent-encoding. Replace the checked-in local-only passwords in deployment configuration; do not commit generated secrets.
 
-The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected endpoints require a signed token from the configured issuer and a client registered for the route's API profile.
+The API exposes `GET /healthz`, `GET /readyz`, account/product/wallet creation, grants, reservations, settlement, and `GET /v1/events` for SSE. Protected service endpoints require an IdNest delegated token whose authorizer/actor pair is registered for the route's API profile.
 
 ### API documentation
 

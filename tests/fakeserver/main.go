@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -14,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +26,8 @@ import (
 type server struct {
 	key           *rsa.PrivateKey
 	kid           string
+	delegationKey *ecdsa.PrivateKey
+	delegationKid string
 	mu            sync.Mutex
 	webhooks      []map[string]any
 	failureCode   int
@@ -42,10 +47,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{key: key, kid: "billmesh-test-key", oauthCodes: make(map[string]oauthGrant), refreshTokens: make(map[string]oauthGrant)}
+	delegationKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := &server{key: key, kid: "billmesh-test-key", delegationKey: delegationKey, delegationKid: "billmesh-delegation-test-key", oauthCodes: make(map[string]oauthGrant), refreshTokens: make(map[string]oauthGrant)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.jwks)
+	mux.HandleFunc("GET /.well-known/idnest-delegation-configuration", s.delegationDiscovery)
+	mux.HandleFunc("GET /auth/v1/delegation/jwks", s.delegationJWKS)
 	mux.HandleFunc("GET /oauth/authorize", s.authorize)
 	mux.HandleFunc("POST /oauth/token", s.oauthToken)
 	mux.HandleFunc("POST /oauth/revoke", s.revoke)
@@ -80,6 +91,7 @@ func main() {
 }
 
 var mockIssuer = value("MOCK_ISSUER", "http://mock-external:8090")
+var mockDelegationIssuer = mockIssuer + "/auth/v1/delegation"
 
 func value(key, fallback string) string {
 	if configured := os.Getenv(key); configured != "" {
@@ -93,6 +105,15 @@ func (s *server) discovery(w http.ResponseWriter, _ *http.Request) {
 		"issuer": mockIssuer, "authorization_endpoint": mockIssuer + "/oauth/authorize",
 		"token_endpoint": mockIssuer + "/oauth/token", "revocation_endpoint": mockIssuer + "/oauth/revoke",
 		"end_session_endpoint": mockIssuer + "/oauth/logout", "jwks_uri": mockIssuer + "/.well-known/jwks.json",
+	})
+}
+
+func (s *server) delegationDiscovery(w http.ResponseWriter, _ *http.Request) {
+	write(w, map[string]any{
+		"issuer":   mockDelegationIssuer,
+		"jwks_uri": mockIssuer + "/auth/v1/delegation/jwks",
+		"delegated_access_signing_alg_values_supported": []string{"ES256"},
+		"authorization_details_types_supported":         []string{"urn:idnest:delegation"},
 	})
 }
 
@@ -241,23 +262,35 @@ func (s *server) jwks(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Unlock()
 	write(w, map[string]any{"keys": []any{map[string]any{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": kid, "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}}})
 }
+func (s *server) delegationJWKS(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	key, kid := s.delegationKey, s.delegationKid
+	s.mu.Unlock()
+	write(w, map[string]any{"keys": []any{map[string]any{
+		"kty": "EC", "crv": "P-256", "use": "sig", "alg": "ES256", "kid": kid,
+		"x": base64.RawURLEncoding.EncodeToString(key.X.FillBytes(make([]byte, 32))),
+		"y": base64.RawURLEncoding.EncodeToString(key.Y.FillBytes(make([]byte, 32))),
+	}}})
+}
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Subject          string         `json:"sub"`
-		ClientID         string         `json:"client_id"`
-		OrgID            string         `json:"org_id"`
-		App              string         `json:"app"`
-		Permissions      []string       `json:"permissions"`
-		Issuer           string         `json:"issuer"`
-		Audience         string         `json:"audience"`
-		ExpiresInSeconds *int64         `json:"expires_in_seconds"`
-		UnknownKey       bool           `json:"unknown_key"`
-		Environment      string         `json:"environment"`
-		ActorType        string         `json:"actor_type"`
-		TokenUse         string         `json:"token_use"`
-		OmitTokenUse     bool           `json:"omit_token_use"`
-		OmitClaims       []string       `json:"omit_claims"`
-		ClaimOverrides   map[string]any `json:"claim_overrides"`
+		Subject           string         `json:"sub"`
+		ClientID          string         `json:"client_id"`
+		OrgID             string         `json:"org_id"`
+		App               string         `json:"app"`
+		Permissions       []string       `json:"permissions"`
+		Issuer            string         `json:"issuer"`
+		Audience          string         `json:"audience"`
+		ExpiresInSeconds  *int64         `json:"expires_in_seconds"`
+		UnknownKey        bool           `json:"unknown_key"`
+		Environment       string         `json:"environment"`
+		ActorType         string         `json:"actor_type"`
+		AuthorizerID      string         `json:"authorizer_client_id"`
+		BillingCustomerID string         `json:"billing_customer_id"`
+		TokenUse          string         `json:"token_use"`
+		OmitTokenUse      bool           `json:"omit_token_use"`
+		OmitClaims        []string       `json:"omit_claims"`
+		ClaimOverrides    map[string]any `json:"claim_overrides"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	if in.Subject == "" {
@@ -268,13 +301,13 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 	issuer := in.Issuer
 	if issuer == "" {
-		issuer = mockIssuer
+		issuer = mockDelegationIssuer
 	}
 	audience := in.Audience
 	if audience == "" {
-		audience = "billmesh-test"
+		audience = "https://api.test"
 	}
-	expires := int64(3600)
+	expires := int64(300)
 	if in.ExpiresInSeconds != nil {
 		expires = *in.ExpiresInSeconds
 	}
@@ -286,32 +319,102 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if clientID == "" {
 		clientID = clientIDForPermissions(in.App, in.Environment, in.Permissions)
 	}
-	claims := jwt.MapClaims{"iss": issuer, "aud": audience, "sub": in.Subject, "exp": time.Now().Add(time.Duration(expires) * time.Second).Unix(), "iat": time.Now().Unix(), "client_id": clientID, "org_id": in.OrgID, "app": in.App, "environment": in.Environment, "actor_type": in.ActorType}
+	if clientID == "billmesh-global-admin-test" && in.ActorType == "user" {
+		clientID = "billmesh-global-admin-user-test"
+	}
+	authorizerID := in.AuthorizerID
+	if authorizerID == "" {
+		authorizerID = authorizerForClient(clientID)
+	}
+	scope := scopeForClient(clientID)
+	now := time.Now()
+	context := map[string]any{"type": "urn:billmesh:context:v1"}
+	if strings.HasPrefix(clientID, "billmesh-global-admin") {
+		context["application"] = in.App
+		context["environment"] = in.Environment
+	}
+	if in.OrgID != "" {
+		context["org_id"] = in.OrgID
+	}
+	if in.BillingCustomerID != "" {
+		context["billing_customer_id"] = in.BillingCustomerID
+	}
+	detail := map[string]any{
+		"type": "urn:idnest:delegation", "grant_id": "grant-" + randomString(),
+		"authorizer_client_id": authorizerID, "context_profile_version": 1,
+	}
+	if len(context) > 1 || scope != "billmesh.catalogue" {
+		detail["context"] = context
+	}
+	claims := jwt.MapClaims{
+		"iss": issuer, "aud": audience, "sub": in.Subject, "exp": now.Add(time.Duration(expires) * time.Second).Unix(),
+		"iat": now.Unix(), "nbf": now.Unix(), "jti": "token-" + randomString(), "client_id": clientID,
+		"act": map[string]any{"sub": clientID}, "scope": scope, "authorization_details": []any{detail},
+	}
 	if !in.OmitTokenUse {
 		claims["token_use"] = tokenUse
 	}
 	for _, name := range in.OmitClaims {
 		delete(claims, name)
+		if name == "org_id" || name == "app" || name == "environment" || name == "billing_customer_id" {
+			contextName := name
+			if name == "app" {
+				contextName = "application"
+			}
+			delete(context, contextName)
+		}
 	}
 	for name, value := range in.ClaimOverrides {
-		claims[name] = value
+		if name == "org_id" || name == "app" || name == "environment" || name == "billing_customer_id" {
+			contextName := name
+			if name == "app" {
+				contextName = "application"
+			}
+			context[contextName] = value
+		} else {
+			claims[name] = value
+		}
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	s.mu.Lock()
-	key := s.key
-	kid := s.kid
+	key := s.delegationKey
+	kid := s.delegationKid
 	s.mu.Unlock()
 	if in.UnknownKey {
-		key, _ = rsa.GenerateKey(rand.Reader, 2048)
+		key, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		kid = "unknown-key"
 	}
 	token.Header["kid"] = kid
+	token.Header["typ"] = "at+jwt"
 	raw, err := token.SignedString(key)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	write(w, map[string]string{"access_token": raw, "token_type": "Bearer"})
+}
+
+func authorizerForClient(clientID string) string {
+	if strings.HasPrefix(clientID, "daybook-") {
+		return "daybook-billmesh-authorizer-test"
+	}
+	if strings.HasPrefix(clientID, "taskmesh-") {
+		return "taskmesh-billmesh-authorizer-test"
+	}
+	return "billmesh-authorizer-test"
+}
+
+func scopeForClient(clientID string) string {
+	switch {
+	case strings.Contains(clientID, "catalogue"):
+		return "billmesh.catalogue"
+	case strings.Contains(clientID, "runtime"):
+		return "billmesh.runtime"
+	case strings.Contains(clientID, "admin"):
+		return "billmesh.admin"
+	default:
+		return "billmesh.billing"
+	}
 }
 
 func clientIDForPermissions(app, environment string, permissions []string) string {
@@ -344,15 +447,15 @@ func clientIDForPermissions(app, environment string, permissions []string) strin
 	return app + "-" + clientType + "-test"
 }
 func (s *server) rotateKey(w http.ResponseWriter, _ *http.Request) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	s.mu.Lock()
-	s.key = key
-	s.kid = "billmesh-test-key-" + time.Now().UTC().Format("150405.000000")
-	kid := s.kid
+	s.delegationKey = key
+	s.delegationKid = "billmesh-delegation-test-key-" + time.Now().UTC().Format("150405.000000")
+	kid := s.delegationKid
 	s.mu.Unlock()
 	write(w, map[string]string{"kid": kid})
 }

@@ -85,31 +85,32 @@ billing state.
 
 ## Required identity context
 
-Service API calls use the IdNest bearer access-token profile defined in
+Service API calls use the IdNest Delegated Access profile defined in
 [`idnest-auth-development.md`](idnest-auth-development.md). It contains these
 verified concepts:
 
-- `iss`: the configured IdNest issuer;
-- `aud`: the Billmesh resource audience;
-- `client_id`: the signed OAuth client identity, registered by Billmesh for one
-  fixed API profile and product/environment;
+- `iss`: the configured IdNest delegation issuer;
+- `aud`: the absolute Billmesh resource audience;
+- `authorizer_client_id` plus `client_id`: the signed authorizer/actor pair,
+  registered by Billmesh for one fixed scope, API profile, actor type, and
+  product/environment;
 - `sub`: a stable actor or owner subject when the product's customer scope is
   `identity`;
-- `org_id`: the consumer's stable organization ID;
-- `app`: the Billmesh product/application identity, for example `daybook`;
-- `environment`: the isolated deployment context;
-- `actor_type`: `user` for a delegated owner or `service` for an application
-  service;
+- structured `org_id` and optional `billing_customer_id` context asserted by
+  the trusted authorizer;
+- `app`, `environment`, and `actor_type`, derived by Billmesh from the trusted
+  pair registration rather than caller-selected claims;
 - `billing_customer_id`: a stable trusted customer reference only when the
   product policy uses `external_customer` scope.
 
-The `sub` of a generic application service token is never used as a human
-owner. Identity-scoped account creation requires `actor_type=user`.
+The `sub` of a delegated service actor is never used as a human owner.
+Identity-scoped account creation requires a pair registered with
+`actor_type=user`.
 
-An application must use its registered billing client and an organization-scoped
-token for account commands. For catalogue discovery before an organization
-context exists, use the product's registered catalogue client, or the public
-catalogue when the product policy explicitly permits it.
+An application must use its registered authorizer and billing actor with an
+organization-scoped context for account commands. For catalogue discovery
+before an organization context exists, use the registered catalogue actor or
+the public catalogue when product policy explicitly permits it.
 
 ## Canonical integration flow
 
@@ -119,8 +120,8 @@ Before making requests, the application team obtains the following from the
 Billmesh team:
 
 - the Billmesh base URL for each environment;
-- the IdNest issuer, Billmesh audience, supported token type, claims, and
-  registered client profile;
+- the IdNest delegation issuer and discovery URL, Billmesh audience, context
+  profile, and registered authorizer/actor pair;
 - the configured product identity and billing policy;
 - seeded plans, entitlements, and optional credit packs;
 - the supported Razorpay test checkout configuration;
@@ -136,7 +137,8 @@ Use one of these operations, according to the product's catalogue policy:
 
 - `GET /v1/public/catalog?product={application}` for an explicitly public
   catalogue; or
-- `GET /v1/catalog?product={application}` with the product's catalogue client.
+- `GET /v1/catalog?product={application}` with the product's
+  `billmesh.catalogue` actor.
 
 Store the response `ETag` and use `If-None-Match` on refresh. Render the returned
 plans and credit packs. Submit only the selected opaque `plan_id` or
@@ -149,7 +151,8 @@ Application, organization, environment, and customer identity come from the
 verified token. When product policy requires catalogue acknowledgement, send
 the current catalogue ETag in `If-Match`.
 
-Billmesh derives the environment and billing customer from trusted claims,
+Billmesh derives the application, environment, actor type, and API profile from
+the trusted pair registration and the billing customer from verified context,
 creates or resolves the account, applies onboarding policy, and checks Free-plan
 eligibility. Repeating account creation for the same application, organization,
 and environment resolves the existing account.
@@ -158,7 +161,8 @@ The application must not send an internal Billmesh customer ID. It must stop and
 surface an eligibility or onboarding rejection; it must not create another
 organization or identity to bypass the decision.
 
-For ownership changes, a trusted service with `billing:ownership` creates
+For ownership changes, a registered service actor with billing or administrative
+authority creates
 `POST /v1/account-ownership-transfers` using the current snapshot ETag,
 receives an eligibility decision, commits the application-side ownership change
 only when allowed, and confirms the intent with its ID and current ETag. It must
@@ -168,7 +172,8 @@ rechecks eligibility atomically at confirmation.
 
 ### 4. Read and store the billing snapshot
 
-Call `GET /v1/billing-snapshot?product={application}` with the product's billing client.
+Call `GET /v1/billing-snapshot?product={application}` with the product's
+`billmesh.billing` actor.
 Persist, at minimum:
 
 - the response body as a non-authoritative projection;
@@ -339,8 +344,8 @@ Before approving an application for production, the Billmesh team must confirm:
 - the product, policy, entitlement schema, plans, and credit packs are reviewed
   and seeded independently in each environment;
 - the chosen customer scope and stable identity mapping are documented;
-- each OAuth client is registered for exactly one required API profile and no
-  consumer client is registered as an administrator;
+- each authorizer/actor pair is registered for exactly one Billmesh scope and
+  API profile, and no consumer pair is registered as an administrator;
 - catalogue, onboarding, transitions, cancellation, snapshot, checkout, and
   webhook scenarios pass against the consumer's staging deployment;
 - snapshot and webhook schemas used by the consumer are versioned and frozen;

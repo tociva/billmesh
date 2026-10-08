@@ -65,7 +65,17 @@ func (routeTestVerifier) Verify(_ context.Context, token string) (*auth.Claims, 
 		if clientType == auth.ClientAdmin {
 			actorType = "user"
 		}
-		return &auth.Claims{ClientType: clientType, ActorType: actorType, OrgID: "route-test", App: "daybook", Environment: "test"}, nil
+		return &auth.Claims{
+			ClientID:           "route-" + string(clientType),
+			AuthorizerClientID: "route-authorizer",
+			GrantID:            "route-grant",
+			Scope:              "billmesh." + string(clientType),
+			ClientType:         clientType,
+			ActorType:          actorType,
+			OrgID:              "route-test",
+			App:                "daybook",
+			Environment:        "test",
+		}, nil
 	}
 	return nil, context.Canceled
 }

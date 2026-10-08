@@ -21,13 +21,16 @@ import (
 )
 
 type Claims struct {
-	ClientID          string     `json:"client_id"`
-	ClientType        ClientType `json:"-"`
-	ActorType         string     `json:"actor_type"`
-	OrgID             string     `json:"org_id"`
-	App               string     `json:"app"`
-	Environment       string     `json:"environment"`
-	BillingCustomerID string     `json:"billing_customer_id"`
+	ClientID           string     `json:"client_id"`
+	AuthorizerClientID string     `json:"-"`
+	GrantID            string     `json:"-"`
+	Scope              string     `json:"-"`
+	ClientType         ClientType `json:"-"`
+	ActorType          string     `json:"actor_type"`
+	OrgID              string     `json:"org_id"`
+	App                string     `json:"app"`
+	Environment        string     `json:"environment"`
+	BillingCustomerID  string     `json:"billing_customer_id"`
 	jwt.RegisteredClaims
 }
 
@@ -45,7 +48,6 @@ type TokenVerifier interface {
 
 type JWKSVerifier struct {
 	issuer, audience string
-	clients          ClientRegistry
 	client           *http.Client
 	requireContext   bool
 	mu               sync.RWMutex
@@ -64,14 +66,6 @@ const maxServiceTokenLifetime = time.Hour
 
 func NewJWKSVerifier(issuer, audience string, client *http.Client) *JWKSVerifier {
 	return newJWKSVerifier(issuer, audience, client, true)
-}
-
-// NewClientJWKSVerifier authenticates service access tokens and resolves their
-// signed client_id to a deployment-configured Billmesh client profile.
-func NewClientJWKSVerifier(issuer, audience string, clients ClientRegistry, client *http.Client) *JWKSVerifier {
-	verifier := newJWKSVerifier(issuer, audience, client, true)
-	verifier.clients = clients
-	return verifier
 }
 
 // NewOIDCJWKSVerifier validates the standard JWT access-token contract used by
@@ -124,11 +118,6 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	}
 	if v.requireContext && (claims.App == "" || claims.Environment == "") {
 		return nil, errors.New("missing application or environment context")
-	}
-	if v.clients != nil {
-		if err := v.clients.authenticate(claims); err != nil {
-			return nil, err
-		}
 	}
 	if v.requireContext && claims.ActorType != "user" && claims.ActorType != "service" {
 		return nil, errors.New("actor_type must be user or service")

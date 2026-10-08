@@ -39,7 +39,7 @@ func TestAccountOwnershipTransferLifecycle(t *testing.T) {
 		"name": "Ownership Account", "external_ref": testkit.Unique("ownership-account"),
 	}, owner)
 	service := h.IssueToken(t, org, product.Slug, []string{"billing:read", "billing:ownership"}, map[string]any{
-		"sub": "service:ownership", "actor_type": "service",
+		"client_id": "billmesh-global-admin-test", "sub": "service:ownership", "actor_type": "service",
 	})
 
 	status, _, snapshotHeaders := h.JSON(t, http.MethodGet, "/v1/billing-snapshot", nil, service)
