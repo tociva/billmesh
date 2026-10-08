@@ -18,6 +18,7 @@ import (
 	"github.com/tociva/billmesh/internal/bff"
 	"github.com/tociva/billmesh/internal/config"
 	"github.com/tociva/billmesh/internal/database"
+	"github.com/tociva/billmesh/internal/delegationprofiles"
 )
 
 func main() {
@@ -64,7 +65,21 @@ func run() error {
 	defer pool.Close()
 	switch os.Args[1] {
 	case "api":
-		verifier := auth.NewDelegationVerifier(cfg.DelegationIssuer, cfg.DelegationAudience, cfg.DelegationDiscoveryURL, cfg.DelegationClients, nil)
+		profiles, err := delegationprofiles.NewCachedResolver(
+			delegationprofiles.NewPostgreSQLLoader(pool),
+			cfg.DelegationProfileRefreshInterval,
+			cfg.DelegationProfileMaxStaleness,
+		)
+		if err != nil {
+			return fmt.Errorf("configure delegation client profiles: %w", err)
+		}
+		if err := profiles.Refresh(ctx); err != nil {
+			return fmt.Errorf("load delegation client profiles: %w", err)
+		}
+		go profiles.Run(ctx, func(err error) {
+			slog.Error("refresh delegation client profiles", "error", err)
+		})
+		verifier := auth.NewDelegationVerifier(cfg.DelegationIssuer, cfg.DelegationAudience, cfg.DelegationDiscoveryURL, profiles, nil)
 		api := app.NewAPI(pool, verifier, nil)
 		managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
 		for _, realm := range cfg.BFF.Realms {
@@ -124,9 +139,6 @@ func validateAPIAuthConfig(cfg config.Config) error {
 		if err != nil || !parsed.IsAbs() || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 			return fmt.Errorf("%s must be an absolute HTTP(S) URI", name)
 		}
-	}
-	if len(cfg.DelegationClients) == 0 {
-		return errors.New("DELEGATION_CLIENT_PROFILES is required for api")
 	}
 	if len(cfg.BFF.Realms) != 2 {
 		return errors.New("console and admin BFF configurations are required for api")

@@ -320,6 +320,11 @@ func MiddlewareWithHooks(verifier TokenVerifier, hooks MiddlewareHooks) func(htt
 			}
 			claims, err := verifier.Verify(r.Context(), strings.TrimPrefix(header, "Bearer "))
 			if err != nil {
+				if errors.Is(err, ErrDelegationPolicyUnavailable) {
+					w.Header().Set("Retry-After", "30")
+					httpresponse.Error(w, http.StatusServiceUnavailable, "authorization policy is temporarily unavailable")
+					return
+				}
 				reject("invalid bearer token")
 				return
 			}

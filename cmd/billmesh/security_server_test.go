@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tociva/billmesh/internal/app"
-	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/config"
 )
 
@@ -23,7 +22,6 @@ func TestSecurityAPIRejectsMissingDelegationConfigurationBeforeOpeningDatabase(t
 			t.Setenv("DELEGATION_ISSUER", "https://issuer.example/delegation")
 			t.Setenv("DELEGATION_AUDIENCE", "https://api.billmesh.example")
 			t.Setenv("DELEGATION_DISCOVERY_URL", "https://issuer.example/.well-known/idnest-delegation-configuration")
-			t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"authorizer","actor_client_id":"test-client","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"test"}]`)
 			t.Setenv(missing, "")
 			originalArgs := os.Args
 			os.Args = []string{"billmesh", "api"}
@@ -40,7 +38,6 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 	cfg := config.Config{
 		DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example",
 		DelegationDiscoveryURL: "https://issuer.example/.well-known/idnest-delegation-configuration",
-		DelegationClients:      auth.DelegationClientRegistry{"authorizer\x00test-client": {AuthorizerClientID: "authorizer", ActorClientID: "test-client", Scope: "billmesh.billing", Type: auth.ClientBilling, ActorType: "user", App: "daybook", Environment: "test"}},
 		BFF: config.BrowserAuthConfig{Realms: []config.BFFConfig{{
 			Realm: "console", AppOrigin: "http://billmesh.example", Issuer: "https://issuer.example",
 			ClientID: "billmesh-web", ClientSecret: "secret", Audience: "billmesh",
@@ -66,16 +63,9 @@ func TestSecurityAPIRejectsInvalidBFFConfigurationBeforeOpeningDatabase(t *testi
 }
 
 func TestSecurityAPIRequiresBothBFFRealms(t *testing.T) {
-	cfg := config.Config{DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example", DelegationDiscoveryURL: "https://issuer.example/discovery", DelegationClients: auth.DelegationClientRegistry{"authorizer\x00test-client": {AuthorizerClientID: "authorizer", ActorClientID: "test-client", Scope: "billmesh.billing", Type: auth.ClientBilling, ActorType: "user", App: "daybook", Environment: "test"}}}
+	cfg := config.Config{DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example", DelegationDiscoveryURL: "https://issuer.example/discovery"}
 	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "console and admin") {
 		t.Fatalf("missing BFF realms should fail before database access, got %v", err)
-	}
-}
-
-func TestSecurityAPIRequiresClientProfiles(t *testing.T) {
-	cfg := config.Config{DelegationIssuer: "https://issuer.example/delegation", DelegationAudience: "https://api.billmesh.example", DelegationDiscoveryURL: "https://issuer.example/discovery"}
-	if err := validateAPIAuthConfig(cfg); err == nil || !strings.Contains(err.Error(), "DELEGATION_CLIENT_PROFILES") {
-		t.Fatalf("missing client profiles should fail before database access, got %v", err)
 	}
 }
 
@@ -84,7 +74,6 @@ func TestSecurityAPIRequiresBFFCredentials(t *testing.T) {
 	t.Setenv("DELEGATION_ISSUER", "https://issuer.example/delegation")
 	t.Setenv("DELEGATION_AUDIENCE", "https://api.billmesh.example")
 	t.Setenv("DELEGATION_DISCOVERY_URL", "https://issuer.example/discovery")
-	t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"authorizer","actor_client_id":"test-client","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"test"}]`)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)

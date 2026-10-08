@@ -120,17 +120,36 @@ Billmesh registers the authenticated pair, not the actor alone:
 DELEGATION_ISSUER="https://auth-dev.idnest.cloud/auth/v1/delegation"
 DELEGATION_DISCOVERY_URL="https://auth-dev.idnest.cloud/.well-known/idnest-delegation-configuration"
 DELEGATION_AUDIENCE="https://api-dev.billme.sh"
-DELEGATION_CLIENT_PROFILES='[{"authorizer_client_id":"daybook-billmesh-authorizer-dev","actor_client_id":"daybook-billmesh-catalogue-dev","scope":"billmesh.catalogue","type":"catalogue","actor_type":"service","app":"daybook","environment":"development"},{"authorizer_client_id":"daybook-billmesh-authorizer-dev","actor_client_id":"daybook-billmesh-billing-user-dev","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"development"},{"authorizer_client_id":"daybook-billmesh-authorizer-dev","actor_client_id":"daybook-billmesh-billing-service-dev","scope":"billmesh.billing","type":"billing","actor_type":"service","app":"daybook","environment":"development"},{"authorizer_client_id":"daybook-billmesh-authorizer-dev","actor_client_id":"daybook-billmesh-runtime-dev","scope":"billmesh.runtime","type":"runtime","actor_type":"service","app":"daybook","environment":"development"}]'
+DELEGATION_PROFILE_REFRESH_INTERVAL="10s"
+DELEGATION_PROFILE_MAX_STALENESS="1m"
 ```
 
-From this registry Billmesh derives the application, environment, API profile,
-and actor type. Token input cannot override those values. The initial contract
-requires the token's one scope to equal the registered scope.
+The authorizer/actor registrations live in `billmesh.delegation_client_profiles`.
+For local development, `make db-bootstrap` loads the idempotent records in
+`deploy/delegation-profiles.dev.sql`. Production onboarding must write profiles
+with a migration or control-plane database role; the API/worker runtime role
+cannot create, change, or delete them.
+
+The API loads the complete enabled set before serving traffic and atomically
+refreshes it on the configured interval. A failed refresh retains the last
+known-good snapshot. Once that snapshot exceeds the maximum staleness, delegated
+requests fail closed with HTTP 503 until a valid snapshot is loaded. An empty or
+invalid enabled set also prevents API startup.
+
+From the database registry Billmesh derives the application, environment, API
+profile, actor type, and context-profile version. Token input cannot override
+those values. The initial contract requires the token's one scope to equal the
+registered scope.
 
 Administrative automation may use an `admin` registration with wildcard
 application/environment only when the signed context names the target
 application and environment. Normal consumer registrations cannot use
 wildcards.
+
+Disable a registration by setting `enabled = false`; avoid deleting it during
+normal operations. Every insert, update, and delete is recorded in
+`billmesh.delegation_client_profile_events`, including the database principal
+that performed the change and the before/after records.
 
 ## Customer identity
 

@@ -47,7 +47,10 @@ func newDelegationFixture(t *testing.T) *delegationFixture {
 			"y": base64.RawURLEncoding.EncodeToString(fixture.key.Y.FillBytes(make([]byte, 32))),
 		}}})
 	})
-	fixture.registry, err = ParseDelegationClientRegistry(`[{"authorizer_client_id":"daybook-authorizer","actor_client_id":"daybook-billing-user","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"test"}]`)
+	fixture.registry, err = NewDelegationClientRegistry([]DelegationClientRegistration{{
+		AuthorizerClientID: "daybook-authorizer", ActorClientID: "daybook-billing-user",
+		Scope: "billmesh.billing", Type: ClientBilling, ActorType: "user", App: "daybook", Environment: "test", ContextProfileVersion: 1,
+	}})
 	require.NoError(t, err)
 	return fixture
 }

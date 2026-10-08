@@ -57,6 +57,18 @@ func TestSecurityRuntimeRoleCannotAlterFinancialHistoryOrSchema(t *testing.T) {
 	expectSQLState("create table", "42501", `CREATE TABLE security_runtime_schema_probe(id integer)`)
 	expectSQLState("disable audit trigger", "42501", `ALTER TABLE audit_log DISABLE TRIGGER audit_log_prevent_update_delete`)
 
+	var delegationProfiles int
+	if err := runtime.QueryRow(ctx, `SELECT count(*) FROM delegation_client_profiles WHERE enabled`).Scan(&delegationProfiles); err != nil {
+		t.Fatalf("runtime role cannot read delegation profiles: %v", err)
+	}
+	if delegationProfiles == 0 {
+		t.Fatal("expected seeded delegation profiles")
+	}
+	expectSQLState("insert delegation profile", "42501", `INSERT INTO delegation_client_profiles(authorizer_client_id,actor_client_id,scope,client_type,actor_type,application,environment) VALUES('unauthorized-authorizer','unauthorized-actor','billmesh.billing','billing','user','daybook','production')`)
+	expectSQLState("update delegation profile", "42501", `UPDATE delegation_client_profiles SET enabled=false WHERE authorizer_client_id='daybook-billmesh-authorizer-test' AND actor_client_id='daybook-billing-test'`)
+	expectSQLState("delete delegation profile", "42501", `DELETE FROM delegation_client_profiles WHERE authorizer_client_id='daybook-billmesh-authorizer-test' AND actor_client_id='daybook-billing-test'`)
+	expectSQLState("read delegation profile audit", "42501", `SELECT count(*) FROM delegation_client_profile_events`)
+
 	var ledgerID, auditID, invoiceID string
 	if err := owner.QueryRow(ctx, `SELECT id FROM credit_ledger WHERE wallet_id=$1 AND operation_ref LIKE 'grant:admin:%' ORDER BY created_at DESC LIMIT 1`, wallet).Scan(&ledgerID); err != nil {
 		t.Fatal(err)

@@ -13,6 +13,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("HTTP_ADDR", "")
 	t.Setenv("WORKER_INTERVAL", "250ms")
+	t.Setenv("DELEGATION_PROFILE_REFRESH_INTERVAL", "")
+	t.Setenv("DELEGATION_PROFILE_MAX_STALENESS", "")
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, ":8080", cfg.HTTPAddr)
@@ -20,6 +22,8 @@ func TestLoadDefaults(t *testing.T) {
 	require.Equal(t, 30, cfg.AuthFailuresPerMinute)
 	require.Equal(t, 10, cfg.MutationRatePerSecond)
 	require.Equal(t, 50, cfg.MutationBurst)
+	require.Equal(t, 10*time.Second, cfg.DelegationProfileRefreshInterval)
+	require.Equal(t, time.Minute, cfg.DelegationProfileMaxStaleness)
 }
 
 func TestLoadRejectsInvalidRequestLimits(t *testing.T) {
@@ -33,20 +37,19 @@ func TestLoadRejectsInvalidRequestLimits(t *testing.T) {
 	}
 }
 
-func TestLoadClientProfiles(t *testing.T) {
+func TestLoadRejectsInvalidDelegationProfileCacheDurations(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"daybook-authorizer","actor_client_id":"daybook-billing","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"production"}]`)
-	cfg, err := Load()
-	require.NoError(t, err)
-	require.Len(t, cfg.DelegationClients, 1)
+
+	t.Setenv("DELEGATION_PROFILE_REFRESH_INTERVAL", "0s")
+	_, err := Load()
+	require.ErrorContains(t, err, "DELEGATION_PROFILE_REFRESH_INTERVAL")
+
+	t.Setenv("DELEGATION_PROFILE_REFRESH_INTERVAL", "1m")
+	t.Setenv("DELEGATION_PROFILE_MAX_STALENESS", "1m")
+	_, err = Load()
+	require.ErrorContains(t, err, "must be shorter")
 }
 
-func TestLoadRejectsInvalidClientProfiles(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://example")
-	t.Setenv("DELEGATION_CLIENT_PROFILES", `[{"authorizer_client_id":"authorizer","actor_client_id":"duplicate","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"production"},{"authorizer_client_id":"authorizer","actor_client_id":"duplicate","scope":"billmesh.runtime","type":"runtime","actor_type":"service","app":"daybook","environment":"production"}]`)
-	_, err := Load()
-	require.ErrorContains(t, err, "duplicate authorizer/actor pair")
-}
 func TestLoadRequiresDatabase(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	clearDatabaseComponents(t)

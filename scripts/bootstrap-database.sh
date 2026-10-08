@@ -32,4 +32,9 @@ SQL
 echo "Applying Billmesh migrations to schema: billmesh"
 env -u DATABASE_URL go run ./cmd/billmesh migrate up
 
+echo "Loading local delegation client profiles"
+"${compose[@]}" exec -T postgres \
+  psql -U billmesh -d "$database_name" -v ON_ERROR_STOP=1 \
+  < deploy/delegation-profiles.dev.sql
+
 echo "Database bootstrap complete for $database_name."

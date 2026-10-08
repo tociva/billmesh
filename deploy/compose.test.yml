@@ -46,11 +46,12 @@ services:
 
   runtime-grants:
     image: postgres:17.6-alpine3.22
-    entrypoint: ["psql", "-h", "postgres", "-U", "billmesh", "-d", "billmesh_e2e", "-v", "ON_ERROR_STOP=1", "-f", "/scripts/test-catalogue-fixtures.sql", "-f", "/scripts/test-runtime-grants.sql"]
+    entrypoint: ["psql", "-h", "postgres", "-U", "billmesh", "-d", "billmesh_e2e", "-v", "ON_ERROR_STOP=1", "-f", "/scripts/test-catalogue-fixtures.sql", "-f", "/scripts/test-delegation-profiles.sql", "-f", "/scripts/test-runtime-grants.sql"]
     environment:
       PGPASSWORD: testpassword
     volumes:
       - ./test-catalogue-fixtures.sql:/scripts/test-catalogue-fixtures.sql:ro
+      - ./test-delegation-profiles.sql:/scripts/test-delegation-profiles.sql:ro
       - ./test-runtime-grants.sql:/scripts/test-runtime-grants.sql:ro
       - ./runtime-grants.sql:/scripts/runtime-grants.sql:ro
     depends_on:
@@ -66,7 +67,8 @@ services:
       DELEGATION_ISSUER: https://mock-external:8090/auth/v1/delegation
       DELEGATION_DISCOVERY_URL: https://mock-external:8090/.well-known/idnest-delegation-configuration
       DELEGATION_AUDIENCE: https://api.test
-      DELEGATION_CLIENT_PROFILES: '[{"authorizer_client_id":"daybook-billmesh-authorizer-test","actor_client_id":"daybook-catalogue-test","scope":"billmesh.catalogue","type":"catalogue","actor_type":"service","app":"daybook","environment":"production"},{"authorizer_client_id":"daybook-billmesh-authorizer-test","actor_client_id":"daybook-billing-test","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"production"},{"authorizer_client_id":"daybook-billmesh-authorizer-test","actor_client_id":"daybook-billing-service-test","scope":"billmesh.billing","type":"billing","actor_type":"service","app":"daybook","environment":"production"},{"authorizer_client_id":"daybook-billmesh-authorizer-test","actor_client_id":"daybook-runtime-test","scope":"billmesh.runtime","type":"runtime","actor_type":"service","app":"daybook","environment":"production"},{"authorizer_client_id":"daybook-billmesh-authorizer-test","actor_client_id":"daybook-billing-staging-test","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"daybook","environment":"staging"},{"authorizer_client_id":"taskmesh-billmesh-authorizer-test","actor_client_id":"taskmesh-catalogue-test","scope":"billmesh.catalogue","type":"catalogue","actor_type":"service","app":"taskmesh","environment":"production"},{"authorizer_client_id":"taskmesh-billmesh-authorizer-test","actor_client_id":"taskmesh-billing-test","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"taskmesh","environment":"production"},{"authorizer_client_id":"taskmesh-billmesh-authorizer-test","actor_client_id":"taskmesh-billing-service-test","scope":"billmesh.billing","type":"billing","actor_type":"service","app":"taskmesh","environment":"production"},{"authorizer_client_id":"taskmesh-billmesh-authorizer-test","actor_client_id":"taskmesh-runtime-test","scope":"billmesh.runtime","type":"runtime","actor_type":"service","app":"taskmesh","environment":"production"},{"authorizer_client_id":"taskmesh-billmesh-authorizer-test","actor_client_id":"taskmesh-billing-staging-test","scope":"billmesh.billing","type":"billing","actor_type":"user","app":"taskmesh","environment":"staging"},{"authorizer_client_id":"billmesh-authorizer-test","actor_client_id":"billmesh-global-admin-test","scope":"billmesh.admin","type":"admin","actor_type":"service","app":"*","environment":"*"},{"authorizer_client_id":"billmesh-authorizer-test","actor_client_id":"billmesh-global-admin-user-test","scope":"billmesh.admin","type":"admin","actor_type":"user","app":"*","environment":"*"}]'
+      DELEGATION_PROFILE_REFRESH_INTERVAL: 250ms
+      DELEGATION_PROFILE_MAX_STALENESS: 5s
       SSL_CERT_FILE: /certs/ca.crt
       CONSOLE_APP_ORIGIN: https://console.test
       ADMIN_APP_ORIGIN: https://admin.test

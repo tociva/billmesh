@@ -9,23 +9,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/tociva/billmesh/internal/auth"
 )
 
 type Config struct {
-	HTTPAddr               string
-	DatabaseURL            string
-	DelegationIssuer       string
-	DelegationAudience     string
-	DelegationDiscoveryURL string
-	DelegationClients      auth.DelegationClientRegistry
-	WebhookTimeout         time.Duration
-	WorkerInterval         time.Duration
-	AuthFailuresPerMinute  int
-	MutationRatePerSecond  int
-	MutationBurst          int
-	BFF                    BrowserAuthConfig
+	HTTPAddr                         string
+	DatabaseURL                      string
+	DelegationIssuer                 string
+	DelegationAudience               string
+	DelegationDiscoveryURL           string
+	DelegationProfileRefreshInterval time.Duration
+	DelegationProfileMaxStaleness    time.Duration
+	WebhookTimeout                   time.Duration
+	WorkerInterval                   time.Duration
+	AuthFailuresPerMinute            int
+	MutationRatePerSecond            int
+	MutationBurst                    int
+	BFF                              BrowserAuthConfig
 }
 
 type BrowserAuthConfig struct {
@@ -66,11 +65,6 @@ func Load() (Config, error) {
 		DelegationAudience:     strings.TrimSpace(os.Getenv("DELEGATION_AUDIENCE")),
 		DelegationDiscoveryURL: strings.TrimSpace(os.Getenv("DELEGATION_DISCOVERY_URL")),
 	}
-	if rawClients := strings.TrimSpace(os.Getenv("DELEGATION_CLIENT_PROFILES")); rawClients != "" {
-		if c.DelegationClients, err = auth.ParseDelegationClientRegistry(rawClients); err != nil {
-			return Config{}, err
-		}
-	}
 	parsed, err := url.Parse(databaseURL)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {
 		return Config{}, errors.New("DATABASE_URL must be a valid PostgreSQL URL")
@@ -88,6 +82,15 @@ func Load() (Config, error) {
 	}
 	if c.WorkerInterval, err = duration("WORKER_INTERVAL", time.Second); err != nil {
 		return Config{}, err
+	}
+	if c.DelegationProfileRefreshInterval, err = duration("DELEGATION_PROFILE_REFRESH_INTERVAL", 10*time.Second); err != nil {
+		return Config{}, err
+	}
+	if c.DelegationProfileMaxStaleness, err = duration("DELEGATION_PROFILE_MAX_STALENESS", time.Minute); err != nil {
+		return Config{}, err
+	}
+	if c.DelegationProfileRefreshInterval >= c.DelegationProfileMaxStaleness {
+		return Config{}, errors.New("DELEGATION_PROFILE_REFRESH_INTERVAL must be shorter than DELEGATION_PROFILE_MAX_STALENESS")
 	}
 	if c.AuthFailuresPerMinute, err = positiveInt("AUTH_FAILURES_PER_MINUTE", 30); err != nil {
 		return Config{}, err

@@ -83,7 +83,7 @@ type delegatedAccessClaims struct {
 // Browser OIDC access and ID tokens deliberately continue through JWKSVerifier.
 type DelegationVerifier struct {
 	issuer, audience, discoveryURL string
-	clients                        DelegationClientRegistry
+	clients                        DelegationClientResolver
 	client                         *http.Client
 	mu                             sync.RWMutex
 	refreshMu                      sync.Mutex
@@ -94,7 +94,7 @@ type DelegationVerifier struct {
 	now                            func() time.Time
 }
 
-func NewDelegationVerifier(issuer, audience, discoveryURL string, clients DelegationClientRegistry, client *http.Client) *DelegationVerifier {
+func NewDelegationVerifier(issuer, audience, discoveryURL string, clients DelegationClientResolver, client *http.Client) *DelegationVerifier {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
@@ -179,7 +179,7 @@ func (v *DelegationVerifier) Verify(ctx context.Context, raw string) (*Claims, e
 		claims.App = detail.Context.Application
 		claims.Environment = detail.Context.Environment
 	}
-	if err := v.clients.authenticate(claims, delegated.Scope); err != nil {
+	if err := v.clients.Authenticate(claims, delegated.Scope, detail.ContextProfileVersion); err != nil {
 		return nil, err
 	}
 	return claims, nil

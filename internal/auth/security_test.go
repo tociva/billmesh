@@ -20,6 +20,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type tokenVerifierFunc func(context.Context, string) (*Claims, error)
+
+func (f tokenVerifierFunc) Verify(ctx context.Context, token string) (*Claims, error) {
+	return f(ctx, token)
+}
+
 func securityToken(t *testing.T, key *rsa.PrivateKey, kid, issuer string, now time.Time, mutate func(*Claims)) string {
 	t.Helper()
 	claims := Claims{
@@ -163,6 +169,25 @@ func TestSecurityMiddlewareRejectsDuplicateAuthorizationBeforeHandler(t *testing
 	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
 	require.Equal(t, "missing or ambiguous bearer token", body["error"])
 	require.Zero(t, calls.Load())
+}
+
+func TestSecurityMiddlewareReportsUnavailableDelegationPolicy(t *testing.T) {
+	handler := Middleware(tokenVerifierFunc(func(context.Context, string) (*Claims, error) {
+		return nil, ErrDelegationPolicyUnavailable
+	}))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler must not run when delegation policy is unavailable")
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer delegated-token")
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code)
+	require.Equal(t, "30", resp.Header().Get("Retry-After"))
+	var body map[string]string
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+	require.Equal(t, "authorization policy is temporarily unavailable", body["error"])
 }
 
 func TestSecurityVerifierJWKSOutageGraceAndRecovery(t *testing.T) {

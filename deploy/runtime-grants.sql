@@ -5,6 +5,9 @@ GRANT CONNECT ON DATABASE :"database_name" TO :"runtime_role";
 GRANT USAGE ON SCHEMA billmesh TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA billmesh TO :"runtime_role";
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA billmesh TO :"runtime_role";
+REVOKE INSERT, UPDATE, DELETE ON TABLE billmesh.delegation_client_profiles FROM :"runtime_role";
+REVOKE ALL ON TABLE billmesh.delegation_client_profile_events FROM :"runtime_role";
+REVOKE ALL ON SEQUENCE billmesh.delegation_client_profile_events_id_seq FROM :"runtime_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_role" IN SCHEMA billmesh
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"runtime_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_role" IN SCHEMA billmesh

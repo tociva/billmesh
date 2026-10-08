@@ -23,7 +23,9 @@ go run ./cmd/billmesh api
 
 Billmesh automatically loads `.env` when it starts. Existing environment variables take precedence, and `.env` is ignored by Git. Copy `.env.example` for local development; production deployments should supply configuration through their environment or secret manager. Local configuration uses `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, and `DB_SSLMODE`; the legacy `DATABASE_URL` remains supported and takes precedence when provided.
 
-`make db-bootstrap` starts the local PostgreSQL and mock services, synchronizes the local PostgreSQL role password with `DB_PASSWORD`, terminates connections to the local `billmesh` database, drops and recreates it, and applies every migration. Local bootstrap deliberately manages only the `billmesh` database configured as `DB_NAME=billmesh`.
+`make db-bootstrap` starts the local PostgreSQL and mock services, synchronizes the local PostgreSQL role password with `DB_PASSWORD`, terminates connections to the local `billmesh` database, drops and recreates it, applies every migration, and loads the development IdNest delegation profiles from `deploy/delegation-profiles.dev.sql`. Local bootstrap deliberately manages only the `billmesh` database configured as `DB_NAME=billmesh`.
+
+Trusted delegation profiles are database records, not environment configuration. The API loads an immutable snapshot at startup and refreshes it periodically. Profile changes therefore do not require an API restart. Use a migration/control-plane database role to add, update, or disable profiles; the runtime role has read-only access to the active profile table and no access to its audit history.
 
 Application tables, types, functions, indexes, and sequences live in the dedicated `billmesh` schema. Runtime connections use only that schema; migration connections temporarily retain `public` as a fallback so databases created with older migrations can be upgraded safely.
 
