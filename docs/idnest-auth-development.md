@@ -13,7 +13,6 @@ OIDC_ISSUER="https://hydra-dev.idnest.cloud/"
 OIDC_AUDIENCE="billmesh"
 IDNEST_STANDALONE_LOGOUT_URI="https://auth-dev.idnest.cloud/logout"
 IDNEST_TOKEN_BROKER_AUDIENCE="urn:idnest:token-broker"
-IDNEST_TOKEN_BROKER_SCOPE="billmesh.token.issue"
 IDNEST_SERVICE_TOKEN_BROKER_URL="https://auth-dev.idnest.cloud/auth/v1/service-tokens"
 ```
 
@@ -116,14 +115,13 @@ profile. Every client uses the two-stage IdNest service-token flow:
 | Grant type | `client_credentials` |
 | Token endpoint authentication | `client_secret_basic` |
 | Hydra token audience | `urn:idnest:token-broker` |
-| Hydra token scope | `billmesh.token.issue` |
 | Broker endpoint | `https://auth-dev.idnest.cloud/auth/v1/service-tokens` |
 | Resulting resource audience | `billmesh` |
 | Resulting signing algorithm | `RS256` |
 | Maximum resulting lifetime | Five minutes |
 
-1. The consumer authenticates to Hydra with `client_credentials`, audience
-   `urn:idnest:token-broker`, and scope `billmesh.token.issue`.
+1. The consumer authenticates to Hydra with `client_credentials` and audience
+   `urn:idnest:token-broker`.
 2. The consumer asks the IdNest broker for a short-lived token with audience
    `billmesh`, its fixed application, the environment `development`, and—when
    required—the authorized organization ID.
@@ -330,8 +328,8 @@ environment, organization, client profile, issuer, or audience.
   token is addressed to that same client.
 - Only identities assigned to `billmesh-admin-bff-dev` can complete Admin
   login, and removing an identity revokes its grants and refresh tokens.
-- Each M2M client can request only the broker audience and issuance scope
-  needed for its fixed application and profile.
+- Each M2M client can request only the broker audience needed for its fixed
+  application and profile.
 - The broker preserves the authenticated OAuth client as the output
   `client_id`, emits `app` and `environment`, and rejects an unauthorized or
   empty organization for organization-scoped profiles.
