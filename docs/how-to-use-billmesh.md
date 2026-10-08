@@ -348,8 +348,3 @@ Before approving an application for production, the Billmesh team must confirm:
 - dashboards, alerts, reconciliation jobs, runbooks, and escalation owners are
   active; and
 - duplicate direct subscription mutation routes have been removed.
-
-The detailed engineering backlog and definition of done are tracked in
-[`api-publication-plan.md`](api-publication-plan.md). The broader architectural
-backlog is tracked in
-[`authoritative-billing-plan.md`](authoritative-billing-plan.md).

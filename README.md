@@ -139,11 +139,10 @@ Consumer applications should also follow
 Billmesh/application responsibility boundary, the supported integration flow,
 and the remaining production-publication gates. The exact consumer route
 allowlist is documented in
-[`docs/public-api-surface.md`](docs/public-api-surface.md). The ordered
-implementation and release work is tracked in
-[`docs/api-publication-plan.md`](docs/api-publication-plan.md).
+[`docs/public-api-surface.md`](docs/public-api-surface.md).
 
 The service identity, event-delivery, and failure contracts are documented in
+[`docs/idnest-auth-development.md`](docs/idnest-auth-development.md),
 [`docs/idnest-token-profile.md`](docs/idnest-token-profile.md),
 [`docs/webhook-contract.md`](docs/webhook-contract.md), and
 [`docs/api-error-codes.md`](docs/api-error-codes.md).
@@ -233,7 +232,7 @@ Integration, E2E, restore, and performance databases are disposable test infrast
 
 `make test-integration` is self-contained and uses the `billmesh-integration` Compose project with a memory-backed disposable database exposed only on local port `5434`, avoiding the development database on port `5433`. It always removes its container through a shell exit trap, including after failures or interruption. Override `INTEGRATION_DB_PORT` if port `5434` is unavailable, or override `INTEGRATION_DATABASE_URL` only when intentionally testing against another disposable PostgreSQL instance.
 
-Tests are grouped under `tests/unit`, `tests/integration`, `tests/e2e`, and `tests/performance`, then by business category. Every checklist ID in `test-plan.md` is exposed as an individually named test or benchmark. The four cross-module business journeys live under `tests/e2e/journeys`.
+Tests are grouped under `tests/unit`, `tests/integration`, `tests/e2e`, and `tests/performance`, then by business category. Every case ID in `tests/testdata/test-cases.md` is exposed as an individually named test or benchmark. The four cross-module business journeys live under `tests/e2e/journeys`.
 
 Test commands use a grouped, Mocha-style reporter. Packages are rendered as suites, nested Go subtests are indented, passing, failing, and skipped cases have distinct colors, and every run ends with a compact test/package summary. Failure logs and assertion details remain visible, followed by a focused diagnostic summary. Set `NO_COLOR=1` to disable ANSI colors or `TEST_OUTPUT_STYLE=raw` to print unformatted `go test` output.
 

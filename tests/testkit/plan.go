@@ -23,7 +23,7 @@ func Cases(t testing.TB, prefix, kind string) []PlanCase {
 		t.Fatalf("%v", err)
 	}
 	if len(cases) == 0 {
-		t.Fatalf("no %s/%s cases found in test-plan.md", prefix, kind)
+		t.Fatalf("no %s/%s cases found in test-cases.md", prefix, kind)
 	}
 	return cases
 }
@@ -42,10 +42,10 @@ func cases(prefix, kind string) ([]PlanCase, error) {
 	if !ok {
 		return nil, fmt.Errorf("resolve testkit source path")
 	}
-	path := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", "docs", "test-plan.md"))
+	path := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "testdata", "test-cases.md"))
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open test plan: %w", err)
+		return nil, fmt.Errorf("open test-case manifest: %w", err)
 	}
 	defer file.Close()
 
@@ -90,7 +90,7 @@ func cases(prefix, kind string) ([]PlanCase, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read test plan: %w", err)
+		return nil, fmt.Errorf("read test-case manifest: %w", err)
 	}
 	if current != nil && current.Description != "" && (kind == "" || current.Kind == kind) {
 		cases = append(cases, *current)

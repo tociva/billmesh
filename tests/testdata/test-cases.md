@@ -1,4 +1,4 @@
-# Billmesh — Complete Backend Test Case Checklist
+# Billmesh backend test-case manifest
 
 The following covers the agreed Billmesh scope: subscriptions, billing, credit wallets, real-time metering, Razorpay payments, notifications, and application integration.
 
