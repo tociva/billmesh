@@ -116,7 +116,7 @@ profile. Every client uses the two-stage IdNest service-token flow:
 | Token endpoint authentication | `client_secret_basic` |
 | Hydra token audience | `urn:idnest:token-broker` |
 | Broker endpoint | `https://auth-dev.idnest.cloud/auth/v1/service-tokens` |
-| Resulting resource audience | `billmesh` |
+| Resulting resource audience | `billmesh` (service-token broker value; not an IdNest **Delegated Access** resource) |
 | Resulting signing algorithm | `RS256` |
 | Maximum resulting lifetime | Five minutes |
 
@@ -130,6 +130,60 @@ The broker must derive the output profile from the authenticated client. It
 must not accept a caller-selected profile or emit another client's
 `client_id`. The resulting RS256 JWT must include the exact OAuth `client_id`
 that Billmesh registers below.
+
+### IdNest Delegated Access is a different token contract
+
+Do not create the `billmesh` audience in **Security Administration → Delegated
+Access** for the service-token flow above. There are no field values on that
+screen that produce the token described by this document:
+
+- **Audience** requires an absolute URI, while this contract deliberately uses
+  the opaque audience `billmesh`.
+- **Authorizer OAuth client** accepts one `client_credentials` client with the
+  `delegation.grant` scope and the `urn:idnest:delegation` broker audience.
+  The clients in this document instead authenticate to
+  `urn:idnest:token-broker` and call `/auth/v1/service-tokens`.
+- An approved actor must have `delegation.exchange`, exchange a one-time grant,
+  and receive an ES256 token from IdNest's delegation issuer. Billmesh
+  currently accepts RS256 tokens from `https://hydra-dev.idnest.cloud/`.
+- A Delegated Access token carries `scope` and `authorization_details`; it does
+  not satisfy Billmesh's required `app`, `environment`, `actor_type`, and
+  organization-context claims.
+
+The IdNest service-token broker must therefore provision `billmesh` in its own
+client-to-resource policy. The Delegated Access screen is not that policy.
+
+If Billmesh is intentionally migrated to IdNest Delegated Access, stage the
+resource with the following values. Keep it disabled until Billmesh supports
+the delegation issuer, ES256 JWKS, claims, context resolution, and grant/token
+exchange endpoints:
+
+| Delegated Access field | Staged development value | Notes |
+| --- | --- | --- |
+| Display name | `Billmesh API (development)` | Human-readable name only. |
+| Resource key | `billmesh-api-dev` | Stable locator; it cannot be changed after creation. |
+| Audience | `https://api-dev.billme.sh` | Exact absolute URI, with no trailing slash, credentials, or fragment. This would replace `billmesh` throughout the Billmesh and consumer configuration after migration. |
+| Authorizer OAuth client | `billmesh-delegation-authorizer-dev` | A new Billmesh-owned confidential client allowing only `client_credentials`, broker audience `urn:idnest:delegation`, and scope `delegation.grant`. Do not select a consumer profile client here. |
+| Allowed scopes | `billmesh.catalogue`, `billmesh.billing`, `billmesh.runtime`, and, only when needed, `billmesh.admin` | These constrain IdNest grants; Billmesh must continue deriving its fixed API profile from the signed actor `client_id`, not from a caller-selected scope. Add each value with **Add scope**. |
+| Token lifetime | `5 minutes` | Matches the maximum in this contract; a shorter value is allowed. |
+| Status | `Disabled` while staging; `Active` only after migration and verification | Prevents issuance against a verifier that cannot accept the resulting token. |
+| Require authorization context | On | The grant must include an opaque reference that Billmesh resolves to current organization and authorization data. Do not put trusted roles or organization data directly in this string. |
+| Change reason | `Initialize Billmesh development delegated-access resource` | Recommended audit description. |
+
+After creating the resource, configure **Approved actors**. Each actor must be
+a `client_credentials` client with broker audience `urn:idnest:delegation` and
+scope `delegation.exchange`; assign only the corresponding resource scope:
+
+| Approved actor client | Allowed scope |
+| --- | --- |
+| `daybook-billmesh-catalogue-dev`, `taskmesh-billmesh-catalogue-dev` | `billmesh.catalogue` |
+| `daybook-billmesh-billing-dev`, `taskmesh-billmesh-billing-dev` | `billmesh.billing` |
+| `daybook-billmesh-runtime-dev`, `taskmesh-billmesh-runtime-dev` | `billmesh.runtime` |
+| `billmesh-service-admin-dev` (when provisioned) | `billmesh.admin` |
+
+The authorizer and actor OAuth-client changes above replace the current
+service-token settings as part of a coordinated migration; do not silently add
+both contracts and assume the same token works for each flow.
 
 ### Catalogue clients
 
