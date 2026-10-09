@@ -20,6 +20,7 @@ type Router struct {
 func NewRouter(managers ...*Manager) (*Router, error) {
 	router := &Router{managers: managers, byOrigin: make(map[string]*Manager, len(managers))}
 	seenRealms := make(map[string]bool, len(managers))
+	seenClients := make(map[string]bool, len(managers))
 	callbackOrigin := ""
 	for _, manager := range managers {
 		if manager == nil {
@@ -31,7 +32,12 @@ func NewRouter(managers ...*Manager) (*Router, error) {
 		if _, exists := router.byOrigin[manager.AppOrigin()]; exists {
 			return nil, errors.New("BFF application origins must be unique")
 		}
+		clientKey := strings.TrimRight(manager.config.Issuer, "/") + "\x00" + manager.config.ClientID
+		if seenClients[clientKey] {
+			return nil, errors.New("console and admin BFF realms must use separate OIDC clients")
+		}
 		seenRealms[manager.config.Realm] = true
+		seenClients[clientKey] = true
 		router.byOrigin[manager.AppOrigin()] = manager
 		redirect, err := url.Parse(manager.config.RedirectURI)
 		if err != nil {

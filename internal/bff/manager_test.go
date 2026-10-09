@@ -102,11 +102,11 @@ func TestBrowserRedirectHasNoResponseBody(t *testing.T) {
 	require.Equal(t, "https://console.billmesh.example/auth/error?reason=login_failed", response.Header().Get("Location"))
 }
 
-func TestAdminRealmRequiresMatchingClientID(t *testing.T) {
+func TestAdminRealmDependsOnMatchingClientIDNotPermissionScope(t *testing.T) {
 	cfg := testConfig()
 	cfg.Realm = "admin"
 	manager := &Manager{config: cfg}
-	require.ErrorContains(t, manager.validateRealmClaims(&auth.Claims{}), "client_id")
+	require.ErrorContains(t, manager.validateRealmClaims(&auth.Claims{ClientID: "console-client", Scope: "billing:admin"}), "client_id")
 	claims := &auth.Claims{ClientID: cfg.ClientID}
 	require.NoError(t, manager.validateRealmClaims(claims))
 	require.Equal(t, auth.ClientAdmin, claims.ClientType)

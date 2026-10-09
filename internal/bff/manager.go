@@ -549,6 +549,8 @@ func (m *Manager) validateRealmClaims(claims *auth.Claims) error {
 	}
 	switch m.config.Realm {
 	case "admin":
+		// IdNest admission to the dedicated Admin client is the authorization
+		// boundary. Browser Admin access does not depend on a custom OAuth scope.
 		claims.ClientType = auth.ClientAdmin
 	case "console":
 		claims.ClientType = auth.ClientConsole

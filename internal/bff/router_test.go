@@ -72,6 +72,15 @@ func TestRouterRequiresOneSharedAPICallbackOrigin(t *testing.T) {
 	require.ErrorContains(t, err, "same API callback origin")
 }
 
+func TestRouterRequiresSeparateOIDCClientsForConsoleAndAdmin(t *testing.T) {
+	console, admin, _ := testManagers(t)
+	admin.config.Issuer = console.config.Issuer
+	admin.config.ClientID = console.config.ClientID
+
+	_, err := NewRouter(console, admin)
+	require.ErrorContains(t, err, "separate OIDC clients")
+}
+
 func TestRouterAuthHandlerUnknownRealmReturnsJSON(t *testing.T) {
 	_, _, router := testManagers(t)
 	response := httptest.NewRecorder()

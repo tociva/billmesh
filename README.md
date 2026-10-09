@@ -200,7 +200,10 @@ file. Register each realm's redirect and post-logout redirect URI exactly.
 Each realm has its own issuer, audience, client, scope, and token verifier. The
 default scope requests a refresh token by including `offline_access`; both
 IdNest clients must be allowed to issue it. Billmesh recognizes administrative
-sessions by the configured Admin client ID rather than an API permission scope.
+sessions by the configured Admin issuer/client pair rather than an API
+permission scope. The Console and Admin realms must use separate OIDC clients,
+and IdNest must restrict the Admin client to approved administrators. Anyone
+IdNest permits to complete the Admin client flow receives Billmesh Admin access.
 
 `BFF_SESSION_ENCRYPTION_KEYS` is a Billmesh secret rather than an IdNest
 credential. Generate it with the command in the local setup section above. The
