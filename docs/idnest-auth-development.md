@@ -27,7 +27,7 @@ application must never be able to nominate another application's actors.
 
 Example Daybook clients:
 
-| Client | Broker scope | Billmesh scope | Actor type |
+| Client | Broker scope | Billmesh scope | Billmesh actor type |
 | --- | --- | --- | --- |
 | `daybook-billmesh-authorizer-dev` | `delegation.grant` | — | — |
 | `daybook-billmesh-catalogue-dev` | `delegation.exchange` | `billmesh.catalogue` | `service` |
@@ -38,6 +38,55 @@ Example Daybook clients:
 Create equivalent authorizer/actor policies for Taskmesh or another consumer.
 The actor credential alone never chooses its application, environment, API
 profile, actor type, or scope.
+
+### Create the Daybook catalogue actor
+
+Create `daybook-billmesh-catalogue-dev` in IdNest before adding it to the
+delegation resource:
+
+1. Open **Security Administration → OAuth clients** and choose **Create OAuth
+   client**.
+2. Select **Machine-to-machine** and enter these values:
+
+   | OAuth client field | Value |
+   | --- | --- |
+   | Client ID | `daybook-billmesh-catalogue-dev` |
+   | Client name | `Daybook Billmesh catalogue (development)` |
+   | Grant type | `client_credentials` (provided by the machine-to-machine profile) |
+   | Token endpoint authentication | `client_secret_basic` (provided by the machine-to-machine profile) |
+   | Scope | `delegation.exchange` only |
+   | Audience | `urn:idnest:delegation` |
+   | Redirect, logout, and CORS URIs | None |
+
+   `delegation.exchange` is a custom scope in the OAuth-client editor; enter it
+   and choose **Add scope**. Do not add `billmesh.catalogue` to this OAuth
+   client. That is a delegated resource scope and is assigned by the approved
+   actor policy below.
+3. Create the client and immediately copy its one-time secret to the Daybook
+   development secret store. Configure the Daybook backend with:
+
+   ```dotenv
+   BILLMESH_CATALOGUE_ACTOR_CLIENT_ID="daybook-billmesh-catalogue-dev"
+   BILLMESH_CATALOGUE_ACTOR_CLIENT_SECRET="<IDNEST_GENERATED_SECRET>"
+   ```
+
+   The secret is a server-side credential. Do not put it in either web
+   application, source control, logs, or this document.
+4. Open **Security Administration → Delegated Access → Billmesh API
+   (development) → Approved actors** and choose **Approve an actor**. Select
+   `daybook-billmesh-catalogue-dev`, allow only `billmesh.catalogue`, leave the
+   policy **Active**, and save it. The current IdNest contract validates on
+   save that the selected client allows `client_credentials`, the
+   `urn:idnest:delegation` audience, and `delegation.exchange`.
+5. Ensure the same authorizer/actor pair exists and is enabled in Billmesh's
+   `billmesh.delegation_client_profiles` registry. For local development the
+   matching record is maintained by `deploy/delegation-profiles.dev.sql` and
+   loaded by `make db-bootstrap`.
+
+The catalogue actor can exchange only a one-time grant created by
+`daybook-billmesh-authorizer-dev` for `billmesh-api-dev` and
+`billmesh.catalogue`. Its Hydra client-credentials token is broker
+infrastructure and must never be sent to a Billmesh `/v1/*` endpoint.
 
 ## Grant and exchange
 
