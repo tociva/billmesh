@@ -8,6 +8,76 @@ Browser Console and Admin sessions remain separate confidential OIDC flows.
 Their RS256 access and ID tokens are verified only by the BFF managers and are
 not part of the delegated service contract described here.
 
+## Browser login clients
+
+Create two separate confidential OAuth clients in IdNest. The browser never
+receives either client secret or the provider tokens; the Billmesh API acts as
+the backend-for-frontend (BFF) for both applications.
+
+In **Security Administration → OAuth clients**, choose **Create OAuth client**,
+select **Server web app**, and create each client with these values:
+
+| OAuth client field | Console | Admin |
+| --- | --- | --- |
+| Client ID | `billmesh-console-bff-dev` | `billmesh-admin-bff-dev` |
+| Client name | `Billmesh Console BFF (development)` | `Billmesh Admin BFF (development)` |
+| Grant types | `authorization_code`, `refresh_token` | `authorization_code`, `refresh_token` |
+| Response type | `code` | `code` |
+| Token endpoint authentication | `client_secret_basic` | `client_secret_basic` |
+| Scopes | `openid profile email offline_access` | `openid profile email offline_access` |
+| Audience | `billmesh` | `billmesh` |
+| Redirect URI | `https://api-dev.billme.sh/api/v1/auth/console/callback` | `https://api-dev.billme.sh/api/v1/auth/admin/callback` |
+| Post-logout redirect URI | `https://api-dev.billme.sh/api/v1/auth/console/logout/callback` | `https://api-dev.billme.sh/api/v1/auth/admin/logout/callback` |
+| Application return URI | `https://api-dev.billme.sh/api/v1/auth/console/logout/callback` | `https://api-dev.billme.sh/api/v1/auth/admin/logout/callback` |
+| Allowed CORS origins | None | None |
+| Trust tier | First party | First party |
+| Remember refresh-token consent | On | On |
+
+The **Application return URI** is the BFF callback used by IdNest's standalone
+logout flow. The BFF then redirects the browser to the corresponding Console or
+Admin application. Register exact HTTPS URLs; do not register the frontend
+origin as an OAuth redirect or Hydra CORS origin.
+
+Create or select an authentication policy for each client while creating it:
+
+- The Console policy should admit only identities allowed to use the Billmesh
+  Console. Use a domain or email allowlist unless public verified-user access is
+  an explicit product decision.
+- The Admin policy must use an explicit administrator email allowlist. Admission
+  to this dedicated IdNest client is the Billmesh administrative authorization
+  boundary; a custom OAuth scope does not grant Admin access.
+
+After creating each client, copy its one-time secret directly to the protected
+Billmesh development secret store and configure the API:
+
+```dotenv
+CONSOLE_APP_ORIGIN="https://console-dev.billme.sh"
+ADMIN_APP_ORIGIN="https://admin-dev.billme.sh"
+
+BFF_CONSOLE_ISSUER="https://hydra-dev.idnest.cloud/"
+BFF_CONSOLE_CLIENT_ID="billmesh-console-bff-dev"
+BFF_CONSOLE_CLIENT_SECRET="<IDNEST_GENERATED_CONSOLE_SECRET>"
+BFF_CONSOLE_AUDIENCE="billmesh"
+BFF_CONSOLE_SCOPE="openid profile email offline_access"
+BFF_CONSOLE_REDIRECT_URI="https://api-dev.billme.sh/api/v1/auth/console/callback"
+BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI="https://api-dev.billme.sh/api/v1/auth/console/logout/callback"
+BFF_CONSOLE_STANDALONE_LOGOUT_URI="https://auth-dev.idnest.cloud/logout"
+
+BFF_ADMIN_ISSUER="https://hydra-dev.idnest.cloud/"
+BFF_ADMIN_CLIENT_ID="billmesh-admin-bff-dev"
+BFF_ADMIN_CLIENT_SECRET="<IDNEST_GENERATED_ADMIN_SECRET>"
+BFF_ADMIN_AUDIENCE="billmesh"
+BFF_ADMIN_SCOPE="openid profile email offline_access"
+BFF_ADMIN_REDIRECT_URI="https://api-dev.billme.sh/api/v1/auth/admin/callback"
+BFF_ADMIN_POST_LOGOUT_REDIRECT_URI="https://api-dev.billme.sh/api/v1/auth/admin/logout/callback"
+BFF_ADMIN_STANDALONE_LOGOUT_URI="https://auth-dev.idnest.cloud/logout"
+```
+
+These clients must remain distinct. Do not give either client
+`delegation.grant` or `delegation.exchange`, approve it as a delegation actor,
+or add it to `billmesh.delegation_client_profiles`. Their secrets belong only
+in the Billmesh API runtime, never in the Console or Admin frontend.
+
 ## Development resource
 
 Configure one active IdNest delegation resource:
