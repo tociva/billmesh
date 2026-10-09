@@ -74,6 +74,55 @@ func TestProductBillingPolicyContractAndVersioning(t *testing.T) {
 	}, admin)
 }
 
+func TestCatalogueTransferV2ValidatesImportsExportsAndRejectsConflicts(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	admin := h.IssueToken(t, testkit.Unique("transfer-admin"), "daybook", testkit.AllPermissions(), nil)
+	metadata := testkit.Decode[struct {
+		Defaults map[string]any `json:"defaults"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/product-policy-metadata", nil, admin))
+	slug := testkit.Unique("transfer-product")
+	transfer := map[string]any{
+		"schema_version": 2,
+		"exported_at":    "2026-10-09T00:00:00Z",
+		"products": []any{map[string]any{
+			"slug": slug, "name": "Transfer product", "description": "Atomic transfer test",
+			"entitlement_schema": map[string]any{"fields": []any{}}, "billing_policy": metadata.Defaults, "active": true,
+			"plans": []any{map[string]any{
+				"slug": slug + "-free", "plan_family_id": "free", "name": "Free", "description": "Free plan",
+				"price_minor": 0, "currency": "INR", "included_credits": 10, "entitlements": map[string]any{},
+				"billing_interval": "monthly", "billing_model": "free", "selectable": true,
+				"default_for_product": true, "checkout_enabled": true, "active": true,
+			}},
+			"credit_packs": []any{map[string]any{
+				"slug": slug + "-credits", "name": "100 Credits", "credits": 100, "price_minor": 9900,
+				"currency": "INR", "validity_days": nil, "active": true,
+			}},
+		}},
+	}
+	validation := testkit.Decode[struct {
+		Valid       bool `json:"valid"`
+		Products    int  `json:"products"`
+		Plans       int  `json:"plans"`
+		CreditPacks int  `json:"credit_packs"`
+	}](t, h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/admin/catalogue/import/validate", transfer, admin))
+	if !validation.Valid || validation.Products != 1 || validation.Plans != 1 || validation.CreditPacks != 1 {
+		t.Fatalf("unexpected transfer validation: %+v", validation)
+	}
+	imported := testkit.Decode[struct {
+		Products    int `json:"products"`
+		Plans       int `json:"plans"`
+		CreditPacks int `json:"credit_packs"`
+	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/catalogue/import", transfer, admin))
+	if imported.Products != 1 || imported.Plans != 1 || imported.CreditPacks != 1 {
+		t.Fatalf("unexpected transfer result: %+v", imported)
+	}
+	exported := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/catalogue/export", nil, admin)
+	if !strings.Contains(string(exported), `"slug":"`+slug+`"`) || !strings.Contains(string(exported), `"slug":"`+slug+`-credits"`) {
+		t.Fatalf("export did not preserve imported product and credit pack: %s", exported)
+	}
+	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/admin/catalogue/import", transfer, admin)
+}
+
 func TestAutomaticDefaultPlanOnboardingUsesProductPolicy(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	admin := h.IssueToken(t, testkit.Unique("onboarding-admin"), "daybook", testkit.AllPermissions(), nil)

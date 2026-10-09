@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "exported_at": "2026-10-09T00:00:00.000Z",
+  "products": [
+    {
+      "slug": "daybook",
+      "name": "Daybook",
+      "description": "Accounting, invoicing, workflow, and business operations for growing teams.",
+      "entitlement_schema": {
+        "fields": [
+          {
+            "key": "branches",
+            "label": "Maximum branches",
+            "description": "Maximum number of active business branches.",
+            "type": "integer",
+            "unit": "branch",
+            "enforcement": "limit",
+            "resource": "branches",
+            "required": true,
+            "default": 1,
+            "minimum": 0
+          },
+          {
+            "key": "users",
+            "label": "Maximum users",
+            "description": "Maximum number of active interactive users.",
+            "type": "integer",
+            "unit": "user",
+            "enforcement": "limit",
+            "resource": "users",
+            "required": true,
+            "default": 1,
+            "minimum": 0
+          },
+          {
+            "key": "serviceusers",
+            "label": "Maximum service users",
+            "description": "Maximum number of active non-interactive service users.",
+            "type": "integer",
+            "unit": "service user",
+            "enforcement": "limit",
+            "resource": "service_users",
+            "required": true,
+            "default": 0,
+            "minimum": 0
+          },
+          {
+            "key": "workflow_execution",
+            "label": "Workflow execution",
+            "description": "Allows workflows to execute inside Daybook.",
+            "type": "boolean",
+            "enforcement": "feature",
+            "required": true,
+            "default": true
+          },
+          {
+            "key": "standalone_workflow",
+            "label": "Standalone workflow",
+            "description": "Allows workflows to execute independently of Daybook records.",
+            "type": "boolean",
+            "enforcement": "feature",
+            "required": true,
+            "default": false
+          }
+        ]
+      },
+      "billing_policy": {
+        "schema_version": 1,
+        "customer": {
+          "scope": "identity",
+          "free_allowance": 1,
+          "ownership_change": "retain",
+          "ownership_transfer": "unsupported",
+          "ineligible_owner_action": "require_paid_checkout"
+        },
+        "onboarding": {
+          "allow_without_subscription": true,
+          "initial_plan": "automatic_default",
+          "ineligible_action": "require_paid_checkout",
+          "deletion_retention": "retain"
+        },
+        "catalogue": {
+          "access": "application_token",
+          "required_before_account": false,
+          "presentation_fields": [
+            "description",
+            "price",
+            "entitlements",
+            "availability",
+            "effective_dates"
+          ],
+          "trial_enabled": false,
+          "trial_days": 0,
+          "trial_conversion": "expire"
+        },
+        "lifecycle": {
+          "free_to_paid": "immediate_after_capture",
+          "paid_to_paid": "checkout",
+          "downgrade": "period_end",
+          "cancellation_default": "period_end",
+          "allow_immediate_cancel": true,
+          "immediate_cancel_refund": "none",
+          "allow_cancellation_withdraw": false,
+          "reactivation": "new_transition",
+          "over_limit": "block_new",
+          "renewal": "provider_event",
+          "grace_period_days": 3,
+          "dunning": "grace_period",
+          "expiration": "cancel",
+          "refund_entitlements": "revoke",
+          "chargeback_entitlements": "revoke"
+        },
+        "projection": {
+          "fresh_seconds": 300,
+          "degraded_seconds": 0,
+          "fail_closed_operations": [
+            "account_create",
+            "subscription_change",
+            "credit_purchase",
+            "resource_create",
+            "limit_increase"
+          ],
+          "refresh_seconds": 60,
+          "reconciliation_seconds": 300
+        },
+        "checkout": {
+          "allowed_redirect_origins": [],
+          "presentation": "modal",
+          "recurring_mandate": false,
+          "confirmation": "poll_and_webhook"
+        }
+      },
+      "active": true,
+      "plans": [
+        {
+          "slug": "daybook-free",
+          "plan_family_id": "free",
+          "name": "Daybook Free",
+          "description": "For an individual getting started with one branch and one user.",
+          "price_minor": 0,
+          "currency": "INR",
+          "included_credits": 100,
+          "entitlements": {
+            "branches": 1,
+            "users": 1,
+            "serviceusers": 0,
+            "workflow_execution": true,
+            "standalone_workflow": false
+          },
+          "billing_interval": "monthly",
+          "billing_model": "free",
+          "selectable": true,
+          "default_for_product": true,
+          "checkout_enabled": true,
+          "active": true
+        },
+        {
+          "slug": "daybook-basic-monthly",
+          "plan_family_id": "basic",
+          "name": "Daybook Basic",
+          "description": "Monthly billing for a small business with one branch and one user.",
+          "price_minor": 10000,
+          "currency": "INR",
+          "included_credits": 1000,
+          "entitlements": {
+            "branches": 1,
+            "users": 1,
+            "serviceusers": 0,
+            "workflow_execution": true,
+            "standalone_workflow": false
+          },
+          "billing_interval": "monthly",
+          "billing_model": "paid",
+          "selectable": true,
+          "default_for_product": false,
+          "checkout_enabled": true,
+          "active": true
+        },
+        {
+          "slug": "daybook-basic-annual",
+          "plan_family_id": "basic",
+          "name": "Daybook Basic",
+          "description": "Annual billing for a small business with one branch and one user.",
+          "price_minor": 100000,
+          "currency": "INR",
+          "included_credits": 1000,
+          "entitlements": {
+            "branches": 1,
+            "users": 1,
+            "serviceusers": 0,
+            "workflow_execution": true,
+            "standalone_workflow": false
+          },
+          "billing_interval": "annual",
+          "billing_model": "paid",
+          "selectable": true,
+          "default_for_product": false,
+          "checkout_enabled": true,
+          "active": true
+        },
+        {
+          "slug": "daybook-professional-monthly",
+          "plan_family_id": "professional",
+          "name": "Daybook Professional",
+          "description": "Monthly billing for teams operating up to three branches with six users and one service user.",
+          "price_minor": 50000,
+          "currency": "INR",
+          "included_credits": 1000,
+          "entitlements": {
+            "branches": 3,
+            "users": 6,
+            "serviceusers": 1,
+            "workflow_execution": true,
+            "standalone_workflow": false
+          },
+          "billing_interval": "monthly",
+          "billing_model": "paid",
+          "selectable": true,
+          "default_for_product": false,
+          "checkout_enabled": true,
+          "active": true
+        },
+        {
+          "slug": "daybook-professional-annual",
+          "plan_family_id": "professional",
+          "name": "Daybook Professional",
+          "description": "Annual billing for teams operating up to three branches with six users and one service user.",
+          "price_minor": 500000,
+          "currency": "INR",
+          "included_credits": 1000,
+          "entitlements": {
+            "branches": 3,
+            "users": 6,
+            "serviceusers": 1,
+            "workflow_execution": true,
+            "standalone_workflow": false
+          },
+          "billing_interval": "annual",
+          "billing_model": "paid",
+          "selectable": true,
+          "default_for_product": false,
+          "checkout_enabled": true,
+          "active": true
+        }
+      ],
+      "credit_packs": [
+        {
+          "slug": "credits-500",
+          "name": "500 Credits",
+          "credits": 500,
+          "price_minor": 49900,
+          "currency": "INR",
+          "validity_days": null,
+          "active": true
+        }
+      ]
+    }
+  ]
+}

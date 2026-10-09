@@ -410,6 +410,57 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Product" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/admin/catalogue/export:
+    get:
+      operationId: exportAdminCatalogue
+      tags: [Administration, Catalogue]
+      summary: Export a portable, lossless catalogue document
+      x-required-client-profile: admin
+      responses:
+        "200":
+          description: Catalogue transfer document containing products, plans, and credit packs.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueTransfer" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/catalogue/import/validate:
+    post:
+      operationId: validateAdminCatalogueImport
+      tags: [Administration, Catalogue]
+      summary: Validate a catalogue transfer without changing data
+      x-required-client-profile: admin
+      requestBody: { $ref: "#/components/requestBodies/CatalogueTransfer" }
+      responses:
+        "200":
+          description: Validation result, including conflicts and JSON-pointer issue paths.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueTransferValidation" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/catalogue/import:
+    post:
+      operationId: importAdminCatalogue
+      tags: [Administration, Catalogue]
+      summary: Atomically import a create-only catalogue transfer
+      x-required-client-profile: admin
+      requestBody: { $ref: "#/components/requestBodies/CatalogueTransfer" }
+      responses:
+        "201":
+          description: The entire catalogue was imported in one transaction.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueTransferImportResult" }
+        "409":
+          description: One or more product slugs already exist; nothing was imported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueTransferValidation" }
+        "422":
+          description: The transfer is invalid; nothing was imported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueTransferValidation" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/admin/product-policy-metadata:
     get:
       operationId: getProductPolicyMetadata
@@ -1266,6 +1317,11 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Reservation" }
   requestBodies:
+    CatalogueTransfer:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/CatalogueTransfer" }
     CreateAccount:
       required: true
       content:
@@ -1878,6 +1934,96 @@ components:
         price_minor: { type: integer, format: int64, minimum: 0 }
         currency: { type: string }
         validity_days: { type: [integer, "null"], minimum: 1 }
+    CatalogueTransferCreditPack:
+      type: object
+      additionalProperties: false
+      required: [slug, name, credits, price_minor, currency, validity_days, active]
+      properties:
+        slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        credits: { type: integer, format: int64, minimum: 1 }
+        price_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        validity_days: { type: [integer, "null"], minimum: 1 }
+        active: { type: boolean }
+    CatalogueTransferPlan:
+      type: object
+      additionalProperties: false
+      required: [slug, plan_family_id, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, selectable, default_for_product, checkout_enabled, active]
+      properties:
+        slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+        plan_family_id: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        price_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+        included_credits: { type: integer, format: int64, minimum: 0 }
+        entitlements: { $ref: "#/components/schemas/EntitlementValues" }
+        billing_interval: { type: string, enum: [monthly, annual] }
+        billing_model: { type: string, enum: [free, paid] }
+        selectable: { type: boolean }
+        default_for_product: { type: boolean }
+        checkout_enabled: { type: boolean }
+        effective_from: { type: string, format: date-time }
+        effective_to: { type: [string, "null"], format: date-time }
+        active: { type: boolean }
+    CatalogueTransferProduct:
+      type: object
+      additionalProperties: false
+      required: [slug, name, description, entitlement_schema, billing_policy, active, plans]
+      properties:
+        slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
+        billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
+        active: { type: boolean }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueTransferPlan" }
+        credit_packs:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueTransferCreditPack" }
+    CatalogueTransfer:
+      type: object
+      additionalProperties: false
+      required: [schema_version, products]
+      properties:
+        schema_version: { type: integer, enum: [1, 2] }
+        exported_at: { type: string, format: date-time }
+        products:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueTransferProduct" }
+    CatalogueTransferIssue:
+      type: object
+      additionalProperties: false
+      required: [path, code, message]
+      properties:
+        path: { type: string, description: JSON Pointer locating the invalid value. }
+        code: { type: string }
+        message: { type: string }
+    CatalogueTransferValidation:
+      type: object
+      additionalProperties: false
+      required: [valid, schema_version, products, plans, credit_packs, issues]
+      properties:
+        valid: { type: boolean }
+        schema_version: { type: integer }
+        products: { type: integer, minimum: 0 }
+        plans: { type: integer, minimum: 0 }
+        credit_packs: { type: integer, minimum: 0 }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueTransferIssue" }
+    CatalogueTransferImportResult:
+      type: object
+      additionalProperties: false
+      required: [schema_version, products, plans, credit_packs]
+      properties:
+        schema_version: { type: integer, const: 2 }
+        products: { type: integer, minimum: 0 }
+        plans: { type: integer, minimum: 0 }
+        credit_packs: { type: integer, minimum: 0 }
     CataloguePlan:
       type: object
       required: [id, plan_family_id, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, selectable, default_for_product, checkout_enabled, effective_from, version]
