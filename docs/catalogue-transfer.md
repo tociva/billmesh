@@ -25,6 +25,64 @@ or archived, the entire import is rejected. Billmesh never silently overwrites
 catalogue history. Any validation error or database failure rolls back the whole
 operation.
 
+## Bulk create and update
+
+Versioned bulk change sets are separate from portable create-only transfers:
+
+- `GET /v1/admin/catalogue/bulk/template` returns an empty schema-version 1
+  change set.
+- `POST /v1/admin/catalogue/bulk/validate` performs the same database-aware
+  work as apply, then rolls the transaction back.
+- `POST /v1/admin/catalogue/bulk/apply` commits the complete change set in one
+  transaction.
+
+Every product, plan, and credit pack declares `operation` as `create` or
+`update`. Creates require `expected_version: 0`; updates require the current
+positive row version. Delegated-access entries use the same rule. A stale
+version, missing update target, existing create target, validation error, or
+database failure rejects the whole change set. Omitted nested resources are
+left unchanged; bulk apply does not imply deletion.
+
+Product create/update documents may include `delegated_access`. Each entry
+contains one environment, one IdNest grant-authorizer client ID, and the actor
+bindings required by that product implementation. Each actor selects a
+Billmesh-controlled profile (`catalogue`, `billing`, or `runtime`) and an
+allowed actor type; Billmesh derives the scope and atomically materializes the
+runtime profiles. The actors array fully replaces that environment's previous
+actor set. Omitting `delegated_access` leaves existing configuration unchanged;
+including it updates only the listed environments. Archiving a product disables
+every materialized profile.
+
+For example, a product that needs only catalogue reads and runtime reporting
+can use this fragment; it does not need billing actors:
+
+```json
+{
+  "delegated_access": [
+    {
+      "environment": "development",
+      "expected_version": 0,
+      "enabled": true,
+      "authorizer_client_id": "example-billmesh-authorizer-dev",
+      "actors": [
+        {
+          "client_id": "example-billmesh-catalogue-dev",
+          "profile": "catalogue",
+          "actor_type": "service",
+          "enabled": true
+        },
+        {
+          "client_id": "example-billmesh-runtime-dev",
+          "profile": "runtime",
+          "actor_type": "service",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}
+```
+
 ## Environment-specific policy
 
 `billing_policy.checkout.allowed_redirect_origins` is configuration, not a

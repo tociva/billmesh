@@ -101,8 +101,8 @@ Example Daybook clients:
 | --- | --- | --- | --- |
 | `daybook-billmesh-authorizer-dev` | `delegation.grant` | — | — |
 | `daybook-billmesh-catalogue-dev` | `delegation.exchange` | `billmesh.catalogue` | `service` |
-| `daybook-billmesh-billing-user-dev` | `delegation.exchange` | `billmesh.billing` | `user` |
-| `daybook-billmesh-billing-service-dev` | `delegation.exchange` | `billmesh.billing` | `service` |
+| `daybook-billmesh-user-dev` | `delegation.exchange` | `billmesh.billing` | `user` |
+| `daybook-billmesh-billing-dev` | `delegation.exchange` | `billmesh.billing` | `service` |
 | `daybook-billmesh-runtime-dev` | `delegation.exchange` | `billmesh.runtime` | `service` |
 
 Create equivalent authorizer/actor policies for Taskmesh or another consumer.
@@ -149,9 +149,9 @@ delegation resource:
    save that the selected client allows `client_credentials`, the
    `urn:idnest:delegation` audience, and `delegation.exchange`.
 5. Ensure the same authorizer/actor pair exists and is enabled in Billmesh's
-   `billmesh.delegation_client_profiles` registry. For local development the
-   matching record is maintained by `deploy/delegation-profiles.dev.sql` and
-   loaded by `make db-bootstrap`.
+   `billmesh.delegation_client_profiles` registry. Product-scoped records are
+   created dynamically from the product's delegated-access configuration in
+   the admin UI or API; `make db-bootstrap` intentionally installs none.
 
 The catalogue actor can exchange only a one-time grant created by
 `daybook-billmesh-authorizer-dev` for `billmesh-api-dev` and
@@ -173,7 +173,7 @@ An organization-scoped grant resembles:
 {
   "resource": "billmesh-api-dev",
   "subject": "user-123",
-  "actorClientId": "daybook-billmesh-billing-user-dev",
+  "actorClientId": "daybook-billmesh-user-dev",
   "scope": ["billmesh.billing"],
   "authorizationContext": {
     "type": "urn:billmesh:context:v1",
@@ -243,17 +243,20 @@ DELEGATION_PROFILE_REFRESH_INTERVAL="10s"
 DELEGATION_PROFILE_MAX_STALENESS="1m"
 ```
 
-The authorizer/actor registrations live in `billmesh.delegation_client_profiles`.
-For local development, `make db-bootstrap` loads the idempotent records in
-`deploy/delegation-profiles.dev.sql`. Production onboarding must write profiles
-with a migration or control-plane database role; the API/worker runtime role
-cannot create, change, or delete them.
+The materialized authorizer/actor registrations live in
+`billmesh.delegation_client_profiles`. Configure them through product
+delegated access; the API writes the versioned parent configuration and its
+variable actor bindings atomically. Production onboarding must write profiles
+through the same admin API. The API/worker runtime role cannot mutate either
+table directly; it can only execute the narrowly scoped configuration
+functions.
 
 The API loads the complete enabled set before serving traffic and atomically
 refreshes it on the configured interval. A failed refresh retains the last
 known-good snapshot. Once that snapshot exceeds the maximum staleness, delegated
-requests fail closed with HTTP 503 until a valid snapshot is loaded. An empty or
-invalid enabled set also prevents API startup.
+requests fail closed with HTTP 503 until a valid snapshot is loaded. An empty
+enabled set is valid during initial bootstrap and rejects delegated tokens as
+unrecognized; an invalid set still prevents API startup.
 
 From the database registry Billmesh derives the application, environment, API
 profile, actor type, and context-profile version. Token input cannot override

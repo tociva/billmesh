@@ -68,18 +68,20 @@ func TestCachedResolverRetainsLastKnownGoodSnapshotAfterRefreshFailure(t *testin
 	require.NoError(t, resolver.Authenticate(&auth.Claims{AuthorizerClientID: "daybook-authorizer", ClientID: "billing"}, "billmesh.billing", 1))
 }
 
-func TestCachedResolverRejectsInvalidOrEmptySnapshots(t *testing.T) {
-	for name, profiles := range map[string][]auth.DelegationClientRegistration{
-		"empty":   nil,
-		"invalid": {billingProfile("billing"), billingProfile("billing")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			resolver, err := NewCachedResolver(loaderFunc(func(context.Context) ([]auth.DelegationClientRegistration, error) {
-				return profiles, nil
-			}), time.Second, time.Minute)
-			require.NoError(t, err)
-			require.Error(t, resolver.Refresh(context.Background()))
-			require.ErrorIs(t, resolver.Authenticate(&auth.Claims{}, "billmesh.billing", 1), auth.ErrDelegationPolicyUnavailable)
-		})
-	}
+func TestCachedResolverAllowsEmptySnapshotAndFailsClosed(t *testing.T) {
+	resolver, err := NewCachedResolver(loaderFunc(func(context.Context) ([]auth.DelegationClientRegistration, error) {
+		return nil, nil
+	}), time.Second, time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, resolver.Refresh(context.Background()))
+	require.Error(t, resolver.Authenticate(&auth.Claims{AuthorizerClientID: "authorizer", ClientID: "actor"}, "billmesh.billing", 1))
+}
+
+func TestCachedResolverRejectsInvalidSnapshot(t *testing.T) {
+	resolver, err := NewCachedResolver(loaderFunc(func(context.Context) ([]auth.DelegationClientRegistration, error) {
+		return []auth.DelegationClientRegistration{billingProfile("billing"), billingProfile("billing")}, nil
+	}), time.Second, time.Minute)
+	require.NoError(t, err)
+	require.Error(t, resolver.Refresh(context.Background()))
+	require.ErrorIs(t, resolver.Authenticate(&auth.Claims{}, "billmesh.billing", 1), auth.ErrDelegationPolicyUnavailable)
 }

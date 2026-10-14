@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/tociva/billmesh/internal/auth"
 	"github.com/tociva/billmesh/internal/products"
@@ -165,11 +166,12 @@ func (a *API) writeCatalogueAudit(ctx context.Context, tx pgx.Tx, action, resour
 
 func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Slug              string                     `json:"slug"`
-		Name              string                     `json:"name"`
-		Description       string                     `json:"description"`
-		EntitlementSchema products.EntitlementSchema `json:"entitlement_schema"`
-		BillingPolicy     *products.BillingPolicy    `json:"billing_policy"`
+		Slug              string                                `json:"slug"`
+		Name              string                                `json:"name"`
+		Description       string                                `json:"description"`
+		EntitlementSchema products.EntitlementSchema            `json:"entitlement_schema"`
+		BillingPolicy     *products.BillingPolicy               `json:"billing_policy"`
+		DelegatedAccess   []productDelegationConfigurationInput `json:"delegated_access"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -196,14 +198,25 @@ func (a *API) createProduct(w http.ResponseWriter, r *http.Request) {
 		writeCodedError(w, http.StatusBadRequest, "invalid_billing_policy", err.Error())
 		return
 	}
+	normalizedDelegatedAccess, err := normalizeAndValidateDelegationConfigurations(in.DelegatedAccess, true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid delegated_access: "+err.Error())
+		return
+	}
+	in.DelegatedAccess = normalizedDelegatedAccess
 	var created productRecord
-	err := pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(r.Context(), `INSERT INTO products(slug,name,description,entitlement_schema,billing_policy)
 			VALUES($1,$2,$3,$4,$5) RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at`,
 			in.Slug, in.Name, in.Description, in.EntitlementSchema, billingPolicy).Scan(&created.ID, &created.Slug, &created.Name, &created.Description,
 			&created.EntitlementSchema, &created.EntitlementSchemaVersion, &created.BillingPolicy, &created.BillingPolicyVersion,
 			&created.Active, &created.Version, &created.CreatedAt, &created.UpdatedAt); err != nil {
 			return err
+		}
+		for _, configuration := range in.DelegatedAccess {
+			if _, err := configureProductDelegation(r.Context(), tx, created.ID, configuration); err != nil {
+				return err
+			}
 		}
 		return a.writeCatalogueAudit(r.Context(), tx, "product.create", "product", created.ID, nil, productState(created))
 	})
@@ -293,12 +306,13 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name              *string                     `json:"name"`
-		Description       *string                     `json:"description"`
-		EntitlementSchema *products.EntitlementSchema `json:"entitlement_schema"`
-		BillingPolicy     *products.BillingPolicy     `json:"billing_policy"`
-		Active            *bool                       `json:"active"`
-		Version           int64                       `json:"version"`
+		Name              *string                                `json:"name"`
+		Description       *string                                `json:"description"`
+		EntitlementSchema *products.EntitlementSchema            `json:"entitlement_schema"`
+		BillingPolicy     *products.BillingPolicy                `json:"billing_policy"`
+		Active            *bool                                  `json:"active"`
+		DelegatedAccess   *[]productDelegationConfigurationInput `json:"delegated_access"`
+		Version           int64                                  `json:"version"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -312,6 +326,14 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 			writeCodedError(w, http.StatusBadRequest, "invalid_billing_policy", err.Error())
 			return
 		}
+	}
+	if in.DelegatedAccess != nil {
+		normalized, err := normalizeAndValidateDelegationConfigurations(*in.DelegatedAccess, false)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid delegated_access: "+err.Error())
+			return
+		}
+		in.DelegatedAccess = &normalized
 	}
 	var updated productRecord
 	err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
@@ -377,11 +399,17 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		if name == before.Name && description == before.Description && active == before.Active && !schemaChanged && !policyChanged {
-			updated = before
-			return nil
+		productChanged := name != before.Name || description != before.Description || active != before.Active || schemaChanged || policyChanged
+		if !active && in.DelegatedAccess != nil {
+			for _, configuration := range *in.DelegatedAccess {
+				if configuration.Enabled {
+					return catalogueValidationError{"archived products cannot enable delegated access"}
+				}
+			}
 		}
-		if err := tx.QueryRow(r.Context(), `UPDATE products SET name=$2,description=$3,active=$4,entitlement_schema=$5,
+		if !productChanged {
+			updated = before
+		} else if err := tx.QueryRow(r.Context(), `UPDATE products SET name=$2,description=$3,active=$4,entitlement_schema=$5,
 			entitlement_schema_version=entitlement_schema_version+CASE WHEN $6 THEN 1 ELSE 0 END,billing_policy=$7,
 			billing_policy_version=billing_policy_version+CASE WHEN $8 THEN 1 ELSE 0 END,version=version+1,updated_at=now()
 			WHERE id=$1 RETURNING id,slug,name,description,entitlement_schema,entitlement_schema_version,billing_policy,billing_policy_version,active,version,created_at,updated_at`,
@@ -390,10 +418,30 @@ func (a *API) updateAdminProduct(w http.ResponseWriter, r *http.Request) {
 				&updated.BillingPolicy, &updated.BillingPolicyVersion, &updated.Active, &updated.Version, &updated.CreatedAt, &updated.UpdatedAt); err != nil {
 			return err
 		}
+		if in.DelegatedAccess != nil {
+			for _, configuration := range *in.DelegatedAccess {
+				if _, err := configureProductDelegation(r.Context(), tx, id, configuration); err != nil {
+					return err
+				}
+			}
+		}
+		if before.Active && !updated.Active {
+			if _, err := tx.Exec(r.Context(), `SELECT disable_product_delegation($1)`, id); err != nil {
+				return err
+			}
+		}
+		if !productChanged {
+			return nil
+		}
 		return a.writeCatalogueAudit(r.Context(), tx, "product.update", "product", id, productState(before), productState(updated))
 	})
 	if errors.Is(err, errCatalogueVersionConflict) {
 		writeError(w, http.StatusConflict, "product was modified by another request")
+		return
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "40001" {
+		writeError(w, http.StatusConflict, "delegation configuration changed; reload and retry")
 		return
 	}
 	var validation catalogueValidationError

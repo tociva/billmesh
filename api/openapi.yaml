@@ -461,6 +461,57 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CatalogueTransferValidation" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/admin/catalogue/bulk/template:
+    get:
+      operationId: getAdminCatalogueBulkTemplate
+      tags: [Administration, Catalogue]
+      summary: Get an empty versioned bulk catalogue change-set template
+      x-required-client-profile: admin
+      responses:
+        "200":
+          description: Bulk catalogue change-set template.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueBulkDocument" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/catalogue/bulk/validate:
+    post:
+      operationId: validateAdminCatalogueBulk
+      tags: [Administration, Catalogue]
+      summary: Validate an atomic create/update catalogue change set without committing it
+      x-required-client-profile: admin
+      requestBody: { $ref: "#/components/requestBodies/CatalogueBulkDocument" }
+      responses:
+        "200":
+          description: Structural, referential, and optimistic-version validation result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueBulkValidation" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/catalogue/bulk/apply:
+    post:
+      operationId: applyAdminCatalogueBulk
+      tags: [Administration, Catalogue]
+      summary: Atomically create and update catalogue resources from JSON
+      x-required-client-profile: admin
+      requestBody: { $ref: "#/components/requestBodies/CatalogueBulkDocument" }
+      responses:
+        "200":
+          description: The complete change set was committed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueBulkResult" }
+        "409":
+          description: An expected version or create/update precondition failed; nothing was committed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueBulkValidation" }
+        "422":
+          description: The change set is invalid; nothing was committed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogueBulkValidation" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/admin/product-policy-metadata:
     get:
       operationId: getProductPolicyMetadata
@@ -501,6 +552,49 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Product" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/products/{id}/delegated-access:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listAdminProductDelegatedAccess
+      tags: [Administration, Catalogue]
+      summary: List versioned delegated-access OAuth client configuration for a product
+      x-required-client-profile: admin
+      responses:
+        "200":
+          description: Product delegated-access configurations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProductDelegationConfiguration" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/products/{id}/delegated-access/{environment}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+      - name: environment
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,62}$" }
+    put:
+      operationId: putAdminProductDelegatedAccess
+      tags: [Administration, Catalogue]
+      summary: Create or replace one product delegated-access configuration
+      description: Replaces the complete actor binding set for this product and environment using optimistic versioning. Billmesh derives each actor's OAuth scope from its profile.
+      x-required-client-profile: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductDelegationConfigurationInput" }
+      responses:
+        "200":
+          description: Saved delegated-access configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProductDelegationConfiguration" }
+        "409": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /v1/admin/products/{id}/plans:
     parameters:
@@ -1322,6 +1416,11 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/CatalogueTransfer" }
+    CatalogueBulkDocument:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/CatalogueBulkDocument" }
     CreateAccount:
       required: true
       content:
@@ -1372,6 +1471,9 @@ components:
               description: { type: string, maxLength: 2000 }
               entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
               billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
+              delegated_access:
+                type: array
+                items: { $ref: "#/components/schemas/ProductDelegationConfigurationInput" }
     UpdateProduct:
       required: true
       content:
@@ -1386,6 +1488,9 @@ components:
               entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
               billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
               active: { type: boolean }
+              delegated_access:
+                type: array
+                items: { $ref: "#/components/schemas/ProductDelegationConfigurationInput" }
               version: { type: integer, format: int64, minimum: 1 }
     CreatePlan:
       required: true
@@ -1898,6 +2003,55 @@ components:
         total: { type: integer, format: int64, minimum: 0 }
         limit: { type: integer, minimum: 1, maximum: 200 }
         offset: { type: integer, minimum: 0 }
+    ProductDelegationConfigurationInput:
+      type: object
+      additionalProperties: false
+      description: One product/environment mapping. The actors array is a complete replacement when the configuration is saved.
+      required: [environment, expected_version, enabled, authorizer_client_id, actors]
+      properties:
+        environment: { type: string, pattern: "^[a-z][a-z0-9-]{0,62}$" }
+        expected_version: { type: integer, format: int64, minimum: 0 }
+        enabled: { type: boolean }
+        authorizer_client_id: { type: string, minLength: 1, maxLength: 255 }
+        actors:
+          type: array
+          description: Variable actor bindings required by this product implementation. An enabled configuration requires at least one enabled actor.
+          items: { $ref: "#/components/schemas/ProductDelegationActor" }
+    ProductDelegationActor:
+      type: object
+      additionalProperties: false
+      description: Catalogue and runtime profiles require a service actor; billing supports user or service actors. The profile determines the Billmesh scope.
+      required: [client_id, profile, actor_type, enabled]
+      oneOf:
+        - properties:
+            profile: { const: catalogue }
+            actor_type: { const: service }
+        - properties:
+            profile: { const: billing }
+            actor_type: { enum: [user, service] }
+        - properties:
+            profile: { const: runtime }
+            actor_type: { const: service }
+      properties:
+        client_id: { type: string, minLength: 1, maxLength: 255 }
+        profile: { type: string, enum: [catalogue, billing, runtime] }
+        actor_type: { type: string, enum: [user, service] }
+        enabled: { type: boolean }
+    ProductDelegationConfiguration:
+      type: object
+      additionalProperties: false
+      required: [product_id, environment, authorizer_client_id, actors, enabled, version, created_at, updated_at]
+      properties:
+        product_id: { $ref: "#/components/schemas/UUID" }
+        environment: { type: string }
+        authorizer_client_id: { type: string }
+        actors:
+          type: array
+          items: { $ref: "#/components/schemas/ProductDelegationActor" }
+        enabled: { type: boolean }
+        version: { type: integer, format: int64, minimum: 1 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Plan:
       type: object
       required: [id, product_id, slug, plan_family_id, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, product, selectable, default_for_product, checkout_enabled, effective_from, active, version, created_at, updated_at]
@@ -1936,7 +2090,6 @@ components:
         validity_days: { type: [integer, "null"], minimum: 1 }
     CatalogueTransferCreditPack:
       type: object
-      additionalProperties: false
       required: [slug, name, credits, price_minor, currency, validity_days, active]
       properties:
         slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
@@ -1948,7 +2101,6 @@ components:
         active: { type: boolean }
     CatalogueTransferPlan:
       type: object
-      additionalProperties: false
       required: [slug, plan_family_id, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, selectable, default_for_product, checkout_enabled, active]
       properties:
         slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
@@ -2024,6 +2176,84 @@ components:
         products: { type: integer, minimum: 0 }
         plans: { type: integer, minimum: 0 }
         credit_packs: { type: integer, minimum: 0 }
+    CatalogueBulkPlan:
+      allOf:
+        - { $ref: "#/components/schemas/CatalogueTransferPlan" }
+        - type: object
+          required: [operation, expected_version]
+          properties:
+            operation: { type: string, enum: [create, update] }
+            expected_version: { type: integer, format: int64, minimum: 0 }
+    CatalogueBulkCreditPack:
+      allOf:
+        - { $ref: "#/components/schemas/CatalogueTransferCreditPack" }
+        - type: object
+          required: [operation, expected_version]
+          properties:
+            operation: { type: string, enum: [create, update] }
+            expected_version: { type: integer, format: int64, minimum: 0 }
+    CatalogueBulkProduct:
+      type: object
+      additionalProperties: false
+      required: [operation, expected_version, slug, name, description, entitlement_schema, billing_policy, active]
+      properties:
+        operation: { type: string, enum: [create, update] }
+        expected_version: { type: integer, format: int64, minimum: 0 }
+        slug: { type: string, minLength: 2, maxLength: 63, pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        entitlement_schema: { $ref: "#/components/schemas/EntitlementSchema" }
+        billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
+        active: { type: boolean }
+        delegated_access:
+          type: array
+          items: { $ref: "#/components/schemas/ProductDelegationConfigurationInput" }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueBulkPlan" }
+        credit_packs:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueBulkCreditPack" }
+    CatalogueBulkDocument:
+      type: object
+      additionalProperties: false
+      required: [schema_version, products]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        products:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueBulkProduct" }
+    CatalogueBulkValidation:
+      type: object
+      additionalProperties: false
+      required: [valid, schema_version, products, plans, credit_packs, issues]
+      properties:
+        valid: { type: boolean }
+        schema_version: { type: integer }
+        products: { type: integer, minimum: 0 }
+        plans: { type: integer, minimum: 0 }
+        credit_packs: { type: integer, minimum: 0 }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/CatalogueTransferIssue" }
+    CatalogueBulkResourceResult:
+      type: object
+      additionalProperties: false
+      required: [created, updated, unchanged]
+      properties:
+        created: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        unchanged: { type: integer, minimum: 0 }
+    CatalogueBulkResult:
+      type: object
+      additionalProperties: false
+      required: [schema_version, products, plans, credit_packs, delegated_access]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        products: { $ref: "#/components/schemas/CatalogueBulkResourceResult" }
+        plans: { $ref: "#/components/schemas/CatalogueBulkResourceResult" }
+        credit_packs: { $ref: "#/components/schemas/CatalogueBulkResourceResult" }
+        delegated_access: { $ref: "#/components/schemas/CatalogueBulkResourceResult" }
     CataloguePlan:
       type: object
       required: [id, plan_family_id, name, description, price_minor, currency, included_credits, entitlements, billing_interval, billing_model, selectable, default_for_product, checkout_enabled, effective_from, version]

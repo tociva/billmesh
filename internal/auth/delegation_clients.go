@@ -32,9 +32,6 @@ func delegationClientKey(authorizerClientID, actorClientID string) string {
 }
 
 func NewDelegationClientRegistry(registrations []DelegationClientRegistration) (DelegationClientRegistry, error) {
-	if len(registrations) == 0 {
-		return nil, errors.New("delegation client profiles must contain at least one client pair")
-	}
 	registry := make(DelegationClientRegistry, len(registrations))
 	for index, registration := range registrations {
 		registration.AuthorizerClientID = strings.TrimSpace(registration.AuthorizerClientID)

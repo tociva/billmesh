@@ -38,7 +38,6 @@ func TestDelegationClientRegistryRejectsPairAndScopeConfusion(t *testing.T) {
 func TestDelegationClientRegistryRejectsInvalidDefinitions(t *testing.T) {
 	valid := DelegationClientRegistration{AuthorizerClientID: "a", ActorClientID: "b", Scope: "billmesh.billing", Type: ClientBilling, ActorType: "user", App: "daybook", Environment: "production", ContextProfileVersion: 1}
 	tests := [][]DelegationClientRegistration{
-		nil,
 		{{AuthorizerClientID: "a", ActorClientID: "b", Scope: "billmesh.billing", Type: ClientBilling, ActorType: "robot", App: "daybook", Environment: "production", ContextProfileVersion: 1}},
 		{{AuthorizerClientID: "a", ActorClientID: "b", Scope: "billmesh.admin", Type: ClientBilling, ActorType: "user", App: "daybook", Environment: "production", ContextProfileVersion: 1}},
 		{{AuthorizerClientID: "a", ActorClientID: "b", Scope: "billmesh.runtime", Type: ClientRuntime, ActorType: "user", App: "daybook", Environment: "production", ContextProfileVersion: 1}},
@@ -50,4 +49,11 @@ func TestDelegationClientRegistryRejectsInvalidDefinitions(t *testing.T) {
 		_, err := NewDelegationClientRegistry(registrations)
 		require.Error(t, err)
 	}
+}
+
+func TestDelegationClientRegistryAllowsEmptyConfigurationAndFailsClosed(t *testing.T) {
+	registry, err := NewDelegationClientRegistry(nil)
+	require.NoError(t, err)
+	require.Empty(t, registry)
+	require.Error(t, registry.Authenticate(&Claims{AuthorizerClientID: "authorizer", ClientID: "actor"}, "billmesh.billing", 1))
 }

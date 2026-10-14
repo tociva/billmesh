@@ -8,6 +8,12 @@ GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA billmesh TO :"runtime_rol
 REVOKE INSERT, UPDATE, DELETE ON TABLE billmesh.delegation_client_profiles FROM :"runtime_role";
 REVOKE ALL ON TABLE billmesh.delegation_client_profile_events FROM :"runtime_role";
 REVOKE ALL ON SEQUENCE billmesh.delegation_client_profile_events_id_seq FROM :"runtime_role";
+REVOKE INSERT, UPDATE, DELETE ON TABLE billmesh.product_delegation_configurations FROM :"runtime_role";
+REVOKE INSERT, UPDATE, DELETE ON TABLE billmesh.product_delegation_actors FROM :"runtime_role";
+REVOKE ALL ON TABLE billmesh.product_delegation_configuration_events FROM :"runtime_role";
+REVOKE ALL ON SEQUENCE billmesh.product_delegation_configuration_events_id_seq FROM :"runtime_role";
+GRANT EXECUTE ON FUNCTION billmesh.configure_product_delegation(uuid,text,text,jsonb,boolean,bigint) TO :"runtime_role";
+GRANT EXECUTE ON FUNCTION billmesh.disable_product_delegation(uuid) TO :"runtime_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_role" IN SCHEMA billmesh
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"runtime_role";
 ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_role" IN SCHEMA billmesh
