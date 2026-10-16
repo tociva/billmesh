@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "exported_at": "2026-10-09T00:00:00.000Z",
   "products": [
     {
@@ -252,6 +252,39 @@
           "currency": "INR",
           "validity_days": null,
           "active": true
+        }
+      ],
+      "delegated_access": [
+        {
+          "environment": "development",
+          "enabled": true,
+          "authorizer_client_id": "daybook-billmesh-authorizer-dev",
+          "actors": [
+            {
+              "client_id": "daybook-billmesh-catalogue-dev",
+              "profile": "catalogue",
+              "actor_type": "service",
+              "enabled": true
+            },
+            {
+              "client_id": "daybook-billmesh-user-dev",
+              "profile": "billing",
+              "actor_type": "user",
+              "enabled": true
+            },
+            {
+              "client_id": "daybook-billmesh-billing-dev",
+              "profile": "billing",
+              "actor_type": "service",
+              "enabled": true
+            },
+            {
+              "client_id": "daybook-billmesh-runtime-dev",
+              "profile": "runtime",
+              "actor_type": "service",
+              "enabled": true
+            }
+          ]
         }
       ]
     }

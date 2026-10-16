@@ -11,8 +11,8 @@ import (
 	"github.com/tociva/billmesh/internal/products"
 )
 
-func TestDaybookCatalogueV2IsValid(t *testing.T) {
-	raw, err := os.ReadFile("../../deploy/catalogues/daybook-catalogue.v2.json")
+func TestDaybookCatalogueV3IsValid(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/catalogues/daybook-catalogue.v3.json")
 	require.NoError(t, err)
 	var transfer catalogueTransfer
 	require.NoError(t, json.Unmarshal(raw, &transfer))
@@ -22,6 +22,7 @@ func TestDaybookCatalogueV2IsValid(t *testing.T) {
 	require.Equal(t, 1, result.Products)
 	require.Equal(t, 5, result.Plans)
 	require.Equal(t, 1, result.CreditPacks)
+	require.Equal(t, 1, result.DelegatedAccess)
 }
 
 func validCatalogueTransferForTest(version int) catalogueTransfer {
@@ -32,6 +33,8 @@ func validCatalogueTransferForTest(version int) catalogueTransfer {
 			Slug: "daybook", Name: "Daybook", Description: "Daybook billing catalogue",
 			EntitlementSchema: products.EntitlementSchema{Fields: []products.EntitlementField{}},
 			BillingPolicy:     products.DefaultBillingPolicy(), Active: &active,
+			CreditPacks:     []catalogueTransferCreditPack{},
+			DelegatedAccess: []catalogueTransferDelegationConfiguration{},
 			Plans: []catalogueTransferPlan{{
 				Slug: "daybook-free", PlanFamilyID: "free", Name: "Free", Description: "Free plan",
 				Currency: "INR", BillingInterval: "monthly", BillingModel: "free", Entitlements: map[string]any{},
@@ -42,7 +45,7 @@ func validCatalogueTransferForTest(version int) catalogueTransfer {
 }
 
 func TestCatalogueTransferAcceptsV1AndV2(t *testing.T) {
-	for _, version := range []int{1, 2} {
+	for _, version := range []int{1, 2, 3} {
 		result := validateCatalogueTransferDocument(validCatalogueTransferForTest(version), time.Now().UTC())
 		require.True(t, result.Valid, "version %d issues: %#v", version, result.Issues)
 		require.Equal(t, 1, result.Products)

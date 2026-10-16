@@ -74,7 +74,7 @@ func TestProductBillingPolicyContractAndVersioning(t *testing.T) {
 	}, admin)
 }
 
-func TestCatalogueTransferV2ValidatesImportsExportsAndRejectsConflicts(t *testing.T) {
+func TestCatalogueTransferV3ValidatesImportsExportsAndRejectsConflicts(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	admin := h.IssueToken(t, testkit.Unique("transfer-admin"), "daybook", testkit.AllPermissions(), nil)
 	metadata := testkit.Decode[struct {
@@ -82,7 +82,7 @@ func TestCatalogueTransferV2ValidatesImportsExportsAndRejectsConflicts(t *testin
 	}](t, h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/product-policy-metadata", nil, admin))
 	slug := testkit.Unique("transfer-product")
 	transfer := map[string]any{
-		"schema_version": 2,
+		"schema_version": 3,
 		"exported_at":    "2026-10-09T00:00:00Z",
 		"products": []any{map[string]any{
 			"slug": slug, "name": "Transfer product", "description": "Atomic transfer test",
@@ -97,27 +97,35 @@ func TestCatalogueTransferV2ValidatesImportsExportsAndRejectsConflicts(t *testin
 				"slug": slug + "-credits", "name": "100 Credits", "credits": 100, "price_minor": 9900,
 				"currency": "INR", "validity_days": nil, "active": true,
 			}},
+			"delegated_access": []any{map[string]any{
+				"environment": "development", "enabled": true, "authorizer_client_id": slug + "-authorizer",
+				"actors": []any{map[string]any{
+					"client_id": slug + "-runtime", "profile": "runtime", "actor_type": "service", "enabled": true,
+				}},
+			}},
 		}},
 	}
 	validation := testkit.Decode[struct {
-		Valid       bool `json:"valid"`
-		Products    int  `json:"products"`
-		Plans       int  `json:"plans"`
-		CreditPacks int  `json:"credit_packs"`
+		Valid           bool `json:"valid"`
+		Products        int  `json:"products"`
+		Plans           int  `json:"plans"`
+		CreditPacks     int  `json:"credit_packs"`
+		DelegatedAccess int  `json:"delegated_access"`
 	}](t, h.RequireStatus(t, http.StatusOK, http.MethodPost, "/v1/admin/catalogue/import/validate", transfer, admin))
-	if !validation.Valid || validation.Products != 1 || validation.Plans != 1 || validation.CreditPacks != 1 {
+	if !validation.Valid || validation.Products != 1 || validation.Plans != 1 || validation.CreditPacks != 1 || validation.DelegatedAccess != 1 {
 		t.Fatalf("unexpected transfer validation: %+v", validation)
 	}
 	imported := testkit.Decode[struct {
-		Products    int `json:"products"`
-		Plans       int `json:"plans"`
-		CreditPacks int `json:"credit_packs"`
+		Products        int `json:"products"`
+		Plans           int `json:"plans"`
+		CreditPacks     int `json:"credit_packs"`
+		DelegatedAccess int `json:"delegated_access"`
 	}](t, h.RequireStatus(t, http.StatusCreated, http.MethodPost, "/v1/admin/catalogue/import", transfer, admin))
-	if imported.Products != 1 || imported.Plans != 1 || imported.CreditPacks != 1 {
+	if imported.Products != 1 || imported.Plans != 1 || imported.CreditPacks != 1 || imported.DelegatedAccess != 1 {
 		t.Fatalf("unexpected transfer result: %+v", imported)
 	}
 	exported := h.RequireStatus(t, http.StatusOK, http.MethodGet, "/v1/admin/catalogue/export", nil, admin)
-	if !strings.Contains(string(exported), `"slug":"`+slug+`"`) || !strings.Contains(string(exported), `"slug":"`+slug+`-credits"`) {
+	if !strings.Contains(string(exported), `"slug":"`+slug+`"`) || !strings.Contains(string(exported), `"slug":"`+slug+`-credits"`) || !strings.Contains(string(exported), `"authorizer_client_id":"`+slug+`-authorizer"`) {
 		t.Fatalf("export did not preserve imported product and credit pack: %s", exported)
 	}
 	h.RequireStatus(t, http.StatusConflict, http.MethodPost, "/v1/admin/catalogue/import", transfer, admin)

@@ -64,6 +64,10 @@ type delegationConfigurationQueryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+type delegationConfigurationLister interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 func normalizeDelegationConfiguration(input productDelegationConfigurationInput) productDelegationConfigurationInput {
 	input.Environment = strings.TrimSpace(input.Environment)
 	input.AuthorizerClientID = strings.TrimSpace(input.AuthorizerClientID)
@@ -161,6 +165,37 @@ func getProductDelegationConfiguration(ctx context.Context, q delegationConfigur
 	return item, nil
 }
 
+func listProductDelegationConfigurationRecords(ctx context.Context, q delegationConfigurationLister, productID uuid.UUID) ([]productDelegationConfigurationRecord, error) {
+	rows, err := q.Query(ctx, `SELECT configuration.product_id,configuration.environment,configuration.authorizer_client_id,
+		configuration.enabled,configuration.version,configuration.created_at,configuration.updated_at,
+		COALESCE((SELECT jsonb_agg(jsonb_build_object(
+			'client_id',actor.actor_client_id,'profile',actor.profile,'actor_type',actor.actor_type,'enabled',actor.enabled
+		) ORDER BY actor.actor_client_id) FROM product_delegation_actors actor
+		WHERE actor.product_id=configuration.product_id AND actor.environment=configuration.environment),'[]'::jsonb)
+		FROM product_delegation_configurations configuration WHERE configuration.product_id=$1 ORDER BY configuration.environment`, productID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []productDelegationConfigurationRecord{}
+	for rows.Next() {
+		var item productDelegationConfigurationRecord
+		var actorsJSON []byte
+		if err := rows.Scan(&item.ProductID, &item.Environment, &item.AuthorizerClientID, &item.Enabled, &item.Version, &item.CreatedAt, &item.UpdatedAt, &actorsJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(actorsJSON, &item.Actors); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (a *API) listProductDelegationConfigurations(w http.ResponseWriter, r *http.Request) {
 	productID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
@@ -176,39 +211,11 @@ func (a *API) listProductDelegationConfigurations(w http.ResponseWriter, r *http
 		writeError(w, http.StatusNotFound, "product not found")
 		return
 	}
-	rows, err := a.pool.Query(r.Context(), `SELECT configuration.product_id,configuration.environment,configuration.authorizer_client_id,
-		configuration.enabled,configuration.version,configuration.created_at,configuration.updated_at,
-		COALESCE((SELECT jsonb_agg(jsonb_build_object(
-			'client_id',actor.actor_client_id,'profile',actor.profile,'actor_type',actor.actor_type,'enabled',actor.enabled
-		) ORDER BY actor.actor_client_id) FROM product_delegation_actors actor
-		WHERE actor.product_id=configuration.product_id AND actor.environment=configuration.environment),'[]'::jsonb)
-		FROM product_delegation_configurations configuration WHERE configuration.product_id=$1 ORDER BY configuration.environment`, productID)
+	items, err := listProductDelegationConfigurationRecords(r.Context(), a.pool, productID)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	items := []productDelegationConfigurationRecord{}
-	for rows.Next() {
-		var item productDelegationConfigurationRecord
-		var actorsJSON []byte
-		if err := rows.Scan(&item.ProductID, &item.Environment, &item.AuthorizerClientID, &item.Enabled, &item.Version, &item.CreatedAt, &item.UpdatedAt, &actorsJSON); err != nil {
-			rows.Close()
-			writeDBError(w, err)
-			return
-		}
-		if err := json.Unmarshal(actorsJSON, &item.Actors); err != nil {
-			rows.Close()
-			writeDBError(w, err)
-			return
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		writeDBError(w, err)
-		return
-	}
-	rows.Close()
 	writeJSON(w, http.StatusOK, items)
 }
 

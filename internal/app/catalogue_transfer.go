@@ -11,11 +11,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/tociva/billmesh/internal/products"
 )
 
-const catalogueTransferSchemaVersion = 2
+const catalogueTransferSchemaVersion = 3
 
 type catalogueTransfer struct {
 	SchemaVersion int                        `json:"schema_version"`
@@ -24,14 +25,22 @@ type catalogueTransfer struct {
 }
 
 type catalogueTransferProduct struct {
-	Slug              string                        `json:"slug"`
-	Name              string                        `json:"name"`
-	Description       string                        `json:"description"`
-	EntitlementSchema products.EntitlementSchema    `json:"entitlement_schema"`
-	BillingPolicy     products.BillingPolicy        `json:"billing_policy"`
-	Active            *bool                         `json:"active"`
-	Plans             []catalogueTransferPlan       `json:"plans"`
-	CreditPacks       []catalogueTransferCreditPack `json:"credit_packs"`
+	Slug              string                                     `json:"slug"`
+	Name              string                                     `json:"name"`
+	Description       string                                     `json:"description"`
+	EntitlementSchema products.EntitlementSchema                 `json:"entitlement_schema"`
+	BillingPolicy     products.BillingPolicy                     `json:"billing_policy"`
+	Active            *bool                                      `json:"active"`
+	Plans             []catalogueTransferPlan                    `json:"plans"`
+	CreditPacks       []catalogueTransferCreditPack              `json:"credit_packs"`
+	DelegatedAccess   []catalogueTransferDelegationConfiguration `json:"delegated_access"`
+}
+
+type catalogueTransferDelegationConfiguration struct {
+	Environment        string                        `json:"environment"`
+	Enabled            bool                          `json:"enabled"`
+	AuthorizerClientID string                        `json:"authorizer_client_id"`
+	Actors             []productDelegationActorInput `json:"actors"`
 }
 
 type catalogueTransferPlan struct {
@@ -70,19 +79,21 @@ type catalogueTransferIssue struct {
 }
 
 type catalogueTransferValidation struct {
-	Valid         bool                     `json:"valid"`
-	SchemaVersion int                      `json:"schema_version"`
-	Products      int                      `json:"products"`
-	Plans         int                      `json:"plans"`
-	CreditPacks   int                      `json:"credit_packs"`
-	Issues        []catalogueTransferIssue `json:"issues"`
+	Valid           bool                     `json:"valid"`
+	SchemaVersion   int                      `json:"schema_version"`
+	Products        int                      `json:"products"`
+	Plans           int                      `json:"plans"`
+	CreditPacks     int                      `json:"credit_packs"`
+	DelegatedAccess int                      `json:"delegated_access"`
+	Issues          []catalogueTransferIssue `json:"issues"`
 }
 
 type catalogueTransferImportResult struct {
-	SchemaVersion int `json:"schema_version"`
-	Products      int `json:"products"`
-	Plans         int `json:"plans"`
-	CreditPacks   int `json:"credit_packs"`
+	SchemaVersion   int `json:"schema_version"`
+	Products        int `json:"products"`
+	Plans           int `json:"plans"`
+	CreditPacks     int `json:"credit_packs"`
+	DelegatedAccess int `json:"delegated_access"`
 }
 
 func boolValue(value bool) *bool { return &value }
@@ -117,6 +128,7 @@ func (a *API) exportCatalogueTransfer(w http.ResponseWriter, r *http.Request) {
 		item.value.Active = boolValue(active)
 		item.value.Plans = []catalogueTransferPlan{}
 		item.value.CreditPacks = []catalogueTransferCreditPack{}
+		item.value.DelegatedAccess = []catalogueTransferDelegationConfiguration{}
 		productsToExport = append(productsToExport, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -175,6 +187,20 @@ func (a *API) exportCatalogueTransfer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		packRows.Close()
+
+		delegatedAccess, err := listProductDelegationConfigurationRecords(r.Context(), tx, item.id)
+		if err != nil {
+			writeDBError(w, err)
+			return
+		}
+		for _, configuration := range delegatedAccess {
+			item.value.DelegatedAccess = append(item.value.DelegatedAccess, catalogueTransferDelegationConfiguration{
+				Environment:        configuration.Environment,
+				Enabled:            configuration.Enabled,
+				AuthorizerClientID: configuration.AuthorizerClientID,
+				Actors:             configuration.Actors,
+			})
+		}
 		transfer.Products = append(transfer.Products, item.value)
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -225,11 +251,21 @@ func (a *API) importCatalogueTransfer(w http.ResponseWriter, r *http.Request) {
 			validation.Valid = false
 			return errCatalogueTransferConflict
 		}
-		for _, product := range transfer.Products {
+		for productIndex, product := range transfer.Products {
+			productPath := fmt.Sprintf("/products/%d", productIndex)
+			delegatedAccess, err := catalogueTransferDelegationInputs(product.DelegatedAccess)
+			if err != nil {
+				return err
+			}
 			var productID uuid.UUID
 			if err := tx.QueryRow(r.Context(), `INSERT INTO products(slug,name,description,entitlement_schema,billing_policy,active)
 				VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, strings.TrimSpace(product.Slug), strings.TrimSpace(product.Name), strings.TrimSpace(product.Description),
 				product.EntitlementSchema, product.BillingPolicy, *product.Active).Scan(&productID); err != nil {
+				if isUniqueViolation(err) {
+					validation.Issues = []catalogueTransferIssue{transferIssue(productPath+"/slug", "product_slug_conflict", fmt.Sprintf("Product slug %q already exists.", product.Slug))}
+					validation.Valid = false
+					return errCatalogueTransferConflict
+				}
 				return err
 			}
 			result.Products++
@@ -238,6 +274,17 @@ func (a *API) importCatalogueTransfer(w http.ResponseWriter, r *http.Request) {
 				"entitlement_schema": product.EntitlementSchema, "billing_policy": product.BillingPolicy,
 			}); err != nil {
 				return err
+			}
+			for configurationIndex, configuration := range delegatedAccess {
+				if _, err := configureProductDelegation(r.Context(), tx, productID, configuration); err != nil {
+					if isUniqueViolation(err) {
+						validation.Issues = []catalogueTransferIssue{transferIssue(fmt.Sprintf("%s/delegated_access/%d", productPath, configurationIndex), "delegation_client_conflict", "An authorizer or actor client is already assigned in this environment.")}
+						validation.Valid = false
+						return errCatalogueTransferConflict
+					}
+					return err
+				}
+				result.DelegatedAccess++
 			}
 			for _, plan := range product.Plans {
 				effectiveFrom := startedAt
@@ -297,6 +344,25 @@ func (a *API) importCatalogueTransfer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, result)
 }
 
+func catalogueTransferDelegationInputs(configurations []catalogueTransferDelegationConfiguration) ([]productDelegationConfigurationInput, error) {
+	inputs := make([]productDelegationConfigurationInput, 0, len(configurations))
+	for _, configuration := range configurations {
+		inputs = append(inputs, productDelegationConfigurationInput{
+			Environment:        configuration.Environment,
+			ExpectedVersion:    0,
+			Enabled:            configuration.Enabled,
+			AuthorizerClientID: configuration.AuthorizerClientID,
+			Actors:             configuration.Actors,
+		})
+	}
+	return normalizeAndValidateDelegationConfigurations(inputs, true)
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 var errCatalogueTransferConflict = errors.New("catalogue transfer conflict")
 
 type catalogueTransferQueryRower interface {
@@ -310,12 +376,42 @@ func (a *API) catalogueTransferConflicts(ctx context.Context, transfer catalogue
 func catalogueTransferConflictsWithQuery(ctx context.Context, q catalogueTransferQueryRower, transfer catalogueTransfer) ([]catalogueTransferIssue, error) {
 	issues := []catalogueTransferIssue{}
 	for index, product := range transfer.Products {
+		productPath := fmt.Sprintf("/products/%d", index)
 		var exists bool
 		if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM products WHERE slug=$1)`, strings.TrimSpace(product.Slug)).Scan(&exists); err != nil {
 			return nil, err
 		}
 		if exists {
-			issues = append(issues, transferIssue(fmt.Sprintf("/products/%d/slug", index), "product_slug_conflict", fmt.Sprintf("Product slug %q already exists.", product.Slug)))
+			issues = append(issues, transferIssue(productPath+"/slug", "product_slug_conflict", fmt.Sprintf("Product slug %q already exists.", product.Slug)))
+		}
+		delegatedAccess, err := catalogueTransferDelegationInputs(product.DelegatedAccess)
+		if err != nil {
+			continue
+		}
+		for configurationIndex, configuration := range delegatedAccess {
+			configurationPath := fmt.Sprintf("%s/delegated_access/%d", productPath, configurationIndex)
+			clients := []struct {
+				id   string
+				path string
+			}{{id: configuration.AuthorizerClientID, path: configurationPath + "/authorizer_client_id"}}
+			for actorIndex, actor := range configuration.Actors {
+				clients = append(clients, struct {
+					id   string
+					path string
+				}{id: actor.ClientID, path: fmt.Sprintf("%s/actors/%d/client_id", configurationPath, actorIndex)})
+			}
+			for _, client := range clients {
+				if err := q.QueryRow(ctx, `SELECT EXISTS(
+					SELECT 1 FROM product_delegation_configurations WHERE environment=$1 AND authorizer_client_id=$2
+					UNION ALL
+					SELECT 1 FROM product_delegation_actors WHERE environment=$1 AND actor_client_id=$2
+				)`, configuration.Environment, client.id).Scan(&exists); err != nil {
+					return nil, err
+				}
+				if exists {
+					issues = append(issues, transferIssue(client.path, "delegation_client_conflict", fmt.Sprintf("Client ID %q is already assigned in environment %q.", client.id, configuration.Environment)))
+				}
+			}
 		}
 	}
 	return issues, nil
@@ -323,12 +419,27 @@ func catalogueTransferConflictsWithQuery(ctx context.Context, q catalogueTransfe
 
 func validateCatalogueTransferDocument(transfer catalogueTransfer, defaultEffectiveFrom time.Time) catalogueTransferValidation {
 	result := catalogueTransferValidation{SchemaVersion: transfer.SchemaVersion, Products: len(transfer.Products), Issues: []catalogueTransferIssue{}}
-	if transfer.SchemaVersion != 1 && transfer.SchemaVersion != catalogueTransferSchemaVersion {
-		result.Issues = append(result.Issues, transferIssue("/schema_version", "unsupported_schema_version", "Catalogue schema_version must be 1 or 2."))
+	if transfer.SchemaVersion != 1 && transfer.SchemaVersion != 2 && transfer.SchemaVersion != catalogueTransferSchemaVersion {
+		result.Issues = append(result.Issues, transferIssue("/schema_version", "unsupported_schema_version", "Catalogue schema_version must be 1, 2, or 3."))
+	}
+	if len(transfer.Products) == 0 {
+		result.Issues = append(result.Issues, transferIssue("/products", "empty_catalogue", "products must contain at least one product."))
 	}
 	seenProducts := map[string]bool{}
+	seenDelegationClients := map[string]string{}
 	for productIndex, product := range transfer.Products {
 		path := fmt.Sprintf("/products/%d", productIndex)
+		if transfer.SchemaVersion == catalogueTransferSchemaVersion {
+			if product.Plans == nil {
+				result.Issues = append(result.Issues, transferIssue(path+"/plans", "required_array", "plans must be an array."))
+			}
+			if product.CreditPacks == nil {
+				result.Issues = append(result.Issues, transferIssue(path+"/credit_packs", "required_array", "credit_packs must be an array."))
+			}
+			if product.DelegatedAccess == nil {
+				result.Issues = append(result.Issues, transferIssue(path+"/delegated_access", "required_array", "delegated_access must be an array."))
+			}
+		}
 		slug := strings.TrimSpace(product.Slug)
 		if err := products.ValidateProduct(slug, product.Name, product.Description); err != nil {
 			result.Issues = append(result.Issues, transferIssue(path, "invalid_product", err.Error()))
@@ -345,6 +456,31 @@ func validateCatalogueTransferDocument(transfer catalogueTransfer, defaultEffect
 		}
 		if err := products.ValidateBillingPolicy(product.BillingPolicy); err != nil {
 			result.Issues = append(result.Issues, transferIssue(path+"/billing_policy", "invalid_billing_policy", err.Error()))
+		}
+
+		delegatedAccess, err := catalogueTransferDelegationInputs(product.DelegatedAccess)
+		if err != nil {
+			result.Issues = append(result.Issues, transferIssue(path+"/delegated_access", "invalid_delegated_access", err.Error()))
+		} else {
+			result.DelegatedAccess += len(delegatedAccess)
+			for configurationIndex, configuration := range delegatedAccess {
+				configurationPath := fmt.Sprintf("%s/delegated_access/%d", path, configurationIndex)
+				if product.Active != nil && !*product.Active && configuration.Enabled {
+					result.Issues = append(result.Issues, transferIssue(configurationPath+"/enabled", "delegation_on_archived_product", "Archived products cannot enable delegated access."))
+				}
+				clientPaths := map[string]string{configuration.AuthorizerClientID: configurationPath + "/authorizer_client_id"}
+				for actorIndex, actor := range configuration.Actors {
+					clientPaths[actor.ClientID] = fmt.Sprintf("%s/actors/%d/client_id", configurationPath, actorIndex)
+				}
+				for clientID, clientPath := range clientPaths {
+					key := configuration.Environment + "\x00" + clientID
+					if previousPath, exists := seenDelegationClients[key]; exists {
+						result.Issues = append(result.Issues, transferIssue(clientPath, "duplicate_delegation_client", fmt.Sprintf("Client ID %q is already used at %s.", clientID, previousPath)))
+					} else {
+						seenDelegationClients[key] = clientPath
+					}
+				}
+			}
 		}
 
 		seenPlans := map[string]bool{}
