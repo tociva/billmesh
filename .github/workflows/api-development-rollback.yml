@@ -1,0 +1,159 @@
+name: Roll back API (development)
+
+on:
+  workflow_dispatch:
+    inputs:
+      helm_revision:
+        description: Helm revision to restore; use 0 for the previous revision
+        required: true
+        default: '0'
+        type: string
+      confirm:
+        description: Type ROLLBACK
+        required: true
+        type: string
+      reason:
+        description: Incident or change reference
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-development
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: development-api
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUDFLARED_VERSION: 2026.10.7
+      CLOUDFLARED_LINUX_AMD64_SHA256: 1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872
+    steps:
+      - name: Validate rollback request
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          REASON: ${{ inputs.reason }}
+          HELM_REVISION: ${{ inputs.helm_revision }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          KUBERNETES_ACCESS_HOSTNAME: ${{ vars.KUBERNETES_ACCESS_HOSTNAME }}
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+          CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          [[ "${CONFIRM}" == ROLLBACK ]]
+          [[ "${HELM_REVISION}" =~ ^[0-9]+$ ]]
+          [[ -n "${REASON//[[:space:]]/}" && "${#REASON}" -le 200 ]]
+          [[ "${REASON}" != *$'\n'* && "${REASON}" != *$'\r'* ]]
+          [[ "${KUBE_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]
+          [[ "${KUBERNETES_ACCESS_HOSTNAME}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ -n "${KUBECONFIG_BASE64}" && -n "${CLOUDFLARE_ACCESS_CLIENT_ID}" && -n "${CLOUDFLARE_ACCESS_CLIENT_SECRET}" ]]
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+        with:
+          version: v1.36.5
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.4
+      - name: Install pinned cloudflared client
+        run: |
+          set -euo pipefail
+          cloudflared="${RUNNER_TEMP}/cloudflared"
+          curl --fail --silent --show-error --location "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" --output "${cloudflared}"
+          printf '%s  %s\n' "${CLOUDFLARED_LINUX_AMD64_SHA256}" "${cloudflared}" | sha256sum --check --status
+          chmod 700 "${cloudflared}"
+          echo "CLOUDFLARED=${cloudflared}" >>"${GITHUB_ENV}"
+      - name: Open authenticated Kubernetes tunnel
+        env:
+          KUBERNETES_ACCESS_HOSTNAME: ${{ vars.KUBERNETES_ACCESS_HOSTNAME }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          log_file="${RUNNER_TEMP}/cloudflared-access.log"
+          pid_file="${RUNNER_TEMP}/cloudflared-access.pid"
+          "${CLOUDFLARED}" access tcp --hostname "${KUBERNETES_ACCESS_HOSTNAME}" --url 127.0.0.1:6443 --logfile "${log_file}" --loglevel info &
+          tunnel_pid=$!
+          printf '%s\n' "${tunnel_pid}" >"${pid_file}"
+          for attempt in $(seq 1 20); do
+            kill -0 "${tunnel_pid}" 2>/dev/null || { cat "${log_file}" >&2; exit 1; }
+            if (exec 3<>/dev/tcp/127.0.0.1/6443) 2>/dev/null; then exec 3>&-; break; fi
+            [[ "${attempt}" -lt 20 ]] || { cat "${log_file}" >&2; exit 1; }
+            sleep 1
+          done
+      - name: Configure Kubernetes access
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          kubeconfig="${RUNNER_TEMP}/billmesh-kubeconfig"
+          printf '%s' "${KUBECONFIG_BASE64}" | base64 --decode >"${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "KUBECONFIG=${kubeconfig}" >>"${GITHUB_ENV}"
+          kubectl version --request-timeout=20s >/dev/null
+          helm history billmesh-api --namespace "${KUBE_NAMESPACE}"
+      - name: Configure short-lived AWS deployment credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: billmesh-development-rollback-${{ github.run_id }}
+          mask-aws-account-id: true
+      - name: Refresh ECR image-pull credentials
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          registry="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          password="$(aws ecr get-login-password --region "${AWS_REGION}")"
+          kubectl -n "${KUBE_NAMESPACE}" create secret docker-registry billmesh-ecr --docker-server="${registry}" --docker-username=AWS --docker-password="${password}" --dry-run=client -o yaml | kubectl apply -f -
+          unset password
+      - name: Restore Helm revision without running migrations
+        env:
+          HELM_REVISION: ${{ inputs.helm_revision }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          if [[ "${HELM_REVISION}" == 0 ]]; then
+            helm rollback billmesh-api --namespace "${KUBE_NAMESPACE}" --wait --timeout 10m
+          else
+            helm rollback billmesh-api "${HELM_REVISION}" --namespace "${KUBE_NAMESPACE}" --wait --timeout 10m
+          fi
+      - name: Verify rollout and public readiness
+        env:
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          API_HOSTNAME: ${{ vars.API_HOSTNAME }}
+        run: |
+          kubectl rollout status deployment/billmesh-api --namespace "${KUBE_NAMESPACE}" --timeout=5m
+          kubectl rollout status deployment/billmesh-api-worker --namespace "${KUBE_NAMESPACE}" --timeout=5m
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 "https://${API_HOSTNAME}/readyz" >/dev/null
+      - name: Publish rollback summary
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          {
+            echo '### development-api Helm rollback'
+            echo '- Requested revision: `${{ inputs.helm_revision }}`'
+            echo '- Requested by: `${{ github.actor }}`'
+            echo "- Reason: ${REASON}"
+            echo '- Database migrations were not reversed.'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - name: Remove kubeconfig and tunnel
+        if: ${{ always() }}
+        run: |
+          set +e
+          pid_file="${RUNNER_TEMP}/cloudflared-access.pid"
+          if [[ -f "${pid_file}" ]]; then tunnel_pid="$(cat "${pid_file}")"; [[ "${tunnel_pid}" =~ ^[0-9]+$ ]] && kill "${tunnel_pid}" 2>/dev/null; fi
+          rm -f "${RUNNER_TEMP}/billmesh-kubeconfig" "${RUNNER_TEMP}/cloudflared-access.log" "${RUNNER_TEMP}/cloudflared-access.pid" "${RUNNER_TEMP}/cloudflared"

@@ -11,6 +11,11 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 - Durable SSE history with `Last-Event-ID` replay and a retrying webhook worker.
 - Unit tests, real-PostgreSQL integration tests, an E2E topology, fake IdNest/Razorpay/webhook services, Docker image, and CI.
 
+## Deployment
+
+See [the development deployment runbook](docs/deployment.md) for the API image,
+Kubernetes promotion, and rollback procedure.
+
 ## Run locally
 
 Requirements: Go 1.24+, Docker, and Docker Compose.

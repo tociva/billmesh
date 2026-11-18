@@ -1,0 +1,196 @@
+name: Build and publish API image
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Semantic version increment for the API release
+        required: true
+        default: minor
+        type: choice
+        options: [minor, major]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-image-publication
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Validate API and deployment contracts
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.4
+      - name: Static validation
+        run: |
+          set -euo pipefail
+          go vet ./...
+          test -z "$(gofmt -l .)"
+          make openapi-check
+          find tools/api -type f -name '*.sh' ! -name 'smoke-test-api-image.sh' -exec sh -n {} \;
+          bash -n tools/api/ci/smoke-test-api-image.sh
+          ./tools/api/ci/test-kubernetes-deployment-contracts.sh
+      - name: Unit tests
+        run: TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./api ./internal/... ./tests/unit/...
+      - name: Integration and end-to-end tests
+        run: docker compose -f deploy/compose.test.yml -p billmesh-release-${{ github.run_id }} up --build --exit-code-from e2e e2e
+      - name: Show test logs on failure
+        if: ${{ failure() }}
+        run: docker compose -f deploy/compose.test.yml -p billmesh-release-${{ github.run_id }} logs --no-color
+      - name: Clean up test services
+        if: ${{ always() }}
+        run: docker compose -f deploy/compose.test.yml -p billmesh-release-${{ github.run_id }} down -v --remove-orphans
+
+  release:
+    name: Tag API release
+    needs: quality
+    if: ${{ github.ref == 'refs/heads/main' && needs.quality.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: billmesh-release
+      cancel-in-progress: false
+    outputs:
+      revision: ${{ steps.release.outputs.revision }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Create and push release tag
+        id: release
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          set -euo pipefail
+          latest_tag="$(git tag --list 'api-v*' --sort=-v:refname | head -n 1)"
+          current="${latest_tag#api-v}"
+          [[ -n "${latest_tag}" ]] || current=0.0.0
+          [[ "${current}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          if [[ "${RELEASE_TYPE}" == major ]]; then
+            version="$((major + 1)).0.0"
+          else
+            version="${major}.$((minor + 1)).0"
+          fi
+          tag="api-v${version}"
+          ! git rev-parse --verify --quiet "refs/tags/${tag}"
+          git tag --annotate "${tag}" --message "${tag}" "${GITHUB_SHA}"
+          git push origin "${tag}"
+          echo "revision=${GITHUB_SHA}" >>"${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+
+  build:
+    name: Build, verify, and publish API image
+    needs: release
+    if: ${{ github.ref == 'refs/heads/main' && needs.release.result == 'success' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    environment: ecr-build
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.revision }}
+          persist-credentials: false
+      - name: Validate ECR configuration
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_BUILD_ROLE_ARN: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          [[ "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
+          [[ "${AWS_REGION}" =~ ^[a-z0-9-]+$ ]]
+          [[ "${AWS_BUILD_ROLE_ARN}" == arn:aws:iam::${AWS_ACCOUNT_ID}:role/* ]]
+          [[ "${ECR_REPOSITORY}" =~ ^[a-z0-9][a-z0-9._/-]*$ ]]
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: billmesh-api-image-${{ github.run_id }}
+          mask-aws-account-id: true
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@19d944daaa35f0fa1d3f7f8af1d3f2e5de25c5b7 # v2.1.4
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Resolve reproducible image metadata
+        id: metadata
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          REVISION: ${{ needs.release.outputs.revision }}
+        run: |
+          set -euo pipefail
+          repository="${ECR_REGISTRY}/${ECR_REPOSITORY}"
+          echo "repository=${repository}" >>"${GITHUB_OUTPUT}"
+          echo "created=$(git show -s --format=%cI "${REVISION}")" >>"${GITHUB_OUTPUT}"
+          {
+            echo 'tags<<EOF'
+            echo "${repository}:${RELEASE_TAG}"
+            echo "${repository}:git-${REVISION}"
+            echo 'EOF'
+          } >>"${GITHUB_OUTPUT}"
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ needs.release.outputs.version }}
+            APP_REVISION=${{ needs.release.outputs.revision }}
+            APP_CREATED=${{ steps.metadata.outputs.created }}
+            APP_SOURCE=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=billmesh-api-arm64
+          cache-to: type=gha,mode=max,scope=billmesh-api-arm64
+          provenance: mode=max
+          sbom: true
+      - name: Enforce ECR vulnerability threshold
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: ECR_SCAN_PLATFORM=linux/arm64 ./tools/api/ci/gate-ecr-image-scan.sh "${ECR_REPOSITORY}" "${IMAGE_DIGEST}"
+      - name: Smoke-test published image
+        env:
+          IMAGE_REF: ${{ steps.metadata.outputs.repository }}@${{ steps.build.outputs.digest }}
+        run: |
+          docker pull --platform linux/arm64 "${IMAGE_REF}"
+          API_IMAGE_SMOKE_PLATFORM=linux/arm64 ./tools/api/ci/smoke-test-api-image.sh "${IMAGE_REF}"
+      - name: Publish image identity
+        run: |
+          {
+            echo '### Billmesh API image'
+            echo '- Version: `${{ needs.release.outputs.tag }}`'
+            echo '- Revision: `${{ needs.release.outputs.revision }}`'
+            echo '- Digest: `${{ steps.build.outputs.digest }}`'
+            echo '- Platform: `linux/arm64`'
+          } >>"${GITHUB_STEP_SUMMARY}"

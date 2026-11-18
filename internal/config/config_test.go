@@ -89,6 +89,32 @@ func TestLoadDatabaseURLTakesPrecedenceOverComponents(t *testing.T) {
 	require.Equal(t, "postgres://override.example/billmesh", cfg.DatabaseURL)
 }
 
+func TestLoadMigrationDatabaseURLUsesDedicatedConnection(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://runtime.example/billmesh")
+	t.Setenv("MIGRATION_DATABASE_URL", "postgres://migration.example/billmesh")
+
+	databaseURL, err := LoadMigrationDatabaseURL()
+	require.NoError(t, err)
+	require.Equal(t, "postgres://migration.example/billmesh", databaseURL)
+}
+
+func TestLoadMigrationDatabaseURLFallsBackToRuntimeConnection(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://runtime.example/billmesh")
+	t.Setenv("MIGRATION_DATABASE_URL", "")
+
+	databaseURL, err := LoadMigrationDatabaseURL()
+	require.NoError(t, err)
+	require.Equal(t, "postgres://runtime.example/billmesh", databaseURL)
+}
+
+func TestLoadMigrationDatabaseURLRejectsInvalidConnection(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://runtime.example/billmesh")
+	t.Setenv("MIGRATION_DATABASE_URL", "http://migration.example/billmesh")
+
+	_, err := LoadMigrationDatabaseURL()
+	require.ErrorContains(t, err, "MIGRATION_DATABASE_URL")
+}
+
 func TestLoadRejectsInvalidDatabaseComponents(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("DB_HOST", "localhost")

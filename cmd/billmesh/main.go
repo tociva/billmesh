@@ -40,19 +40,25 @@ func run() error {
 	if err := loadEnvironment(); err != nil {
 		return err
 	}
+	if os.Args[1] == "migrate" {
+		databaseURL, err := config.LoadMigrationDatabaseURL()
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		command := "up"
+		if len(os.Args) > 2 {
+			command = os.Args[2]
+		}
+		return database.Migrate(ctx, databaseURL, command)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if os.Args[1] == "migrate" {
-		command := "up"
-		if len(os.Args) > 2 {
-			command = os.Args[2]
-		}
-		return database.Migrate(ctx, cfg.DatabaseURL, command)
-	}
 	if os.Args[1] == "api" {
 		if err := validateAPIAuthConfig(cfg); err != nil {
 			return err

@@ -1,5 +1,7 @@
 .git
 .github
+.terraform
 billmesh
 coverage.out
 .env
+tmp

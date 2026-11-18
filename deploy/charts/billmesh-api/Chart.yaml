@@ -1,0 +1,6 @@
+apiVersion: v2
+name: billmesh-api
+description: Provider-neutral Kubernetes deployment for the Billmesh API and worker
+type: application
+version: 0.1.0
+appVersion: "unknown"

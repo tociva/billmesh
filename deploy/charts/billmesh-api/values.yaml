@@ -1,0 +1,114 @@
+nameOverride: ''
+fullnameOverride: ''
+revision: unknown
+runtimeConfigRevision: unknown
+
+image:
+  repository: ''
+  digest: ''
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ''
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+secrets:
+  runtimeSecretName: ''
+  migrationSecretName: ''
+  postgresCa:
+    secretName: ''
+    key: ca.crt
+    mountPath: /run/billmesh/tls/postgres-ca.crt
+  outboundCa:
+    secretName: ''
+    key: ca.crt
+    mountPath: /run/billmesh/tls/outbound-ca.crt
+
+api:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: '1'
+      memory: 512Mi
+
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+migration:
+  serviceAccountName: default
+  activeDeadlineSeconds: 900
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+service:
+  port: 80
+  targetPort: 8080
+
+probes:
+  startup:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 24
+  liveness:
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+terminationGracePeriodSeconds: 30
+
+networkPolicy:
+  enabled: false
+  ingressNamespace: cloudflare-tunnels
+  ingressPodLabels:
+    app.kubernetes.io/name: cloudflared
+  allowDns: true
+  allowHttpsToInternet: true
+  externalCidrs: []
+  externalPorts: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

@@ -3,4 +3,9 @@
 /.env
 /.idea
 /.vscode
+/tmp/
+.terraform/
+*.tfstate
+*.tfstate.*
+tools/api/infrastructure/aws-development/terraform.tfvars
 .DS_Store

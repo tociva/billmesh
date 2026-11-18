@@ -54,7 +54,7 @@ type BFFConfig struct {
 }
 
 func Load() (Config, error) {
-	databaseURL, err := loadDatabaseURL()
+	databaseURL, err := LoadDatabaseURL()
 	if err != nil {
 		return Config{}, err
 	}
@@ -65,17 +65,8 @@ func Load() (Config, error) {
 		DelegationAudience:     strings.TrimSpace(os.Getenv("DELEGATION_AUDIENCE")),
 		DelegationDiscoveryURL: strings.TrimSpace(os.Getenv("DELEGATION_DISCOVERY_URL")),
 	}
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {
-		return Config{}, errors.New("DATABASE_URL must be a valid PostgreSQL URL")
-	}
-	if port := parsed.Port(); port != "" {
-		if value, err := strconv.Atoi(port); err != nil || value < 1 || value > 65535 {
-			return Config{}, errors.New("DATABASE_URL contains an invalid port")
-		}
-	}
-	if _, _, err := net.SplitHostPort(parsed.Host); err != nil && parsed.Port() != "" {
-		return Config{}, fmt.Errorf("DATABASE_URL host: %w", err)
+	if _, err = validateDatabaseURL(databaseURL, "DATABASE_URL"); err != nil {
+		return Config{}, err
 	}
 	if c.WebhookTimeout, err = duration("WEBHOOK_TIMEOUT", 5*time.Second); err != nil {
 		return Config{}, err
@@ -107,9 +98,10 @@ func Load() (Config, error) {
 	return c, nil
 }
 
-func loadDatabaseURL() (string, error) {
+// LoadDatabaseURL reads and validates the runtime database connection.
+func LoadDatabaseURL() (string, error) {
 	if databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL")); databaseURL != "" {
-		return databaseURL, nil
+		return validateDatabaseURL(databaseURL, "DATABASE_URL")
 	}
 
 	required := []string{"DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"}
@@ -142,7 +134,33 @@ func loadDatabaseURL() (string, error) {
 	query := databaseURL.Query()
 	query.Set("sslmode", sslMode)
 	databaseURL.RawQuery = query.Encode()
-	return databaseURL.String(), nil
+	return validateDatabaseURL(databaseURL.String(), "DATABASE_URL")
+}
+
+// LoadMigrationDatabaseURL reads the schema-owner connection used only by the
+// migration command. Local environments may omit it and fall back to the
+// runtime database connection.
+func LoadMigrationDatabaseURL() (string, error) {
+	if databaseURL := strings.TrimSpace(os.Getenv("MIGRATION_DATABASE_URL")); databaseURL != "" {
+		return validateDatabaseURL(databaseURL, "MIGRATION_DATABASE_URL")
+	}
+	return LoadDatabaseURL()
+}
+
+func validateDatabaseURL(databaseURL, name string) (string, error) {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {
+		return "", fmt.Errorf("%s must be a valid PostgreSQL URL", name)
+	}
+	if port := parsed.Port(); port != "" {
+		if value, err := strconv.Atoi(port); err != nil || value < 1 || value > 65535 {
+			return "", fmt.Errorf("%s contains an invalid port", name)
+		}
+	}
+	if _, _, err := net.SplitHostPort(parsed.Host); err != nil && parsed.Port() != "" {
+		return "", fmt.Errorf("%s host: %w", name, err)
+	}
+	return databaseURL, nil
 }
 
 func loadBrowserAuth() (BrowserAuthConfig, error) {

@@ -27,6 +27,49 @@ type productResponse struct {
 	Version                  int64          `json:"version"`
 }
 
+type delegationConfigurationResponse struct {
+	ProductID          string `json:"product_id"`
+	Environment        string `json:"environment"`
+	AuthorizerClientID string `json:"authorizer_client_id"`
+	Enabled            bool   `json:"enabled"`
+	Version            int64  `json:"version"`
+	Actors             []struct {
+		ClientID  string `json:"client_id"`
+		Profile   string `json:"profile"`
+		ActorType string `json:"actor_type"`
+		Enabled   bool   `json:"enabled"`
+	} `json:"actors"`
+}
+
+func TestProductDelegatedAccessConfiguration(t *testing.T) {
+	h := testkit.NewHTTP(t)
+	admin := h.IssueToken(t, testkit.Unique("delegation-admin"), "daybook", testkit.AllPermissions(), nil)
+	product := createAdminProduct(t, h, admin, "delegation-product")
+	authorizer := testkit.Unique("delegation-authorizer")
+	actor := testkit.Unique("delegation-runtime")
+
+	configured := testkit.Decode[delegationConfigurationResponse](t, h.RequireStatus(t, http.StatusOK, http.MethodPut,
+		"/v1/admin/products/"+product.ID+"/delegated-access/development", map[string]any{
+			"expected_version":     0,
+			"enabled":              true,
+			"authorizer_client_id": authorizer,
+			"actors": []any{map[string]any{
+				"client_id": actor, "profile": "runtime", "actor_type": "service", "enabled": true,
+			}},
+		}, admin))
+	if configured.ProductID != product.ID || configured.Environment != "development" ||
+		configured.AuthorizerClientID != authorizer || !configured.Enabled || configured.Version != 1 ||
+		len(configured.Actors) != 1 || configured.Actors[0].ClientID != actor {
+		t.Fatalf("unexpected delegated-access configuration: %+v", configured)
+	}
+
+	configurations := testkit.Decode[[]delegationConfigurationResponse](t, h.RequireStatus(t, http.StatusOK,
+		http.MethodGet, "/v1/admin/products/"+product.ID+"/delegated-access", nil, admin))
+	if len(configurations) != 1 || configurations[0].Environment != "development" || configurations[0].Version != 1 {
+		t.Fatalf("delegated-access configuration was not listed: %+v", configurations)
+	}
+}
+
 func TestProductBillingPolicyContractAndVersioning(t *testing.T) {
 	h := testkit.NewHTTP(t)
 	admin := h.IssueToken(t, testkit.Unique("policy-admin"), "daybook", testkit.AllPermissions(), nil)

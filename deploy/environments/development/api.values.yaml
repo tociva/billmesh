@@ -1,0 +1,8 @@
+fullnameOverride: billmesh-api
+
+imagePullSecrets:
+  - name: billmesh-ecr
+
+secrets:
+  runtimeSecretName: billmesh-api-runtime
+  migrationSecretName: billmesh-api-migration

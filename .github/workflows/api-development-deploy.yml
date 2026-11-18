@@ -1,0 +1,312 @@
+name: Deploy API image (development)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published API version without the api-v prefix, for example 0.4.0
+        required: true
+        type: string
+      confirm:
+        description: Type DEPLOY to deploy this version
+        required: true
+        type: string
+      reason:
+        description: Change or deployment reference
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-development
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy API version to development
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: development-api
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUDFLARED_VERSION: 2026.10.7
+      CLOUDFLARED_LINUX_AMD64_SHA256: 1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872
+    steps:
+      - name: Validate deployment request
+        env:
+          VERSION: ${{ inputs.version }}
+          CONFIRM: ${{ inputs.confirm }}
+          REASON: ${{ inputs.reason }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          API_HOSTNAME: ${{ vars.API_HOSTNAME }}
+          KUBERNETES_ACCESS_HOSTNAME: ${{ vars.KUBERNETES_ACCESS_HOSTNAME }}
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+          CLOUDFLARE_ACCESS_CLIENT_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          CLOUDFLARE_ACCESS_CLIENT_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${CONFIRM}" == DEPLOY ]]
+          [[ -n "${REASON//[[:space:]]/}" && "${#REASON}" -le 200 ]]
+          [[ "${REASON}" != *$'\n'* && "${REASON}" != *$'\r'* ]]
+          [[ "${AWS_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]
+          [[ "${AWS_REGION}" =~ ^[a-z0-9-]+$ ]]
+          [[ "${AWS_DEPLOY_ROLE_ARN}" == arn:aws:iam::${AWS_ACCOUNT_ID}:role/* ]]
+          [[ "${ECR_REPOSITORY}" =~ ^[a-z0-9][a-z0-9._/-]*$ ]]
+          [[ "${KUBE_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]
+          [[ "${API_HOSTNAME}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "${KUBERNETES_ACCESS_HOSTNAME}" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ -n "${KUBECONFIG_BASE64}" && -n "${CLOUDFLARE_ACCESS_CLIENT_ID}" && -n "${CLOUDFLARE_ACCESS_CLIENT_SECRET}" ]]
+      - name: Check out deployment tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release identity
+        id: release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="api-v${VERSION}"
+          revision="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+          git merge-base --is-ancestor "${revision}" origin/main
+          [[ "$(git cat-file -t "refs/tags/${tag}")" == tag ]]
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          echo "revision=${revision}" >>"${GITHUB_OUTPUT}"
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
+        with:
+          version: v1.36.5
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.4
+      - name: Configure short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: billmesh-development-deploy-${{ github.run_id }}
+          mask-aws-account-id: true
+      - name: Resolve and scan immutable image
+        id: image
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          REVISION: ${{ steps.release.outputs.revision }}
+        run: |
+          set -euo pipefail
+          digest="$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=${RELEASE_TAG}" --query 'imageDetails[0].imageDigest' --output text)"
+          revision_digest="$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=git-${REVISION}" --query 'imageDetails[0].imageDigest' --output text)"
+          [[ "${digest}" =~ ^sha256:[a-f0-9]{64}$ && "${revision_digest}" == "${digest}" ]]
+          ECR_SCAN_PLATFORM=linux/arm64 ./tools/api/ci/gate-ecr-image-scan.sh "${ECR_REPOSITORY}" "${digest}"
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+      - name: Install pinned cloudflared client
+        run: |
+          set -euo pipefail
+          cloudflared="${RUNNER_TEMP}/cloudflared"
+          curl --fail --silent --show-error --location "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" --output "${cloudflared}"
+          printf '%s  %s\n' "${CLOUDFLARED_LINUX_AMD64_SHA256}" "${cloudflared}" | sha256sum --check --status
+          chmod 700 "${cloudflared}"
+          echo "CLOUDFLARED=${cloudflared}" >>"${GITHUB_ENV}"
+      - name: Open authenticated Kubernetes tunnel
+        env:
+          KUBERNETES_ACCESS_HOSTNAME: ${{ vars.KUBERNETES_ACCESS_HOSTNAME }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          log_file="${RUNNER_TEMP}/cloudflared-access.log"
+          pid_file="${RUNNER_TEMP}/cloudflared-access.pid"
+          "${CLOUDFLARED}" access tcp --hostname "${KUBERNETES_ACCESS_HOSTNAME}" --url 127.0.0.1:6443 --logfile "${log_file}" --loglevel info &
+          tunnel_pid=$!
+          printf '%s\n' "${tunnel_pid}" >"${pid_file}"
+          for attempt in $(seq 1 20); do
+            kill -0 "${tunnel_pid}" 2>/dev/null || { cat "${log_file}" >&2; exit 1; }
+            if (exec 3<>/dev/tcp/127.0.0.1/6443) 2>/dev/null; then exec 3>&-; break; fi
+            [[ "${attempt}" -lt 20 ]] || { cat "${log_file}" >&2; exit 1; }
+            sleep 1
+          done
+      - name: Configure and verify Kubernetes access
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          POSTGRES_CA_SECRET_NAME: ${{ vars.POSTGRES_CA_SECRET_NAME }}
+          POSTGRES_CA_SECRET_KEY: ${{ vars.POSTGRES_CA_SECRET_KEY }}
+          OUTBOUND_CA_SECRET_NAME: ${{ vars.OUTBOUND_CA_SECRET_NAME }}
+          OUTBOUND_CA_SECRET_KEY: ${{ vars.OUTBOUND_CA_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          kubeconfig="${RUNNER_TEMP}/billmesh-kubeconfig"
+          printf '%s' "${KUBECONFIG_BASE64}" | base64 --decode >"${kubeconfig}"
+          chmod 600 "${kubeconfig}"
+          echo "KUBECONFIG=${kubeconfig}" >>"${GITHUB_ENV}"
+          kubectl version --request-timeout=20s >/dev/null
+          for permission in 'create deployments.apps' 'patch deployments.apps' 'create jobs.batch' 'delete jobs.batch' 'create services' 'patch services' 'create serviceaccounts' 'patch serviceaccounts' 'get secrets' 'create secrets' 'patch secrets'; do
+            set -- ${permission}
+            [[ "$(kubectl auth can-i "$1" "$2" --namespace "${KUBE_NAMESPACE}")" == yes ]]
+          done
+          verify_secret_key() {
+            [[ -n "$1" ]] || return 0
+            kubectl get secret "$1" --namespace "${KUBE_NAMESPACE}" -o json | jq -e --arg key "$2" '.data[$key] != null' >/dev/null
+          }
+          verify_secret_key "${POSTGRES_CA_SECRET_NAME}" "${POSTGRES_CA_SECRET_KEY}"
+          verify_secret_key "${OUTBOUND_CA_SECRET_NAME}" "${OUTBOUND_CA_SECRET_KEY}"
+      - name: Refresh ECR image-pull credentials
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          registry="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          password="$(aws ecr get-login-password --region "${AWS_REGION}")"
+          kubectl -n "${KUBE_NAMESPACE}" create secret docker-registry billmesh-ecr --docker-server="${registry}" --docker-username=AWS --docker-password="${password}" --dry-run=client -o yaml | kubectl apply -f -
+          unset password
+      - name: Assemble validated application environment
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DELEGATION_ISSUER: ${{ vars.DELEGATION_ISSUER }}
+          DELEGATION_DISCOVERY_URL: ${{ vars.DELEGATION_DISCOVERY_URL }}
+          DELEGATION_AUDIENCE: ${{ vars.DELEGATION_AUDIENCE }}
+          DELEGATION_PROFILE_REFRESH_INTERVAL: ${{ vars.DELEGATION_PROFILE_REFRESH_INTERVAL }}
+          DELEGATION_PROFILE_MAX_STALENESS: ${{ vars.DELEGATION_PROFILE_MAX_STALENESS }}
+          WEBHOOK_TIMEOUT: ${{ vars.WEBHOOK_TIMEOUT }}
+          WORKER_INTERVAL: ${{ vars.WORKER_INTERVAL }}
+          WEBHOOK_ALLOWED_PRIVATE_HOSTS: ${{ vars.WEBHOOK_ALLOWED_PRIVATE_HOSTS }}
+          AUTH_FAILURES_PER_MINUTE: ${{ vars.AUTH_FAILURES_PER_MINUTE }}
+          MUTATION_RATE_PER_SECOND: ${{ vars.MUTATION_RATE_PER_SECOND }}
+          MUTATION_BURST: ${{ vars.MUTATION_BURST }}
+          CONSOLE_APP_ORIGIN: ${{ vars.CONSOLE_APP_ORIGIN }}
+          ADMIN_APP_ORIGIN: ${{ vars.ADMIN_APP_ORIGIN }}
+          BFF_CONSOLE_ISSUER: ${{ vars.BFF_CONSOLE_ISSUER }}
+          BFF_CONSOLE_CLIENT_ID: ${{ vars.BFF_CONSOLE_CLIENT_ID }}
+          BFF_CONSOLE_CLIENT_SECRET: ${{ secrets.BFF_CONSOLE_CLIENT_SECRET }}
+          BFF_CONSOLE_AUDIENCE: ${{ vars.BFF_CONSOLE_AUDIENCE }}
+          BFF_CONSOLE_SCOPE: ${{ vars.BFF_CONSOLE_SCOPE }}
+          BFF_CONSOLE_REDIRECT_URI: ${{ vars.BFF_CONSOLE_REDIRECT_URI }}
+          BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI: ${{ vars.BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI }}
+          BFF_CONSOLE_STANDALONE_LOGOUT_URI: ${{ vars.BFF_CONSOLE_STANDALONE_LOGOUT_URI }}
+          BFF_ADMIN_ISSUER: ${{ vars.BFF_ADMIN_ISSUER }}
+          BFF_ADMIN_CLIENT_ID: ${{ vars.BFF_ADMIN_CLIENT_ID }}
+          BFF_ADMIN_CLIENT_SECRET: ${{ secrets.BFF_ADMIN_CLIENT_SECRET }}
+          BFF_ADMIN_AUDIENCE: ${{ vars.BFF_ADMIN_AUDIENCE }}
+          BFF_ADMIN_SCOPE: ${{ vars.BFF_ADMIN_SCOPE }}
+          BFF_ADMIN_REDIRECT_URI: ${{ vars.BFF_ADMIN_REDIRECT_URI }}
+          BFF_ADMIN_POST_LOGOUT_REDIRECT_URI: ${{ vars.BFF_ADMIN_POST_LOGOUT_REDIRECT_URI }}
+          BFF_ADMIN_STANDALONE_LOGOUT_URI: ${{ vars.BFF_ADMIN_STANDALONE_LOGOUT_URI }}
+          BFF_SESSION_ENCRYPTION_KEYS: ${{ secrets.BFF_SESSION_ENCRYPTION_KEYS }}
+          BFF_SESSION_IDLE_TTL: ${{ vars.BFF_SESSION_IDLE_TTL }}
+          BFF_SESSION_ABSOLUTE_TTL: ${{ vars.BFF_SESSION_ABSOLUTE_TTL }}
+          BFF_LOGIN_TTL: ${{ vars.BFF_LOGIN_TTL }}
+          BFF_LOGOUT_TTL: ${{ vars.BFF_LOGOUT_TTL }}
+          BFF_REFRESH_SKEW: ${{ vars.BFF_REFRESH_SKEW }}
+          BFF_LOGIN_ATTEMPTS_PER_MINUTE: ${{ vars.BFF_LOGIN_ATTEMPTS_PER_MINUTE }}
+          RAZORPAY_BASE_URL: ${{ vars.RAZORPAY_BASE_URL }}
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          RAZORPAY_CHECKOUT_URL: ${{ vars.RAZORPAY_CHECKOUT_URL }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+          SSL_CERT_FILE: ${{ vars.SSL_CERT_FILE }}
+          OUTBOUND_CA_SECRET_NAME: ${{ vars.OUTBOUND_CA_SECRET_NAME }}
+        run: |
+          set -euo pipefail
+          app_env="${RUNNER_TEMP}/billmesh-app.env"
+          if [[ -n "${OUTBOUND_CA_SECRET_NAME}" ]]; then export SSL_CERT_FILE=/run/billmesh/tls/outbound-ca.crt; fi
+          ./tools/api/kubernetes/assemble-app-env.sh "${app_env}"
+          ./tools/api/kubernetes/validate-app-env.sh "${app_env}" >/dev/null
+          echo "APP_ENV_FILE=${app_env}" >>"${GITHUB_ENV}"
+      - name: Synchronize application Secrets
+        env:
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          [[ -f "${APP_ENV_FILE}" && -n "${MIGRATION_DATABASE_URL}" ]]
+          kubectl -n "${KUBE_NAMESPACE}" create secret generic billmesh-api-runtime --from-env-file="${APP_ENV_FILE}" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "${KUBE_NAMESPACE}" create secret generic billmesh-api-migration --from-literal="MIGRATION_DATABASE_URL=${MIGRATION_DATABASE_URL}" --dry-run=client -o yaml | kubectl apply -f -
+      - name: Recover interrupted Helm operation
+        env:
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          status_json="$(helm status billmesh-api --namespace "${KUBE_NAMESPACE}" --output json 2>/dev/null || true)"
+          [[ -n "${status_json}" ]] || exit 0
+          status="$(jq -r '.info.status // empty' <<<"${status_json}")"
+          case "${status}" in
+            pending-install|pending-upgrade|pending-rollback)
+              history_json="$(helm history billmesh-api --namespace "${KUBE_NAMESPACE}" --output json)"
+              last_good="$(jq -r 'map(select(.status == "deployed" or .status == "superseded")) | sort_by(.revision) | last | .revision // empty' <<<"${history_json}")"
+              if [[ -n "${last_good}" ]]; then
+                helm rollback billmesh-api "${last_good}" --namespace "${KUBE_NAMESPACE}" --wait --timeout 5m
+              elif [[ "${status}" == pending-install ]]; then
+                helm uninstall billmesh-api --namespace "${KUBE_NAMESPACE}" --wait --timeout 5m
+              else
+                exit 1
+              fi
+              ;;
+          esac
+      - name: Deploy exact image digest with Helm
+        env:
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          REVISION: ${{ steps.release.outputs.revision }}
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          POSTGRES_CA_SECRET_NAME: ${{ vars.POSTGRES_CA_SECRET_NAME }}
+          POSTGRES_CA_SECRET_KEY: ${{ vars.POSTGRES_CA_SECRET_KEY }}
+          OUTBOUND_CA_SECRET_NAME: ${{ vars.OUTBOUND_CA_SECRET_NAME }}
+          OUTBOUND_CA_SECRET_KEY: ${{ vars.OUTBOUND_CA_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          repository="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+          tls_args=()
+          if [[ -n "${POSTGRES_CA_SECRET_NAME}" ]]; then
+            tls_args+=(--set-string secrets.postgresCa.secretName="${POSTGRES_CA_SECRET_NAME}" --set-string secrets.postgresCa.key="${POSTGRES_CA_SECRET_KEY}")
+          fi
+          if [[ -n "${OUTBOUND_CA_SECRET_NAME}" ]]; then
+            tls_args+=(--set-string secrets.outboundCa.secretName="${OUTBOUND_CA_SECRET_NAME}" --set-string secrets.outboundCa.key="${OUTBOUND_CA_SECRET_KEY}")
+          fi
+          helm upgrade --install billmesh-api deploy/charts/billmesh-api --namespace "${KUBE_NAMESPACE}" --values deploy/environments/development/api.values.yaml --set-string image.repository="${repository}" --set-string image.digest="${IMAGE_DIGEST}" --set-string revision="${REVISION}" --set-string runtimeConfigRevision="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" "${tls_args[@]}" --atomic --wait --wait-for-jobs --timeout 10m --history-max 20
+      - name: Verify rollout and public readiness
+        env:
+          KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
+          API_HOSTNAME: ${{ vars.API_HOSTNAME }}
+        run: |
+          set -euo pipefail
+          kubectl rollout status deployment/billmesh-api --namespace "${KUBE_NAMESPACE}" --timeout=5m
+          kubectl rollout status deployment/billmesh-api-worker --namespace "${KUBE_NAMESPACE}" --timeout=5m
+          kubectl get service billmesh-api --namespace "${KUBE_NAMESPACE}" >/dev/null
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 "https://${API_HOSTNAME}/readyz" >/dev/null
+      - name: Publish deployment summary
+        env:
+          REASON: ${{ inputs.reason }}
+        run: |
+          {
+            echo '### development-api Kubernetes deployment'
+            echo '- Version: `api-v${{ inputs.version }}`'
+            echo '- Revision: `${{ steps.release.outputs.revision }}`'
+            echo '- ECR digest: `${{ steps.image.outputs.digest }}`'
+            echo '- Requested by: `${{ github.actor }}`'
+            echo "- Reason: ${REASON}"
+            echo '- Database migrations are not reversed by rollback.'
+          } >>"${GITHUB_STEP_SUMMARY}"
+      - name: Remove runner-side sensitive files and tunnel
+        if: ${{ always() }}
+        run: |
+          set +e
+          pid_file="${RUNNER_TEMP}/cloudflared-access.pid"
+          if [[ -f "${pid_file}" ]]; then tunnel_pid="$(cat "${pid_file}")"; [[ "${tunnel_pid}" =~ ^[0-9]+$ ]] && kill "${tunnel_pid}" 2>/dev/null; fi
+          rm -f "${RUNNER_TEMP}/billmesh-kubeconfig" "${RUNNER_TEMP}/billmesh-app.env" "${RUNNER_TEMP}/cloudflared-access.log" "${RUNNER_TEMP}/cloudflared-access.pid" "${RUNNER_TEMP}/cloudflared"

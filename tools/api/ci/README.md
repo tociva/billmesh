@@ -1,0 +1,14 @@
+# API deployment helpers
+
+These helpers implement the Billmesh image and Kubernetes deployment contract.
+
+- `upload-development-github-environment.sh` validates the ignored canonical
+  configuration, splits variables from secrets, and optionally uploads them.
+- `generate-development-github-environments.sh` performs generation only.
+- `gate-ecr-image-scan.sh` blocks images with HIGH or CRITICAL ECR findings.
+- `smoke-test-api-image.sh` migrates a disposable database and verifies the
+  published image's readiness and liveness endpoints.
+- `test-kubernetes-deployment-contracts.sh` lints and renders the Helm chart and
+  checks digest pinning, workload separation, and pod hardening.
+
+See `docs/deployment.md` for the complete operator runbook.

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "api", "worker", "migration", "service", "secrets"],
+  "properties": {
+    "revision": {
+      "type": "string",
+      "pattern": "^(unknown|[a-f0-9]{40})$"
+    },
+    "runtimeConfigRevision": {
+      "type": "string",
+      "pattern": "^(unknown|[0-9]+-[0-9]+)$"
+    },
+    "image": {
+      "type": "object",
+      "required": ["repository", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      },
+      "additionalProperties": false
+    },
+    "api": {
+      "type": "object",
+      "required": ["replicaCount", "resources"],
+      "properties": {
+        "replicaCount": {"type": "integer", "minimum": 1},
+        "resources": {"type": "object"}
+      }
+    },
+    "worker": {
+      "type": "object",
+      "required": ["replicaCount", "resources"],
+      "properties": {
+        "replicaCount": {"type": "integer", "minimum": 1},
+        "resources": {"type": "object"}
+      }
+    },
+    "migration": {
+      "type": "object",
+      "required": ["serviceAccountName", "activeDeadlineSeconds", "backoffLimit", "ttlSecondsAfterFinished", "resources"],
+      "properties": {
+        "serviceAccountName": {"type": "string", "minLength": 1},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1},
+        "backoffLimit": {"type": "integer", "minimum": 0},
+        "ttlSecondsAfterFinished": {"type": "integer", "minimum": 0},
+        "resources": {"type": "object"}
+      }
+    },
+    "service": {
+      "type": "object",
+      "required": ["port", "targetPort"],
+      "properties": {
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "targetPort": {"type": "integer", "minimum": 1, "maximum": 65535}
+      },
+      "additionalProperties": false
+    },
+    "secrets": {
+      "type": "object",
+      "required": ["runtimeSecretName", "migrationSecretName", "postgresCa", "outboundCa"],
+      "properties": {
+        "runtimeSecretName": {"type": "string", "minLength": 1},
+        "migrationSecretName": {"type": "string", "minLength": 1},
+        "postgresCa": {"$ref": "#/definitions/optionalSecretMount"},
+        "outboundCa": {"$ref": "#/definitions/optionalSecretMount"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "optionalSecretMount": {
+      "type": "object",
+      "required": ["secretName", "key", "mountPath"],
+      "properties": {
+        "secretName": {"type": "string"},
+        "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "mountPath": {"type": "string", "pattern": "^/"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

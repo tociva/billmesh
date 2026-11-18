@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: billmesh-api-deployer
+  namespace: billmesh-development
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: billmesh-api-deployer
+  namespace: billmesh-development
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services, serviceaccounts]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: billmesh-api-deployer
+  namespace: billmesh-development
+subjects:
+  - kind: ServiceAccount
+    name: billmesh-api-deployer
+    namespace: billmesh-development
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: billmesh-api-deployer
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: billmesh-api-deployer-token
+  namespace: billmesh-development
+  annotations:
+    kubernetes.io/service-account.name: billmesh-api-deployer
+type: kubernetes.io/service-account-token
