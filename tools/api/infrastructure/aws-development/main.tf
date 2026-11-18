@@ -241,7 +241,7 @@ variable "build_environment_name" {
 
 variable "deploy_environment_name" {
   type    = string
-  default = "development-api"
+  default = "billmesh-development-api"
 }
 
 variable "ecr_repository_name" {

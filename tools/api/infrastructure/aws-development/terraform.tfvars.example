@@ -1,5 +1,7 @@
 aws_region                 = "ap-south-1"
 github_repository          = "tociva/billmesh"
+# Retrieve these immutable numeric IDs from `.owner.id` and `.id`:
+# gh api repos/tociva/billmesh --jq '{owner_id: .owner.id, repository_id: .id}'
 github_repository_owner_id = "<numeric-owner-id>"
 github_repository_id       = "<numeric-repository-id>"
 
@@ -7,7 +9,7 @@ ecr_repository_name    = "billmesh/api"
 build_role_name        = "billmesh-api-development-build"
 deploy_role_name       = "billmesh-api-development-deploy"
 build_environment_name = "ecr-build"
-deploy_environment_name = "development-api"
+deploy_environment_name = "billmesh-development-api"
 
 # Only one Terraform state in the AWS account should own the account-wide provider.
 create_github_oidc_provider = false

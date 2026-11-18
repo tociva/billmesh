@@ -33,11 +33,11 @@ cleanup() { rm -rf "$temporary_dir"; }
 trap cleanup EXIT HUP INT TERM
 
 ecr_file=$temporary_dir/ecr-build.vars.env
-deployment_variables_file=$temporary_dir/development-api.deployment.vars.env
-deployment_secrets_file=$temporary_dir/development-api.deployment.secrets.env
-runtime_variables_file=$temporary_dir/development-api.runtime.vars.env
-runtime_secrets_file=$temporary_dir/development-api.runtime.secrets.env
-migration_secrets_file=$temporary_dir/development-api.migration.secrets.env
+deployment_variables_file=$temporary_dir/billmesh-development-api.deployment.vars.env
+deployment_secrets_file=$temporary_dir/billmesh-development-api.deployment.secrets.env
+runtime_variables_file=$temporary_dir/billmesh-development-api.runtime.vars.env
+runtime_secrets_file=$temporary_dir/billmesh-development-api.runtime.secrets.env
+migration_secrets_file=$temporary_dir/billmesh-development-api.migration.secrets.env
 app_env_file=$temporary_dir/application.env
 kubeconfig_file=$temporary_dir/kubeconfig.yaml
 
@@ -105,13 +105,13 @@ grep -v '^#' "$runtime_secrets_file" >>"$app_env_file"
 
 if [ -L "$output_dir" ]; then fail "$output_dir must not be a symbolic link"; fi
 mkdir -p "$output_dir"
-for output_name in ecr-build.vars.env development-api.deployment.vars.env development-api.deployment.secrets.env development-api.runtime.vars.env development-api.runtime.secrets.env development-api.migration.secrets.env; do
+for output_name in ecr-build.vars.env billmesh-development-api.deployment.vars.env billmesh-development-api.deployment.secrets.env billmesh-development-api.runtime.vars.env billmesh-development-api.runtime.secrets.env billmesh-development-api.migration.secrets.env; do
   [ ! -L "$output_dir/$output_name" ] || fail "$output_dir/$output_name must not be a symbolic link"
   source_file=$temporary_dir/$output_name
   mv "$source_file" "$output_dir/$output_name"
 done
 
-echo "Generated ecr-build and development-api files in $output_dir."
+echo "Generated ecr-build and billmesh-development-api files in $output_dir."
 if [ "$mode" = check ] || [ "$mode" = generate ]; then
   echo "Development environment validation passed: $env_file"
   exit 0
@@ -121,16 +121,16 @@ command -v gh >/dev/null 2>&1 || fail 'GitHub CLI is not installed'
 gh auth status >/dev/null
 
 if [ "$mode" = replace ]; then
-  for environment in ecr-build development-api; do
+  for environment in ecr-build billmesh-development-api; do
     for name in $(gh variable list --env "$environment" --json name --jq '.[].name'); do gh variable delete "$name" --env "$environment"; done
     for name in $(gh secret list --env "$environment" --json name --jq '.[].name'); do gh secret delete "$name" --env "$environment"; done
   done
 fi
 
 gh variable set --env ecr-build --env-file "$output_dir/ecr-build.vars.env"
-gh variable set --env development-api --env-file "$output_dir/development-api.deployment.vars.env"
-gh variable set --env development-api --env-file "$output_dir/development-api.runtime.vars.env"
-gh secret set --env development-api --env-file "$output_dir/development-api.deployment.secrets.env"
-gh secret set --env development-api --env-file "$output_dir/development-api.runtime.secrets.env"
-gh secret set --env development-api --env-file "$output_dir/development-api.migration.secrets.env"
-echo 'Uploaded ecr-build variables and development-api variables/secrets.'
+gh variable set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.deployment.vars.env"
+gh variable set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.runtime.vars.env"
+gh secret set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.deployment.secrets.env"
+gh secret set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.runtime.secrets.env"
+gh secret set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.migration.secrets.env"
+echo 'Uploaded ecr-build variables and billmesh-development-api variables/secrets.'

@@ -50,10 +50,29 @@ cd -
 ```
 
 Fill the immutable numeric GitHub owner and repository IDs in `terraform.tfvars`.
-Keep Terraform state in a secured remote backend; populated variable files and
-local state are ignored and must not be committed. Set
-`create_github_oidc_provider=true` only if this state is the designated owner of
-the account-wide GitHub OIDC provider.
+They are REST API `id` values, not the `tociva`/`billmesh` names or GitHub
+`node_id` values. Authenticate the GitHub CLI and retrieve both from the
+repository response:
+
+```sh
+gh auth login -h github.com
+gh api repos/tociva/billmesh \
+  --jq '{github_repository_owner_id: (.owner.id|tostring), github_repository_id: (.id|tostring)}'
+```
+
+Copy the returned numbers into the variable file as strings, replacing the
+placeholders entirely:
+
+```hcl
+github_repository_owner_id = "12345678"
+github_repository_id       = "87654321"
+```
+
+The repository owner ID comes from `.owner.id`; the repository ID comes from
+the top-level `.id`. Keep Terraform state in a secured remote backend;
+populated variable files and local state are ignored and must not be committed.
+Set `create_github_oidc_provider=true` only if this state is the designated
+owner of the account-wide GitHub OIDC provider.
 
 ### Create the restricted Kubernetes identity
 
@@ -106,7 +125,7 @@ chmod 600 "$HOME/.kube/restricted-billmesh-kubeconfig.yaml"
 Create two GitHub environments:
 
 - `ecr-build`: ECR publication variables and any build approval rules.
-- `development-api`: deployment/runtime variables and secrets, with the desired
+- `billmesh-development-api`: deployment/runtime variables and secrets, with the desired
   reviewer protection rules.
 
 The ignored `tmp/development.env` file is the local source of truth for both
@@ -143,7 +162,7 @@ gh auth status
 
 Use `--replace` only when the two GitHub environments must be made identical to
 the local source of truth. It validates first, then deletes existing variables
-and secrets from exactly `ecr-build` and `development-api` before uploading the
+and secrets from exactly `ecr-build` and `billmesh-development-api` before uploading the
 replacement set.
 
 Generate `KUBECONFIG_BASE64` without printing it on macOS:
