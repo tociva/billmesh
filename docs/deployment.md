@@ -20,8 +20,9 @@ hostname to the `billmesh-api` Service in the Billmesh namespace.
 - An ARM64 Kubernetes node pool.
 - A namespace dedicated to Billmesh, normally `billmesh-development`.
 - A restricted kubeconfig whose API server is `https://127.0.0.1:6443`.
-- A Cloudflare Access service token allowed to reach the protected Kubernetes
-  access hostname.
+- An interactive Cloudflare Access identity for workstation administration and
+  a service token for CI, both allowed to reach the protected Kubernetes access
+  hostname.
 - An ECR repository with scan-on-push enabled.
 - GitHub OIDC build and deployment roles. No static AWS access keys are used.
 - A PostgreSQL runtime role and a separate migration/schema-owner role.
@@ -76,15 +77,52 @@ owner of the account-wide GitHub OIDC provider.
 
 ### Create the restricted Kubernetes identity
 
-Create the namespace and apply the namespace-scoped deployment identity:
+The development Kubernetes API uses the same protected access path as Daybook.
+It is not reachable directly from a workstation. Install `cloudflared` and
+`kubectl`, then use two terminals for the entire bootstrap session.
+
+In **Terminal 1**, open the shared Cloudflare Access TCP proxy and leave it
+running:
 
 ```sh
-kubectl create namespace billmesh-development
+cloudflared access tcp \
+  --hostname k8s-dev.tociva.com \
+  --url 127.0.0.1:6443
+```
+
+Cloudflare opens the Access login in a browser when authentication is required.
+This local process is only the workstation-to-Kubernetes administrative path;
+it is separate from the server-side tunnel that serves the public Billmesh API.
+
+In **Terminal 2**, select the existing Daybook development-cluster administrator
+kubeconfig and verify that the proxy and cluster are reachable:
+
+```sh
+export KUBECONFIG="$HOME/.kube/tociva-dev-admin.yaml"
+
+nc -vz 127.0.0.1 6443
+kubectl config current-context
+kubectl cluster-info
+kubectl get nodes -o wide
+```
+
+The administrator kubeconfig must use `https://127.0.0.1:6443`. If the shared
+file is not already present, retrieve a fresh K3s administrator kubeconfig using
+the same secure procedure used for Daybook, save it as
+`$HOME/.kube/tociva-dev-admin.yaml`, and set its mode to `600`. Do not commit or
+share this file.
+
+Still in Terminal 2, create the Billmesh namespace idempotently and apply its
+namespace-scoped deployment identity:
+
+```sh
+kubectl create namespace billmesh-development \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f deploy/environments/development/deployer-rbac.yaml
 ```
 
-Wait for the service-account token, then build a kubeconfig that points at the
-local endpoint opened by the Cloudflare Access proxy:
+Wait for the service-account token, then build the restricted CI kubeconfig.
+Its local API endpoint is reached through the same Terminal 1 proxy:
 
 ```sh
 until kubectl get secret billmesh-api-deployer-token \
@@ -119,6 +157,18 @@ kubectl config use-context billmesh-development \
   --kubeconfig="$HOME/.kube/restricted-billmesh-kubeconfig.yaml"
 chmod 600 "$HOME/.kube/restricted-billmesh-kubeconfig.yaml"
 ```
+
+Verify the restricted identity while Terminal 1 is still running:
+
+```sh
+kubectl --kubeconfig "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" \
+  get deployments --namespace billmesh-development
+kubectl --kubeconfig "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" \
+  auth can-i create deployments.apps --namespace billmesh-development
+```
+
+The second command must print `yes`. Stop the Terminal 1 proxy with `Ctrl-C`
+only after the restricted kubeconfig has been created and verified.
 
 ## GitHub environments
 
