@@ -11,10 +11,20 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 - Durable SSE history with `Last-Event-ID` replay and a retrying webhook worker.
 - Unit tests, real-PostgreSQL integration tests, an E2E topology, fake IdNest/Razorpay/webhook services, Docker image, and CI.
 
-## Deployment
+## Documentation
 
-See [the development deployment runbook](docs/deployment.md) for the API image,
-Kubernetes promotion, and rollback procedure.
+| Document | Audience | Covers |
+| --- | --- | --- |
+| [Consumer integration guide](docs/how-to-use-billmesh.md) | Application teams | Responsibility boundaries, onboarding, subscriptions, snapshots, payments, and reconciliation |
+| [OpenAPI contract](api/openapi.yaml) | API consumers and client authors | Complete endpoint, request, response, and schema contract |
+| [Public API surface](docs/public-api-surface.md) | Consumer SDK authors | Supported consumer operations and deliberately excluded routes |
+| [Catalogue transfer](docs/catalogue-transfer.md) | Product and catalogue administrators | Versioned import/export format, validation, delegated access, and safe promotion workflow |
+| [IdNest delegated access](docs/idnest-auth-development.md) | Identity and backend engineers | Browser clients, service actors, token contract, trust registry, and acceptance checks |
+| [Webhook contract](docs/webhook-contract.md) | Integration engineers | Version 2 signing, delivery semantics, retries, rotation, and receiver requirements |
+| [API error codes](docs/api-error-codes.md) | API consumers | Stable machine-readable errors and expected HTTP statuses |
+| [Development deployment runbook](docs/deployment.md) | Release engineers and operators | AWS/ECR setup, Kubernetes access, GitHub environments, build, deployment, and rollback |
+| [Deployment helper reference](tools/api/ci/README.md) | Release engineers | Purpose of the environment, scan, smoke-test, and Helm validation scripts |
+| [Backend test-case manifest](tests/testdata/test-cases.md) | Contributors and reviewers | Unit, integration, E2E, performance, and business-journey coverage |
 
 ## Run locally
 

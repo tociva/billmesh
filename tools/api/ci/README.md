@@ -11,4 +11,5 @@ These helpers implement the Billmesh image and Kubernetes deployment contract.
 - `test-kubernetes-deployment-contracts.sh` lints and renders the Helm chart and
   checks digest pinning, workload separation, and pod hardening.
 
-See `docs/deployment.md` for the complete operator runbook.
+See the [development deployment runbook](../../../docs/deployment.md) for the
+complete operator procedure.

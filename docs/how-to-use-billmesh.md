@@ -17,8 +17,8 @@ configuration, ownership-transfer operations, a fixed IdNest token profile,
 stable error envelopes, cursor-paginated payment reads, and webhook version 2.
 
 It is ready to give other application teams for client implementation and
-staging acceptance. Production publication still requires deployment-specific
-work that cannot be completed in this repository alone:
+staging acceptance. Production publication still requires environment and
+organizational work that cannot be completed in this repository alone:
 
 1. configure and verify the IdNest issuer, Billmesh audience, token claims, and
    client-profile registrations in every target environment;
@@ -33,8 +33,9 @@ work that cannot be completed in this repository alone:
 6. enable dashboards, alerts, reconciliation operations, and named support
    owners before production traffic.
 
-The implementation has been formatted and compile-checked. Test execution and
-staging acceptance remain explicit release gates.
+The repository implementation is validated by unit, integration, end-to-end,
+route-coverage, and deployment-contract tests. Environment provisioning and
+consuming-application staging acceptance remain explicit release gates.
 
 ## The core rule
 
