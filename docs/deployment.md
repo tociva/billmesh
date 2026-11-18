@@ -75,11 +75,12 @@ populated variable files and local state are ignored and must not be committed.
 Set `create_github_oidc_provider=true` only if this state is the designated
 owner of the account-wide GitHub OIDC provider.
 
-### Create the restricted Kubernetes identity
+### Connect through the shared Kubernetes tunnel
 
 The development Kubernetes API uses the same protected access path as Daybook.
 It is not reachable directly from a workstation. Install `cloudflared` and
-`kubectl`, then use two terminals for the entire bootstrap session.
+`kubectl`, then keep the proxy open in one terminal while using `kubectl` from
+any other terminal.
 
 In **Terminal 1**, open the shared Cloudflare Access TCP proxy and leave it
 running:
@@ -112,8 +113,9 @@ the same secure procedure used for Daybook, save it as
 `$HOME/.kube/tociva-dev-admin.yaml`, and set its mode to `600`. Do not commit or
 share this file.
 
-Still in Terminal 2, create the Billmesh namespace idempotently and apply its
-namespace-scoped deployment identity:
+From Terminal 2 or any other terminal using the administrator kubeconfig,
+create the Billmesh namespace idempotently and apply its namespace-scoped
+deployment identity:
 
 ```sh
 kubectl create namespace billmesh-development \
@@ -121,8 +123,21 @@ kubectl create namespace billmesh-development \
 kubectl apply -f deploy/environments/development/deployer-rbac.yaml
 ```
 
-Wait for the service-account token, then build the restricted CI kubeconfig.
-Its local API endpoint is reached through the same Terminal 1 proxy:
+All subsequent interactive `kubectl` commands can run from these secondary
+terminals. The only process that must remain in Terminal 1 is `cloudflared`.
+Stop it with `Ctrl-C` when the Kubernetes session is finished.
+
+### Create the restricted CI kubeconfig once
+
+This step is not required for normal interactive `kubectl` use. Run it once
+only when configuring the GitHub Actions deploy and rollback workflows, which
+read the resulting file through the `KUBECONFIG_BASE64` environment secret. If
+that secret is already configured with the Billmesh namespace-scoped identity,
+skip this section.
+
+With the Cloudflare proxy running in one terminal and the administrator
+kubeconfig selected in another, wait for the deployment service-account token
+and build its restricted kubeconfig:
 
 ```sh
 until kubectl get secret billmesh-api-deployer-token \
@@ -168,7 +183,7 @@ kubectl --kubeconfig "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" \
 ```
 
 The second command must print `yes`. Stop the Terminal 1 proxy with `Ctrl-C`
-only after the restricted kubeconfig has been created and verified.
+after the restricted kubeconfig has been created and verified.
 
 ## GitHub environments
 
