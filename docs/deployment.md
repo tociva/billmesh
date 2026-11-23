@@ -92,6 +92,9 @@ cloudflared access tcp \
 ```
 
 Cloudflare opens the Access login in a browser when authentication is required.
+Complete that login before running `kubectl` commands. Do not start a second
+proxy on the same local port.
+
 This local process is only the workstation-to-Kubernetes administrative path;
 it is separate from the server-side tunnel that serves the public Billmesh API.
 
@@ -103,15 +106,27 @@ export KUBECONFIG="$HOME/.kube/tociva-dev-admin.yaml"
 
 nc -vz 127.0.0.1 6443
 kubectl config current-context
+kubectl config view --minify \
+  -o jsonpath='{.clusters[0].cluster.server}{"\n"}'
+curl --noproxy '*' --insecure --verbose \
+  --connect-timeout 5 --max-time 15 \
+  https://127.0.0.1:6443/version
+kubectl --request-timeout=15s get --raw=/version
 kubectl cluster-info
 kubectl get nodes -o wide
 ```
 
-The administrator kubeconfig must use `https://127.0.0.1:6443`. If the shared
-file is not already present, retrieve a fresh K3s administrator kubeconfig using
-the same secure procedure used for Daybook, save it as
-`$HOME/.kube/tociva-dev-admin.yaml`, and set its mode to `600`. Do not commit or
-share this file.
+The context may be named `default`; that is normal for the K3s administrator
+kubeconfig. The server command must print `https://127.0.0.1:6443`. The `curl`
+request may return `401` or `403` because it does not present the kubeconfig's
+client certificate; any HTTP response proves that the TLS tunnel is working.
+The authenticated `kubectl get --raw=/version` command must return Kubernetes
+version JSON before continuing.
+
+If the shared administrator file is not already present, retrieve a fresh K3s
+administrator kubeconfig using the same secure procedure used for Daybook, save
+it as `$HOME/.kube/tociva-dev-admin.yaml`, and set its mode to `600`. Do not
+commit or share this file.
 
 From Terminal 2 or any other terminal using the administrator kubeconfig,
 create the Billmesh namespace idempotently and apply its namespace-scoped
@@ -126,6 +141,41 @@ kubectl apply -f deploy/environments/development/deployer-rbac.yaml
 All subsequent interactive `kubectl` commands can run from these secondary
 terminals. The only process that must remain in Terminal 1 is `cloudflared`.
 Stop it with `Ctrl-C` when the Kubernetes session is finished.
+
+#### Troubleshoot a TLS handshake timeout
+
+A successful `nc` check proves only that the local `cloudflared` process is
+listening. If `curl` or `kubectl` reports `TLS handshake timeout`, the proxy is
+not forwarding successfully to the Kubernetes origin; changing contexts or
+RBAC will not fix that condition.
+
+Stop the existing Terminal 1 process with `Ctrl-C`, refresh the interactive
+Access login, and restart one proxy with diagnostics enabled:
+
+```sh
+cloudflared access login https://k8s-dev.tociva.com
+
+cloudflared access tcp \
+  --hostname k8s-dev.tociva.com \
+  --url 127.0.0.1:6443 \
+  --loglevel debug \
+  --logfile "${TMPDIR:-/tmp}/tociva-k8s-access.log"
+```
+
+From another terminal, repeat the TLS and authenticated API checks:
+
+```sh
+curl --noproxy '*' --insecure --verbose \
+  --connect-timeout 5 --max-time 15 \
+  https://127.0.0.1:6443/version
+kubectl --request-timeout=15s get --raw=/version
+tail -n 100 "${TMPDIR:-/tmp}/tociva-k8s-access.log"
+```
+
+If the TLS handshake still does not complete, inspect the Cloudflare Access
+policy, the health of the shared server-side connector, and the
+`k8s-dev.tociva.com` route to K3s. The Billmesh namespace does not need to exist
+for `/version` to succeed.
 
 ### Create the restricted CI kubeconfig once
 
