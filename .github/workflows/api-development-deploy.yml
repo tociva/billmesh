@@ -151,6 +151,7 @@ jobs:
           kubeconfig="${RUNNER_TEMP}/billmesh-kubeconfig"
           printf '%s' "${KUBECONFIG_BASE64}" | base64 --decode >"${kubeconfig}"
           chmod 600 "${kubeconfig}"
+          export KUBECONFIG="${kubeconfig}"
           echo "KUBECONFIG=${kubeconfig}" >>"${GITHUB_ENV}"
           kubectl version --request-timeout=20s >/dev/null
           for permission in 'create deployments.apps' 'patch deployments.apps' 'create jobs.batch' 'delete jobs.batch' 'create services' 'patch services' 'create serviceaccounts' 'patch serviceaccounts' 'get secrets' 'create secrets' 'patch secrets'; do

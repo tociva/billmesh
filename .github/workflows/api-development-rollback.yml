@@ -98,6 +98,7 @@ jobs:
           kubeconfig="${RUNNER_TEMP}/billmesh-kubeconfig"
           printf '%s' "${KUBECONFIG_BASE64}" | base64 --decode >"${kubeconfig}"
           chmod 600 "${kubeconfig}"
+          export KUBECONFIG="${kubeconfig}"
           echo "KUBECONFIG=${kubeconfig}" >>"${GITHUB_ENV}"
           kubectl version --request-timeout=20s >/dev/null
           helm history billmesh-api --namespace "${KUBE_NAMESPACE}"
