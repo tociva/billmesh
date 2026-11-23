@@ -94,6 +94,8 @@ jobs:
           fi
           tag="api-v${version}"
           ! git rev-parse --verify --quiet "refs/tags/${tag}"
+          git config --local user.name 'github-actions[bot]'
+          git config --local user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag --annotate "${tag}" --message "${tag}" "${GITHUB_SHA}"
           git push origin "${tag}"
           echo "revision=${GITHUB_SHA}" >>"${GITHUB_OUTPUT}"
