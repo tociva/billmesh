@@ -66,8 +66,10 @@ github_repository_id       = "1388804484"
 ```
 
 Prepare `terraform.tfvars` and the known values in the ignored
-`tmp/development.env` file. The script preserves external secrets and can be
-rerun safely as later values become available:
+`tmp/development.env` file. It also imports matching populated values from the
+root `.env` only when the deployment value is empty or still a placeholder. The
+script preserves populated deployment values and can be rerun safely as later
+values become available:
 
 ```sh
 ./tools/api/ci/bootstrap-development-config.sh

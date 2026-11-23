@@ -11,11 +11,12 @@ repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
 terraform_dir=$repo_root/tools/api/infrastructure/aws-development
 env_template=$script_dir/development.env.example
 tfvars_template=$terraform_dir/terraform.tfvars.example
+local_env_file=$repo_root/.env
 env_file=${1:-$repo_root/tmp/development.env}
 tfvars_file=${2:-$terraform_dir/terraform.tfvars}
 kubeconfig_file=${3:-${HOME:?HOME is required}/.kube/restricted-billmesh-kubeconfig.yaml}
 
-for command in awk base64 cp gh grep jq mkdir mktemp mv terraform tr; do
+for command in awk base64 cp gh grep jq mkdir mktemp mv sort terraform tr; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 
@@ -41,6 +42,42 @@ fi
 [ -f "$env_file" ] && [ ! -L "$env_file" ] || fail "$env_file must be a regular file"
 [ -f "$tfvars_file" ] && [ ! -L "$tfvars_file" ] || fail "$tfvars_file must be a regular file"
 chmod 600 "$env_file" "$tfvars_file"
+
+if [ -e "$local_env_file" ]; then
+  [ -f "$local_env_file" ] && [ ! -L "$local_env_file" ] ||
+    fail "$local_env_file must be a regular file"
+  local_import_result=$work_dir/local-import-result
+  local_imported_keys=$work_dir/local-imported-keys
+  awk -v imported_keys="$local_imported_keys" '
+    FNR == NR {
+      if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+        key=$0; sub(/=.*/, "", key)
+        value=$0; sub(/^[^=]*=/, "", value)
+        source_line[key]=$0
+        source_value[key]=value
+      }
+      next
+    }
+    $0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ {
+      key=$0; sub(/=.*/, "", key)
+      value=$0; sub(/^[^=]*=/, "", value)
+      if ((value == "" || value ~ /<[^>]+>/) &&
+          key in source_line && source_value[key] != "" &&
+          source_value[key] !~ /<[^>]+>/) {
+        print source_line[key]
+        print key > imported_keys
+        next
+      }
+    }
+    { print }
+  ' "$local_env_file" "$env_file" >"$local_import_result"
+  chmod 600 "$local_import_result"
+  mv "$local_import_result" "$env_file"
+  if [ -s "$local_imported_keys" ]; then
+    echo 'Imported populated values from .env for:'
+    sort -u "$local_imported_keys"
+  fi
+fi
 
 set_hcl_string() {
   hcl_key=$1
