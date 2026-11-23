@@ -23,7 +23,9 @@ LABEL org.opencontainers.image.title="Billmesh API" \
       org.opencontainers.image.revision="${APP_REVISION}" \
       org.opencontainers.image.created="${APP_CREATED}" \
       org.opencontainers.image.source="${APP_SOURCE}"
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache \
+      ca-certificates \
+      'zlib>=1.4-r0' \
     && addgroup -S -g 10001 billmesh \
     && adduser -S -D -H -u 10001 -G billmesh billmesh
 WORKDIR /app

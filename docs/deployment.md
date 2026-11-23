@@ -312,12 +312,34 @@ Billmesh image.
 
 If PostgreSQL uses a private CA, create that CA Secret in the namespace before
 deployment and configure `POSTGRES_CA_SECRET_NAME` and
-`POSTGRES_CA_SECRET_KEY`. Add the chart mount path to both database URLs, for
+`POSTGRES_CA_SECRET_KEY`. Add the chart mount path to `DATABASE_URL`, for
 example `sslrootcert=/run/billmesh/tls/postgres-ca.crt`.
 
 An independent outbound CA can be mounted with `OUTBOUND_CA_SECRET_NAME` and
 `OUTBOUND_CA_SECRET_KEY`. When configured, the workflow sets
 `SSL_CERT_FILE=/run/billmesh/tls/outbound-ca.crt`.
+
+## Build and verify the image locally
+
+Before creating a release, start Docker and run the local ARM64 image check
+from the repository root:
+
+```sh
+./tools/api/ci/build-and-verify-api-image.sh
+```
+
+The script builds `billmesh-api:local-verify`, verifies the Linux ARM64
+platform, non-root runtime user, and minimum patched zlib version, applies
+Billmesh migrations to a disposable PostgreSQL database, and checks the API's
+readiness and liveness endpoints. To use another local tag, pass it as the only
+argument:
+
+```sh
+./tools/api/ci/build-and-verify-api-image.sh billmesh-api:pre-release
+```
+
+This catches runtime and known package-floor problems locally. The release
+workflow still performs the authoritative ECR vulnerability scan after push.
 
 ## Build a release
 
@@ -343,9 +365,9 @@ Run **Deploy API image (development)** from `main` with:
 
 The workflow verifies that the tag belongs to `main`, that both ECR tags resolve
 to the same digest, and that the digest still passes the vulnerability gate. It
-then opens the authenticated Kubernetes tunnel, synchronizes runtime and
-migration Secrets, refreshes ECR pull credentials, and performs an atomic Helm
-upgrade pinned to the exact digest.
+then opens the authenticated Kubernetes tunnel, synchronizes the runtime
+Secret, refreshes ECR pull credentials, and performs an atomic Helm upgrade
+pinned to the exact digest.
 
 The migration Job completes before either Deployment is changed. A failed
 migration or rollout causes Helm to restore the previous Kubernetes revision.
@@ -368,12 +390,12 @@ helm history billmesh-api --namespace billmesh-development
 
 ## Local deployment checks
 
-With Helm installed:
+With Helm and Docker installed and Docker running:
 
 ```sh
 ./tools/api/ci/test-kubernetes-deployment-contracts.sh
 go test ./internal/config ./cmd/billmesh
-docker build -f deploy/Dockerfile --target runtime .
+./tools/api/ci/build-and-verify-api-image.sh
 ```
 
 The Compose files under `deploy/` remain the supported local, integration, and
