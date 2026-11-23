@@ -37,7 +37,7 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           envFrom:
             - secretRef:
-                name: {{ required "secrets.migrationSecretName is required" .Values.secrets.migrationSecretName }}
+                name: {{ required "secrets.runtimeSecretName is required" .Values.secrets.runtimeSecretName }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}
           volumeMounts:

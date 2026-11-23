@@ -35,7 +35,6 @@ containerSecurityContext:
 
 secrets:
   runtimeSecretName: ''
-  migrationSecretName: ''
   postgresCa:
     secretName: ''
     key: ca.crt

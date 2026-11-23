@@ -41,7 +41,7 @@ func run() error {
 		return err
 	}
 	if os.Args[1] == "migrate" {
-		databaseURL, err := config.LoadMigrationDatabaseURL()
+		databaseURL, err := config.LoadDatabaseURL()
 		if err != nil {
 			return err
 		}

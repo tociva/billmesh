@@ -230,12 +230,10 @@ jobs:
       - name: Synchronize application Secrets
         env:
           KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}
-          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           set -euo pipefail
-          [[ -f "${APP_ENV_FILE}" && -n "${MIGRATION_DATABASE_URL}" ]]
+          [[ -f "${APP_ENV_FILE}" ]]
           kubectl -n "${KUBE_NAMESPACE}" create secret generic billmesh-api-runtime --from-env-file="${APP_ENV_FILE}" --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n "${KUBE_NAMESPACE}" create secret generic billmesh-api-migration --from-literal="MIGRATION_DATABASE_URL=${MIGRATION_DATABASE_URL}" --dry-run=client -o yaml | kubectl apply -f -
       - name: Recover interrupted Helm operation
         env:
           KUBE_NAMESPACE: ${{ vars.KUBE_NAMESPACE }}

@@ -59,10 +59,9 @@
     },
     "secrets": {
       "type": "object",
-      "required": ["runtimeSecretName", "migrationSecretName", "postgresCa", "outboundCa"],
+      "required": ["runtimeSecretName", "postgresCa", "outboundCa"],
       "properties": {
         "runtimeSecretName": {"type": "string", "minLength": 1},
-        "migrationSecretName": {"type": "string", "minLength": 1},
         "postgresCa": {"$ref": "#/definitions/optionalSecretMount"},
         "outboundCa": {"$ref": "#/definitions/optionalSecretMount"}
       },

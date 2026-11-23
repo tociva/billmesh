@@ -56,7 +56,7 @@ runtime_env=(
   --env BFF_SESSION_ENCRYPTION_KEYS=v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 )
 
-docker run --rm "${platform_args[@]}" --network "${project}_default" --env "MIGRATION_DATABASE_URL=${owner_url}" "$image_ref" migrate up
+docker run --rm "${platform_args[@]}" --network "${project}_default" --env "DATABASE_URL=${owner_url}" "$image_ref" migrate up
 docker run -d "${platform_args[@]}" --name "$container" --network "${project}_default" --publish 127.0.0.1::8080 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges:true "${runtime_env[@]}" "$image_ref" api >/dev/null
 
 port=$(docker port "$container" 8080/tcp | awk -F: 'END {print $NF}')

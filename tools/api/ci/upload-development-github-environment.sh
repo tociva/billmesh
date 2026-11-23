@@ -24,9 +24,8 @@ deployment_variables='AWS_ACCOUNT_ID AWS_REGION AWS_DEPLOY_ROLE_ARN ECR_REPOSITO
 deployment_secrets='KUBECONFIG_BASE64 CLOUDFLARE_ACCESS_CLIENT_ID CLOUDFLARE_ACCESS_CLIENT_SECRET'
 runtime_variables='DELEGATION_ISSUER DELEGATION_DISCOVERY_URL DELEGATION_AUDIENCE DELEGATION_PROFILE_REFRESH_INTERVAL DELEGATION_PROFILE_MAX_STALENESS WEBHOOK_TIMEOUT WORKER_INTERVAL WEBHOOK_ALLOWED_PRIVATE_HOSTS AUTH_FAILURES_PER_MINUTE MUTATION_RATE_PER_SECOND MUTATION_BURST CONSOLE_APP_ORIGIN ADMIN_APP_ORIGIN BFF_CONSOLE_ISSUER BFF_CONSOLE_CLIENT_ID BFF_CONSOLE_AUDIENCE BFF_CONSOLE_SCOPE BFF_CONSOLE_REDIRECT_URI BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI BFF_CONSOLE_STANDALONE_LOGOUT_URI BFF_ADMIN_ISSUER BFF_ADMIN_CLIENT_ID BFF_ADMIN_AUDIENCE BFF_ADMIN_SCOPE BFF_ADMIN_REDIRECT_URI BFF_ADMIN_POST_LOGOUT_REDIRECT_URI BFF_ADMIN_STANDALONE_LOGOUT_URI BFF_SESSION_IDLE_TTL BFF_SESSION_ABSOLUTE_TTL BFF_LOGIN_TTL BFF_LOGOUT_TTL BFF_REFRESH_SKEW BFF_LOGIN_ATTEMPTS_PER_MINUTE RAZORPAY_BASE_URL RAZORPAY_CHECKOUT_URL SSL_CERT_FILE'
 runtime_secrets='DATABASE_URL BFF_CONSOLE_CLIENT_SECRET BFF_ADMIN_CLIENT_SECRET BFF_SESSION_ENCRYPTION_KEYS RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET'
-migration_secrets='MIGRATION_DATABASE_URL'
-allowed_keys="$ecr_variables $deployment_variables $deployment_secrets $runtime_variables $runtime_secrets $migration_secrets"
-required_keys='AWS_ACCOUNT_ID AWS_REGION AWS_BUILD_ROLE_ARN AWS_DEPLOY_ROLE_ARN ECR_REPOSITORY KUBE_NAMESPACE API_HOSTNAME KUBERNETES_ACCESS_HOSTNAME KUBECONFIG_BASE64 CLOUDFLARE_ACCESS_CLIENT_ID CLOUDFLARE_ACCESS_CLIENT_SECRET DATABASE_URL MIGRATION_DATABASE_URL DELEGATION_ISSUER DELEGATION_DISCOVERY_URL DELEGATION_AUDIENCE CONSOLE_APP_ORIGIN ADMIN_APP_ORIGIN BFF_CONSOLE_ISSUER BFF_CONSOLE_CLIENT_ID BFF_CONSOLE_CLIENT_SECRET BFF_CONSOLE_AUDIENCE BFF_CONSOLE_REDIRECT_URI BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI BFF_CONSOLE_STANDALONE_LOGOUT_URI BFF_ADMIN_ISSUER BFF_ADMIN_CLIENT_ID BFF_ADMIN_CLIENT_SECRET BFF_ADMIN_AUDIENCE BFF_ADMIN_REDIRECT_URI BFF_ADMIN_POST_LOGOUT_REDIRECT_URI BFF_ADMIN_STANDALONE_LOGOUT_URI BFF_SESSION_ENCRYPTION_KEYS'
+allowed_keys="$ecr_variables $deployment_variables $deployment_secrets $runtime_variables $runtime_secrets"
+required_keys='AWS_ACCOUNT_ID AWS_REGION AWS_BUILD_ROLE_ARN AWS_DEPLOY_ROLE_ARN ECR_REPOSITORY KUBE_NAMESPACE API_HOSTNAME KUBERNETES_ACCESS_HOSTNAME KUBECONFIG_BASE64 CLOUDFLARE_ACCESS_CLIENT_ID CLOUDFLARE_ACCESS_CLIENT_SECRET DATABASE_URL DELEGATION_ISSUER DELEGATION_DISCOVERY_URL DELEGATION_AUDIENCE CONSOLE_APP_ORIGIN ADMIN_APP_ORIGIN BFF_CONSOLE_ISSUER BFF_CONSOLE_CLIENT_ID BFF_CONSOLE_CLIENT_SECRET BFF_CONSOLE_AUDIENCE BFF_CONSOLE_REDIRECT_URI BFF_CONSOLE_POST_LOGOUT_REDIRECT_URI BFF_CONSOLE_STANDALONE_LOGOUT_URI BFF_ADMIN_ISSUER BFF_ADMIN_CLIENT_ID BFF_ADMIN_CLIENT_SECRET BFF_ADMIN_AUDIENCE BFF_ADMIN_REDIRECT_URI BFF_ADMIN_POST_LOGOUT_REDIRECT_URI BFF_ADMIN_STANDALONE_LOGOUT_URI BFF_SESSION_ENCRYPTION_KEYS'
 
 temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/billmesh-github-env.XXXXXX")
 cleanup() { rm -rf "$temporary_dir"; }
@@ -37,11 +36,10 @@ deployment_variables_file=$temporary_dir/billmesh-development-api.deployment.var
 deployment_secrets_file=$temporary_dir/billmesh-development-api.deployment.secrets.env
 runtime_variables_file=$temporary_dir/billmesh-development-api.runtime.vars.env
 runtime_secrets_file=$temporary_dir/billmesh-development-api.runtime.secrets.env
-migration_secrets_file=$temporary_dir/billmesh-development-api.migration.secrets.env
 app_env_file=$temporary_dir/application.env
 kubeconfig_file=$temporary_dir/kubeconfig.yaml
 
-for generated_file in "$ecr_file" "$deployment_variables_file" "$deployment_secrets_file" "$runtime_variables_file" "$runtime_secrets_file" "$migration_secrets_file"; do
+for generated_file in "$ecr_file" "$deployment_variables_file" "$deployment_secrets_file" "$runtime_variables_file" "$runtime_secrets_file"; do
   echo '# Generated from tmp/development.env; do not edit.' >"$generated_file"
   chmod 600 "$generated_file"
 done
@@ -70,7 +68,6 @@ while IFS= read -r line || [ -n "$line" ]; do
   contains_key "$deployment_secrets" "$key" && printf '%s=%s\n' "$key" "$value" >>"$deployment_secrets_file"
   contains_key "$runtime_variables" "$key" && printf '%s=%s\n' "$key" "$value" >>"$runtime_variables_file"
   contains_key "$runtime_secrets" "$key" && printf '%s=%s\n' "$key" "$value" >>"$runtime_secrets_file"
-  contains_key "$migration_secrets" "$key" && printf '%s=%s\n' "$key" "$value" >>"$migration_secrets_file"
 done <"$env_file"
 
 for key in $required_keys; do key_present "$key" || fail "$key is missing"; done
@@ -97,15 +94,13 @@ grep -Fq 'apiVersion: v1' "$kubeconfig_file" || fail 'KUBECONFIG_BASE64 does not
 grep -Fq 'server: https://127.0.0.1:6443' "$kubeconfig_file" || fail 'restricted kubeconfig must use https://127.0.0.1:6443'
 printf '%s' "$(value_for CLOUDFLARE_ACCESS_CLIENT_ID)" | grep -Eq '^[A-Za-z0-9_-]+\.access$' || fail 'CLOUDFLARE_ACCESS_CLIENT_ID has an unexpected format'
 
-case "$(value_for MIGRATION_DATABASE_URL)" in postgres://*|postgresql://*) ;; *) fail 'MIGRATION_DATABASE_URL must be a PostgreSQL URL' ;; esac
-
 grep -v '^#' "$runtime_variables_file" >"$app_env_file"
 grep -v '^#' "$runtime_secrets_file" >>"$app_env_file"
 "$script_dir/../kubernetes/validate-app-env.sh" "$app_env_file" >/dev/null
 
 if [ -L "$output_dir" ]; then fail "$output_dir must not be a symbolic link"; fi
 mkdir -p "$output_dir"
-for output_name in ecr-build.vars.env billmesh-development-api.deployment.vars.env billmesh-development-api.deployment.secrets.env billmesh-development-api.runtime.vars.env billmesh-development-api.runtime.secrets.env billmesh-development-api.migration.secrets.env; do
+for output_name in ecr-build.vars.env billmesh-development-api.deployment.vars.env billmesh-development-api.deployment.secrets.env billmesh-development-api.runtime.vars.env billmesh-development-api.runtime.secrets.env; do
   [ ! -L "$output_dir/$output_name" ] || fail "$output_dir/$output_name must not be a symbolic link"
   source_file=$temporary_dir/$output_name
   mv "$source_file" "$output_dir/$output_name"
@@ -132,5 +127,4 @@ gh variable set --env billmesh-development-api --env-file "$output_dir/billmesh-
 gh variable set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.runtime.vars.env"
 gh secret set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.deployment.secrets.env"
 gh secret set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.runtime.secrets.env"
-gh secret set --env billmesh-development-api --env-file "$output_dir/billmesh-development-api.migration.secrets.env"
 echo 'Uploaded ecr-build variables and billmesh-development-api variables/secrets.'

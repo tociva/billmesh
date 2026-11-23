@@ -25,15 +25,15 @@ hostname to the `billmesh-api` Service in the Billmesh namespace.
   hostname.
 - An ECR repository with scan-on-push enabled.
 - GitHub OIDC build and deployment roles. No static AWS access keys are used.
-- A PostgreSQL runtime role and a separate migration/schema-owner role.
+- A PostgreSQL role used by the API, worker, and migrations, with permission to
+  apply every schema migration bundled with Billmesh.
 - A Cloudflare Tunnel route from the API hostname to
   `http://billmesh-api.billmesh-development.svc.cluster.local`.
 
 The deployment role needs ECR read and scan permissions. The restricted
 Kubernetes identity needs access to the Billmesh namespace to manage Helm
-releases, Deployments, Jobs, Services, ServiceAccounts, and the three Secrets
-used by the release (`billmesh-ecr`, `billmesh-api-runtime`, and
-`billmesh-api-migration`).
+releases, Deployments, Jobs, Services, ServiceAccounts, and the two Secrets
+used by the release (`billmesh-ecr` and `billmesh-api-runtime`).
 
 ## Bootstrap sequence
 
@@ -301,10 +301,10 @@ uploading the replacement set.
 
 ## Database identities
 
-`DATABASE_URL` is the restricted runtime connection used by the API and worker.
-`MIGRATION_DATABASE_URL` is available only to the Helm migration Job. Local
-development remains backward compatible: when `MIGRATION_DATABASE_URL` is not
-set, the migration command falls back to `DATABASE_URL`.
+`DATABASE_URL` is the PostgreSQL connection used by the API, worker, and Helm
+migration Job. Its database role must have both application data access and the
+schema permissions required by every migration bundled with the deployed
+Billmesh image.
 
 If PostgreSQL uses a private CA, create that CA Secret in the namespace before
 deployment and configure `POSTGRES_CA_SECRET_NAME` and

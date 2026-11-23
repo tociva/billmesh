@@ -137,16 +137,6 @@ func LoadDatabaseURL() (string, error) {
 	return validateDatabaseURL(databaseURL.String(), "DATABASE_URL")
 }
 
-// LoadMigrationDatabaseURL reads the schema-owner connection used only by the
-// migration command. Local environments may omit it and fall back to the
-// runtime database connection.
-func LoadMigrationDatabaseURL() (string, error) {
-	if databaseURL := strings.TrimSpace(os.Getenv("MIGRATION_DATABASE_URL")); databaseURL != "" {
-		return validateDatabaseURL(databaseURL, "MIGRATION_DATABASE_URL")
-	}
-	return LoadDatabaseURL()
-}
-
 func validateDatabaseURL(databaseURL, name string) (string, error) {
 	parsed, err := url.Parse(databaseURL)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {
