@@ -35,55 +35,62 @@ releases, Deployments, Jobs, Services, ServiceAccounts, and the three Secrets
 used by the release (`billmesh-ecr`, `billmesh-api-runtime`, and
 `billmesh-api-migration`).
 
-### Provision AWS resources
+## Bootstrap sequence
 
-The Terraform configuration creates or references the immutable ECR repository
-and creates environment-bound GitHub OIDC roles:
+Complete these steps in order. GitHub environment names are part of the AWS
+OIDC trust policy, and the final GitHub configuration requires both Terraform
+outputs and a namespace-scoped Kubernetes credential.
 
-```sh
-cd tools/api/infrastructure/aws-development
-cp terraform.tfvars.example terraform.tfvars
-terraform init
-terraform plan
-terraform apply
-terraform output
-cd -
-```
+### 1. Prepare GitHub
 
-Fill the immutable numeric GitHub owner and repository IDs in `terraform.tfvars`.
-They are REST API `id` values, not the `tociva`/`billmesh` names or GitHub
-`node_id` values. Authenticate the GitHub CLI and retrieve both from the
-repository response:
+Authenticate the GitHub CLI with an account that can administer the repository:
 
 ```sh
 gh auth login -h github.com
+gh auth status -h github.com
+```
+
+Read the immutable numeric owner and repository IDs. These are REST API `id`
+values, not names or `node_id` values:
+
+```sh
 gh api repos/tociva/billmesh \
   --jq '{github_repository_owner_id: (.owner.id|tostring), github_repository_id: (.id|tostring)}'
 ```
 
-Copy the returned numbers into the variable file as strings, replacing the
-placeholders entirely:
+For `tociva/billmesh`, the expected values are:
 
 ```hcl
-github_repository_owner_id = "12345678"
-github_repository_id       = "87654321"
+github_repository_owner_id = "217876362"
+github_repository_id       = "1388804484"
 ```
 
-The repository owner ID comes from `.owner.id`; the repository ID comes from
-the top-level `.id`. Keep Terraform state in a secured remote backend;
-populated variable files and local state are ignored and must not be committed.
-Set `create_github_oidc_provider=true` only if this state is the designated
-owner of the account-wide GitHub OIDC provider.
+Create the two repository environments before creating their OIDC roles:
 
-### Connect through the shared Kubernetes tunnel
+```sh
+gh api --method PUT repos/tociva/billmesh/environments/ecr-build
+gh api --method PUT \
+  repos/tociva/billmesh/environments/billmesh-development-api
+```
+
+Configure the desired reviewers and deployment protection rules for both
+environments in **GitHub → Settings → Environments**. Variables and secrets are
+uploaded after AWS and Kubernetes bootstrap is complete.
+
+### 2. Authenticate and open the shared Kubernetes tunnel
 
 The development Kubernetes API uses the same protected access path as Daybook.
 It is not reachable directly from a workstation. Install `cloudflared` and
-`kubectl`, then keep the proxy open in one terminal while using `kubectl` from
-any other terminal.
+`kubectl`, then use two terminals.
 
-In **Terminal 1**, open the shared Cloudflare Access TCP proxy and leave it
-running:
+In **Terminal 1**, authenticate explicitly. The command opens a browser; do not
+share the temporary login URL if it is printed in the terminal:
+
+```sh
+cloudflared access login https://k8s-dev.tociva.com
+```
+
+After authentication succeeds, start the local TCP proxy and leave it running:
 
 ```sh
 cloudflared access tcp \
@@ -91,15 +98,12 @@ cloudflared access tcp \
   --url 127.0.0.1:6443
 ```
 
-Cloudflare opens the Access login in a browser when authentication is required.
-Complete that login before running `kubectl` commands. Do not start a second
-proxy on the same local port.
+Do not start a second proxy on port `6443`. This process is only the workstation
+administrative path; it is separate from the server-side tunnel serving the
+public Billmesh API.
 
-This local process is only the workstation-to-Kubernetes administrative path;
-it is separate from the server-side tunnel that serves the public Billmesh API.
-
-In **Terminal 2**, select the existing Daybook development-cluster administrator
-kubeconfig and verify that the proxy and cluster are reachable:
+In **Terminal 2**, select the existing development-cluster administrator
+kubeconfig and verify TCP, TLS, and authenticated Kubernetes access:
 
 ```sh
 export KUBECONFIG="$HOME/.kube/tociva-dev-admin.yaml"
@@ -117,44 +121,24 @@ kubectl get nodes -o wide
 ```
 
 The context may be named `default`; that is normal for the K3s administrator
-kubeconfig. The server command must print `https://127.0.0.1:6443`. The `curl`
-request may return `401` or `403` because it does not present the kubeconfig's
-client certificate; any HTTP response proves that the TLS tunnel is working.
-The authenticated `kubectl get --raw=/version` command must return Kubernetes
-version JSON before continuing.
+kubeconfig. The server must be `https://127.0.0.1:6443`. An HTTP `401` or `403`
+from `curl` proves TLS forwarding works because `curl` does not present the
+client certificate. The authenticated `kubectl get --raw=/version` command must
+return Kubernetes version JSON before continuing.
 
-If the shared administrator file is not already present, retrieve a fresh K3s
-administrator kubeconfig using the same secure procedure used for Daybook, save
-it as `$HOME/.kube/tociva-dev-admin.yaml`, and set its mode to `600`. Do not
-commit or share this file.
-
-From Terminal 2 or any other terminal using the administrator kubeconfig,
-create the Billmesh namespace idempotently and apply its namespace-scoped
-deployment identity:
-
-```sh
-kubectl create namespace billmesh-development \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl apply -f deploy/environments/development/deployer-rbac.yaml
-```
-
-All subsequent interactive `kubectl` commands can run from these secondary
-terminals. The only process that must remain in Terminal 1 is `cloudflared`.
-Stop it with `Ctrl-C` when the Kubernetes session is finished.
+If the administrator kubeconfig is absent, retrieve a fresh K3s administrator
+kubeconfig using the secure Daybook procedure, save it as
+`$HOME/.kube/tociva-dev-admin.yaml`, and set its mode to `600`. Never commit or
+share it.
 
 #### Troubleshoot a TLS handshake timeout
 
-A successful `nc` check proves only that the local `cloudflared` process is
-listening. If `curl` or `kubectl` reports `TLS handshake timeout`, the proxy is
-not forwarding successfully to the Kubernetes origin; changing contexts or
-RBAC will not fix that condition.
-
-Stop the existing Terminal 1 process with `Ctrl-C`, refresh the interactive
-Access login, and restart one proxy with diagnostics enabled:
+A successful `nc` check proves only that the local proxy is listening. If
+`curl` or `kubectl` reports `TLS handshake timeout`, stop the Terminal 1 proxy
+with `Ctrl-C`, authenticate again, and restart one proxy with diagnostics:
 
 ```sh
 cloudflared access login https://k8s-dev.tociva.com
-
 cloudflared access tcp \
   --hostname k8s-dev.tociva.com \
   --url 127.0.0.1:6443 \
@@ -162,7 +146,7 @@ cloudflared access tcp \
   --logfile "${TMPDIR:-/tmp}/tociva-k8s-access.log"
 ```
 
-From another terminal, repeat the TLS and authenticated API checks:
+Repeat the TLS and Kubernetes checks from Terminal 2, then inspect the log:
 
 ```sh
 curl --noproxy '*' --insecure --verbose \
@@ -172,22 +156,54 @@ kubectl --request-timeout=15s get --raw=/version
 tail -n 100 "${TMPDIR:-/tmp}/tociva-k8s-access.log"
 ```
 
-If the TLS handshake still does not complete, inspect the Cloudflare Access
-policy, the health of the shared server-side connector, and the
-`k8s-dev.tociva.com` route to K3s. The Billmesh namespace does not need to exist
-for `/version` to succeed.
+If TLS still does not complete, inspect the Cloudflare Access policy, the
+shared connector's health, and the `k8s-dev.tociva.com` route to K3s. The
+Billmesh namespace does not need to exist for `/version` to succeed.
 
-### Create the restricted CI kubeconfig once
+### 3. Provision AWS with Terraform
 
-This step is not required for normal interactive `kubectl` use. Run it once
-only when configuring the GitHub Actions deploy and rollback workflows, which
-read the resulting file through the `KUBECONFIG_BASE64` environment secret. If
-that secret is already configured with the Billmesh namespace-scoped identity,
-skip this section.
+From the repository root, create the ignored variable file without overwriting
+an existing one:
 
-With the Cloudflare proxy running in one terminal and the administrator
-kubeconfig selected in another, wait for the deployment service-account token
-and build its restricted kubeconfig:
+```sh
+cd tools/api/infrastructure/aws-development
+test -f terraform.tfvars || cp terraform.tfvars.example terraform.tfvars
+```
+
+Replace every placeholder in `terraform.tfvars`, including the GitHub IDs from
+step 1. Keep `deploy_environment_name = "billmesh-development-api"` so the IAM
+trust policy matches the deployment and rollback workflows. Then run:
+
+```sh
+terraform fmt terraform.tfvars
+terraform init
+terraform plan
+terraform apply
+terraform output
+cd -
+```
+
+The configuration creates or references the immutable ECR repository and
+creates environment-bound GitHub OIDC roles. Keep Terraform state in a secured
+remote backend; populated variable files and local state must not be committed.
+Set `create_github_oidc_provider=true` only if this state is the designated
+owner of the account-wide GitHub OIDC provider.
+
+### 4. Create the Billmesh namespace and CI identity
+
+Keep Terminal 1's Cloudflare proxy running. From Terminal 2 or another terminal
+using the administrator kubeconfig, create the namespace idempotently and apply
+the namespace-scoped deployment identity:
+
+```sh
+kubectl create namespace billmesh-development \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f deploy/environments/development/deployer-rbac.yaml
+```
+
+Interactive administrators can continue using the existing administrator
+kubeconfig. The following one-time step creates the least-privilege credential
+used by the GitHub Actions deploy and rollback workflows:
 
 ```sh
 until kubectl get secret billmesh-api-deployer-token \
@@ -223,7 +239,7 @@ kubectl config use-context billmesh-development \
 chmod 600 "$HOME/.kube/restricted-billmesh-kubeconfig.yaml"
 ```
 
-Verify the restricted identity while Terminal 1 is still running:
+Verify the restricted identity while the proxy is still running:
 
 ```sh
 kubectl --kubeconfig "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" \
@@ -233,58 +249,50 @@ kubectl --kubeconfig "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" \
 ```
 
 The second command must print `yes`. Stop the Terminal 1 proxy with `Ctrl-C`
-after the restricted kubeconfig has been created and verified.
+after Kubernetes setup and verification are complete.
 
-## GitHub environments
+### 5. Populate the GitHub environments
 
-Create two GitHub environments:
-
-- `ecr-build`: ECR publication variables and any build approval rules.
-- `billmesh-development-api`: deployment/runtime variables and secrets, with the desired
-  reviewer protection rules.
-
-The ignored `tmp/development.env` file is the local source of truth for both
-environments. Start from the committed template:
+The ignored `tmp/development.env` file is the local source of truth for
+`ecr-build` and `billmesh-development-api`. Start from the committed template:
 
 ```sh
 mkdir -p tmp
-cp tools/api/ci/development.env.example tmp/development.env
+test -f tmp/development.env || \
+  cp tools/api/ci/development.env.example tmp/development.env
 chmod 600 tmp/development.env
 ```
 
-`tmp/` is ignored by Git and must never be committed. Fill every required
-placeholder, then validate the complete configuration without displaying
-secret values:
+Fill it with the Terraform outputs, runtime configuration, application secrets,
+Cloudflare Access service-token credentials, and restricted kubeconfig. Generate
+`KUBECONFIG_BASE64` directly to the macOS clipboard without printing it:
+
+```sh
+base64 < "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" | \
+  tr -d '\n' | pbcopy
+```
+
+Validate the complete configuration without displaying secret values:
 
 ```sh
 ./tools/api/ci/upload-development-github-environment.sh \
   --check tmp/development.env
 ```
 
-Generate the exact variable/secret files without uploading them:
+Optionally generate the exact variable and secret files for reviewing key
+names, then upload them:
 
 ```sh
 ./tools/api/ci/generate-development-github-environments.sh \
   tmp/development.env tmp/github-environments
-```
-
-After reviewing the generated key names, upload them:
-
-```sh
-gh auth status
+gh auth status -h github.com
 ./tools/api/ci/upload-development-github-environment.sh tmp/development.env
 ```
 
-Use `--replace` only when the two GitHub environments must be made identical to
+Use `--replace` only when both GitHub environments must be made identical to
 the local source of truth. It validates first, then deletes existing variables
-and secrets from exactly `ecr-build` and `billmesh-development-api` before uploading the
-replacement set.
-
-Generate `KUBECONFIG_BASE64` without printing it on macOS:
-
-```sh
-base64 < "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" | tr -d '\n' | pbcopy
-```
+and secrets from exactly `ecr-build` and `billmesh-development-api` before
+uploading the replacement set.
 
 ## Database identities
 
