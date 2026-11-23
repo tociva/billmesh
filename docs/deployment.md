@@ -65,6 +65,14 @@ github_repository_owner_id = "217876362"
 github_repository_id       = "1388804484"
 ```
 
+Prepare `terraform.tfvars` and the known values in the ignored
+`tmp/development.env` file. The script preserves external secrets and can be
+rerun safely as later values become available:
+
+```sh
+./tools/api/ci/bootstrap-development-config.sh
+```
+
 Create the two repository environments before creating their OIDC roles:
 
 ```sh
@@ -170,9 +178,9 @@ cd tools/api/infrastructure/aws-development
 test -f terraform.tfvars || cp terraform.tfvars.example terraform.tfvars
 ```
 
-Replace every placeholder in `terraform.tfvars`, including the GitHub IDs from
-step 1. Keep `deploy_environment_name = "billmesh-development-api"` so the IAM
-trust policy matches the deployment and rollback workflows. Then run:
+Review `terraform.tfvars`; the bootstrap script fills its GitHub IDs. Keep
+`deploy_environment_name = "billmesh-development-api"` so the IAM trust policy
+matches the deployment and rollback workflows. Then run:
 
 ```sh
 terraform fmt terraform.tfvars
@@ -254,23 +262,18 @@ after Kubernetes setup and verification are complete.
 ### 5. Populate the GitHub environments
 
 The ignored `tmp/development.env` file is the local source of truth for
-`ecr-build` and `billmesh-development-api`. Start from the committed template:
+`ecr-build` and `billmesh-development-api`. Rerun the bootstrap script now that
+Terraform outputs and the restricted kubeconfig exist:
 
 ```sh
-mkdir -p tmp
-test -f tmp/development.env || \
-  cp tools/api/ci/development.env.example tmp/development.env
-chmod 600 tmp/development.env
+./tools/api/ci/bootstrap-development-config.sh
 ```
 
-Fill it with the Terraform outputs, runtime configuration, application secrets,
-Cloudflare Access service-token credentials, and restricted kubeconfig. Generate
-`KUBECONFIG_BASE64` directly to the macOS clipboard without printing it:
-
-```sh
-base64 < "$HOME/.kube/restricted-billmesh-kubeconfig.yaml" | \
-  tr -d '\n' | pbcopy
-```
+The script fills AWS outputs, fixed Billmesh development values, and
+`KUBECONFIG_BASE64` without printing secret values. Manually replace the
+remaining placeholders for database credentials, Cloudflare Access service
+tokens, IdNest clients, and session-encryption keys. It never invents or
+overwrites those external secrets.
 
 Validate the complete configuration without displaying secret values:
 

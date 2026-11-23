@@ -2,6 +2,10 @@
 
 These helpers implement the Billmesh image and Kubernetes deployment contract.
 
+- `bootstrap-development-config.sh` discovers immutable GitHub IDs, prepares
+  Terraform variables, fills known development defaults, and imports available
+  Terraform outputs and the restricted kubeconfig without replacing external
+  secrets.
 - `upload-development-github-environment.sh` validates the ignored canonical
   configuration, splits variables from secrets, and optionally uploads them.
 - `generate-development-github-environments.sh` performs generation only.
