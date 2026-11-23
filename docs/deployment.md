@@ -65,6 +65,10 @@ github_repository_owner_id = "217876362"
 github_repository_id       = "1388804484"
 ```
 
+Billmesh uses GitHub's immutable OIDC subject, so Terraform combines these IDs
+with the repository and environment names when constructing each IAM role trust
+policy. A name-only `repo:tociva/billmesh:...` subject will not authenticate.
+
 Prepare `terraform.tfvars` and the known values in the ignored
 `tmp/development.env` file. It also imports matching populated values from the
 root `.env` only when the deployment value is empty or still a placeholder. The

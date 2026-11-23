@@ -68,12 +68,14 @@ data "aws_ecr_repository" "api" {
 }
 
 locals {
-  github_oidc_provider_arn = var.create_github_oidc_provider ? one(aws_iam_openid_connect_provider.github[*].arn) : one(data.aws_iam_openid_connect_provider.github[*].arn)
-  ecr_repository_arn       = var.create_ecr_repository ? one(aws_ecr_repository.api[*].arn) : one(data.aws_ecr_repository.api[*].arn)
-  audience_key             = "token.actions.githubusercontent.com:aud"
-  subject_key              = "token.actions.githubusercontent.com:sub"
-  repository_id_key        = "token.actions.githubusercontent.com:repository_id"
-  repository_owner_id_key  = "token.actions.githubusercontent.com:repository_owner_id"
+  github_repository_parts         = split("/", var.github_repository)
+  github_immutable_subject_prefix = "repo:${local.github_repository_parts[0]}@${var.github_repository_owner_id}/${local.github_repository_parts[1]}@${var.github_repository_id}"
+  github_oidc_provider_arn        = var.create_github_oidc_provider ? one(aws_iam_openid_connect_provider.github[*].arn) : one(data.aws_iam_openid_connect_provider.github[*].arn)
+  ecr_repository_arn              = var.create_ecr_repository ? one(aws_ecr_repository.api[*].arn) : one(data.aws_ecr_repository.api[*].arn)
+  audience_key                    = "token.actions.githubusercontent.com:aud"
+  subject_key                     = "token.actions.githubusercontent.com:sub"
+  repository_id_key               = "token.actions.githubusercontent.com:repository_id"
+  repository_owner_id_key         = "token.actions.githubusercontent.com:repository_owner_id"
 }
 
 data "aws_iam_policy_document" "github_build_assume_role" {
@@ -94,7 +96,7 @@ data "aws_iam_policy_document" "github_build_assume_role" {
     condition {
       test     = "StringEquals"
       variable = local.subject_key
-      values   = ["repo:${var.github_repository}:environment:${var.build_environment_name}"]
+      values   = ["${local.github_immutable_subject_prefix}:environment:${var.build_environment_name}"]
     }
     condition {
       test     = "StringEquals"
@@ -127,7 +129,7 @@ data "aws_iam_policy_document" "github_deploy_assume_role" {
     condition {
       test     = "StringEquals"
       variable = local.subject_key
-      values   = ["repo:${var.github_repository}:environment:${var.deploy_environment_name}"]
+      values   = ["${local.github_immutable_subject_prefix}:environment:${var.deploy_environment_name}"]
     }
     condition {
       test     = "StringEquals"
@@ -216,6 +218,10 @@ variable "aws_region" {
 variable "github_repository" {
   type    = string
   default = "tociva/billmesh"
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    error_message = "github_repository must use owner/name form."
+  }
 }
 
 variable "github_repository_owner_id" {
