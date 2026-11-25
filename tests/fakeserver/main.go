@@ -18,6 +18,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,11 +70,16 @@ type fakeRazorpayPayment struct {
 }
 
 type fakeRazorpayBehavior struct {
-	Status          int  `json:"status"`
-	DelayMS         int  `json:"delay_ms"`
-	MalformedJSON   bool `json:"malformed_json"`
-	MissingOrderID  bool `json:"missing_order_id"`
-	DropAfterCommit bool `json:"drop_after_commit"`
+	Status             int  `json:"status"`
+	DelayMS            int  `json:"delay_ms"`
+	MalformedJSON      bool `json:"malformed_json"`
+	MissingOrderID     bool `json:"missing_order_id"`
+	DropAfterCommit    bool `json:"drop_after_commit"`
+	MismatchedEntity   bool `json:"mismatched_entity"`
+	MismatchedAmount   bool `json:"mismatched_amount"`
+	MismatchedCurrency bool `json:"mismatched_currency"`
+	MismatchedReceipt  bool `json:"mismatched_receipt"`
+	MismatchedNotes    bool `json:"mismatched_notes"`
 }
 
 type oauthGrant struct {
@@ -132,6 +139,7 @@ func newHandler(s *server) http.Handler {
 	mux.HandleFunc("POST /test/token", s.token)
 	mux.HandleFunc("POST /test/rotate-key", s.rotateKey)
 	mux.HandleFunc("POST /v1/orders", s.order)
+	mux.HandleFunc("GET /v1/orders", s.listRazorpayOrders)
 	mux.HandleFunc("GET /v1/orders/{id}/payments", s.orderPayments)
 	mux.HandleFunc("GET /test/order-count", s.orderCount)
 	mux.HandleFunc("GET /v1/payments/{id}", s.payment)
@@ -603,6 +611,21 @@ func (s *server) order(w http.ResponseWriter, r *http.Request) {
 	if behavior.MissingOrderID {
 		order.ID = ""
 	}
+	if behavior.MismatchedEntity {
+		order.Entity = "payment"
+	}
+	if behavior.MismatchedAmount {
+		order.Amount++
+	}
+	if behavior.MismatchedCurrency {
+		order.Currency = "USD"
+	}
+	if behavior.MismatchedReceipt {
+		order.Receipt += "-wrong"
+	}
+	if behavior.MismatchedNotes {
+		order.Notes = map[string]string{"billmesh_environment": "wrong"}
+	}
 	write(w, order)
 }
 func (s *server) orderCount(w http.ResponseWriter, _ *http.Request) {
@@ -658,10 +681,43 @@ func (s *server) listRazorpayOrders(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		for _, order := range s.razorpayOrders {
+			if from := parseInt64(r.URL.Query().Get("from")); from != 0 && order.CreatedAt < from {
+				continue
+			}
+			if to := parseInt64(r.URL.Query().Get("to")); to != 0 && order.CreatedAt > to {
+				continue
+			}
 			items = append(items, order)
 		}
 	}
+	sort.Slice(items, func(left, right int) bool {
+		if items[left].CreatedAt == items[right].CreatedAt {
+			return items[left].ID > items[right].ID
+		}
+		return items[left].CreatedAt > items[right].CreatedAt
+	})
+	skip := int(parseInt64(r.URL.Query().Get("skip")))
+	if skip < 0 {
+		skip = 0
+	}
+	count := int(parseInt64(r.URL.Query().Get("count")))
+	if count <= 0 || count > 100 {
+		count = 10
+	}
+	if skip >= len(items) {
+		items = nil
+	} else {
+		items = items[skip:]
+		if len(items) > count {
+			items = items[:count]
+		}
+	}
 	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
+}
+
+func parseInt64(value string) int64 {
+	parsed, _ := strconv.ParseInt(value, 10, 64)
+	return parsed
 }
 
 func (s *server) addRazorpayPayment(w http.ResponseWriter, r *http.Request) {

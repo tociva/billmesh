@@ -94,6 +94,14 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 			writeCodedError(w, http.StatusConflict, "idempotency_conflict", "idempotency key was reused with a different request")
 			return
 		}
+		if _, err := a.ensureStoredRazorpayOrder(r.Context(), existingID); err != nil {
+			if isProviderOrderError(err) {
+				writeProviderOrderError(w, err)
+			} else {
+				writeDBError(w, err)
+			}
+			return
+		}
 		a.writeCreditPackOrder(w, r, existingID, http.StatusOK)
 		return
 	}
@@ -124,22 +132,23 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 		writeCodedError(w, http.StatusServiceUnavailable, "checkout_not_configured", "provider-hosted checkout is not configured")
 		return
 	}
-	providerOrder, err := a.createProviderOrder(r.Context(), price, currency, operationRef)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "payment provider unavailable")
-		return
-	}
-	orderID, _ := providerOrder["id"].(string)
-	if orderID == "" {
-		writeCodedError(w, http.StatusBadGateway, "invalid_provider_response", "payment provider returned an invalid order")
-		return
-	}
-	var id uuid.UUID
+	id := uuid.New()
 	expiresAt := time.Now().UTC().Add(30 * time.Minute)
-	err = conn.QueryRow(r.Context(), `INSERT INTO payments(account_id,provider,provider_order_id,status,amount_minor,currency,credit_pack_id,credits,operation_ref,checkout_expires_at)
-		VALUES($1,'razorpay',$2,'created',$3,$4,$5,$6,$7,$8) RETURNING id`, accountID, orderID, price, currency, packID, credits, operationRef, expiresAt).Scan(&id)
+	receipt := razorpayReceipt(a.providerEnvironment, operationRef)
+	_, err = conn.Exec(r.Context(), `INSERT INTO payments(id,account_id,provider,status,amount_minor,currency,credit_pack_id,credits,operation_ref,
+		checkout_expires_at,provider_receipt,provider_environment)
+		VALUES($1,$2,'razorpay','created',$3,$4,$5,$6,$7,$8,$9,$10)`, id, accountID, price, currency, packID, credits,
+		operationRef, expiresAt, receipt, a.providerEnvironment)
 	if err != nil {
 		writeDBError(w, err)
+		return
+	}
+	if _, err := a.ensureStoredRazorpayOrder(r.Context(), id); err != nil {
+		if isProviderOrderError(err) {
+			writeProviderOrderError(w, err)
+		} else {
+			writeDBError(w, err)
+		}
 		return
 	}
 	a.writeCreditPackOrder(w, r, id, http.StatusCreated)

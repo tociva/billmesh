@@ -1,11 +1,9 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -274,6 +272,14 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 			writeCodedError(w, http.StatusConflict, "idempotency_conflict", errIdempotencyConflict.Error())
 			return
 		}
+		if err := a.ensureTransitionRazorpayOrder(r.Context(), existing.id); err != nil {
+			if isProviderOrderError(err) {
+				writeProviderOrderError(w, err)
+			} else {
+				writeDBError(w, err)
+			}
+			return
+		}
 		a.writeTransition(w, r, existing.id, http.StatusOK)
 		return
 	}
@@ -329,7 +335,14 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 	}
 
 	transitionID := uuid.New()
+	paymentID := uuid.New()
 	status := "processing"
+	var checkoutExpiresAt *time.Time
+	if requiresPayment {
+		status = "requires_payment"
+		expires := time.Now().UTC().Add(30 * time.Minute)
+		checkoutExpiresAt = &expires
+	}
 	var effectiveAt *time.Time
 	if effective == "period_end" && current.CurrentPeriodEnd != nil {
 		effectiveAt = current.CurrentPeriodEnd
@@ -394,9 +407,19 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`, transitionID, accountID,
 			plan.ProductID, subscriptionID, plan.ID, plan.PlanFamilyID, plan.Version, plan.Name, plan.Description, plan.BillingModel, plan.PriceMinor, plan.Currency,
 			plan.BillingInterval, plan.IncludedCredits, plan.Entitlements, plan.EntitlementSchemaVersion, plan.EntitlementSchema, operation, effective, status, idempotencyKey, requestHash,
-			nil, effectiveAt, plan.BillingPolicy, plan.PolicyVersion, nullIfEmpty(in.SuccessURL), nullIfEmpty(in.CancelURL))
+			checkoutExpiresAt, effectiveAt, plan.BillingPolicy, plan.PolicyVersion, nullIfEmpty(in.SuccessURL), nullIfEmpty(in.CancelURL))
 		if err != nil {
 			return err
+		}
+		if requiresPayment {
+			operationRef := "transition:" + transitionID.String()
+			receipt := razorpayReceipt(a.providerEnvironment, operationRef)
+			if _, err := tx.Exec(r.Context(), `INSERT INTO payments(id,account_id,provider,status,amount_minor,currency,operation_ref,purpose,transition_id,
+				checkout_expires_at,provider_receipt,provider_environment)
+				VALUES($1,$2,'razorpay','created',$3,$4,$5,'subscription',$6,$7,$8,$9)`, paymentID, accountID, plan.PriceMinor, plan.Currency,
+				operationRef, transitionID, checkoutExpiresAt, receipt, a.providerEnvironment); err != nil {
+				return err
+			}
 		}
 		if requiresPayment || effective == "period_end" {
 			return nil
@@ -408,6 +431,14 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if errors.Is(err, errTransitionReplay) {
+		if err := a.ensureTransitionRazorpayOrder(r.Context(), transitionID); err != nil {
+			if isProviderOrderError(err) {
+				writeProviderOrderError(w, err)
+			} else {
+				writeDBError(w, err)
+			}
+			return
+		}
 		a.writeTransition(w, r, transitionID, http.StatusOK)
 		return
 	}
@@ -429,33 +460,20 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 	}
 
 	if requiresPayment {
-		expires := time.Now().UTC().Add(30 * time.Minute)
-		providerOrder, err := a.createProviderOrder(r.Context(), plan.PriceMinor, plan.Currency, transitionID.String())
-		if err != nil {
-			_, _ = a.pool.Exec(r.Context(), `UPDATE subscription_transitions SET status='failed',failure_code='provider_unavailable',updated_at=now() WHERE id=$1`, transitionID)
-			writeError(w, http.StatusServiceUnavailable, "payment provider unavailable")
-			return
-		}
-		orderID, _ := providerOrder["id"].(string)
-		if orderID == "" {
-			_, _ = a.pool.Exec(r.Context(), `UPDATE subscription_transitions SET status='failed',failure_code='invalid_provider_response',updated_at=now() WHERE id=$1`, transitionID)
-			writeError(w, http.StatusBadGateway, "invalid provider response")
-			return
-		}
-		err = pgx.BeginFunc(r.Context(), a.pool, func(tx pgx.Tx) error {
-			var paymentID uuid.UUID
-			if err := tx.QueryRow(r.Context(), `INSERT INTO payments(account_id,provider,provider_order_id,status,amount_minor,currency,operation_ref,purpose,transition_id)
-				VALUES($1,'razorpay',$2,'created',$3,$4,$5,'subscription',$6) RETURNING id`, accountID, orderID, plan.PriceMinor, plan.Currency,
-				"transition:"+transitionID.String(), transitionID).Scan(&paymentID); err != nil {
-				return err
+		if _, err := a.ensureStoredRazorpayOrder(r.Context(), paymentID); err != nil {
+			failureCode := "provider_unavailable"
+			if errors.Is(err, errInvalidProviderOrder) || errors.Is(err, errProviderOrderRejected) {
+				failureCode = "invalid_provider_response"
 			}
-			_, err := tx.Exec(r.Context(), `UPDATE subscription_transitions SET status='requires_payment',checkout_expires_at=$2,updated_at=now() WHERE id=$1`, transitionID, expires)
-			return err
-		})
-		if err != nil {
-			writeDBError(w, err)
+			_, _ = a.pool.Exec(r.Context(), `UPDATE subscription_transitions SET failure_code=$2,updated_at=now() WHERE id=$1`, transitionID, failureCode)
+			if isProviderOrderError(err) {
+				writeProviderOrderError(w, err)
+			} else {
+				writeDBError(w, err)
+			}
 			return
 		}
+		_, _ = a.pool.Exec(r.Context(), `UPDATE subscription_transitions SET failure_code=NULL,updated_at=now() WHERE id=$1`, transitionID)
 	}
 	a.writeTransition(w, r, transitionID, http.StatusCreated)
 }
@@ -684,35 +702,6 @@ func (a *API) cancelSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	a.writeTransition(w, r, id, http.StatusOK)
-}
-
-func (a *API) createProviderOrder(ctx context.Context, amount int64, currency, receipt string) (map[string]any, error) {
-	if a.providerBaseURL == "" || a.providerPublicKey == "" || a.providerSecret == "" {
-		return nil, errors.New("payment provider is not fully configured")
-	}
-	providerOrder := make(map[string]any)
-	raw, err := json.Marshal(map[string]any{"amount": amount, "currency": currency, "receipt": receipt})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.providerBaseURL+"/v1/orders", bytes.NewReader(raw))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(a.providerPublicKey, a.providerSecret)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("provider order status %d", resp.StatusCode)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&providerOrder); err != nil {
-		return nil, err
-	}
-	return providerOrder, nil
 }
 
 type billingRevisionQuerier interface {

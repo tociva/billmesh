@@ -18,8 +18,18 @@ func TestHealthAndReadiness(t *testing.T) {
 		resp, err := http.Get(base + path)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, resp.StatusCode)
-		var body map[string]string
+		var body struct {
+			Status       string            `json:"status"`
+			Capabilities map[string]string `json:"capabilities"`
+		}
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 		resp.Body.Close()
+		if path == "/healthz" {
+			require.Equal(t, "ok", body.Status)
+			require.Empty(t, body.Capabilities)
+			continue
+		}
+		require.Equal(t, "ready", body.Status)
+		require.Equal(t, "enabled", body.Capabilities["razorpay_checkout"])
 	}
 }

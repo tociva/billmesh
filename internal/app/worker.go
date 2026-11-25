@@ -224,6 +224,7 @@ func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
 		LEFT JOIN subscription_transitions st ON st.id=pay.transition_id
 		JOIN products pr ON pr.id=COALESCE(cp.product_id,st.product_id)
 		WHERE pay.provider='razorpay' AND pay.status IN ('created','authorized')
+		AND pay.provider_order_id IS NOT NULL
 		AND COALESCE(pay.last_reconciled_at,pay.created_at) <= now() -
 			(COALESCE((pr.billing_policy->'projection'->>'reconciliation_seconds')::integer,300) * interval '1 second')
 		ORDER BY COALESCE(pay.last_reconciled_at,pay.created_at),pay.id LIMIT 100`)

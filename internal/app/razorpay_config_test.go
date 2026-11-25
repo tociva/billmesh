@@ -33,7 +33,8 @@ func TestConfigureRazorpayAppliesValidatedProviderValues(t *testing.T) {
 	if !api.paymentProviderConfigured() {
 		t.Fatal("validated payment provider was not configured")
 	}
-	if api.providerBaseURL != provider.BaseURL || api.providerPublicKey != provider.KeyID || api.providerSecret != provider.KeySecret || api.webhookSecret != provider.WebhookSecret {
+	if api.providerBaseURL != provider.BaseURL || api.providerPublicKey != provider.KeyID || api.providerSecret != provider.KeySecret ||
+		api.providerEnvironment != provider.Environment || api.webhookSecret != provider.WebhookSecret {
 		t.Fatal("API did not receive the validated Razorpay configuration")
 	}
 }

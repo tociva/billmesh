@@ -37,6 +37,7 @@ type API struct {
 	providerBaseURL     string
 	providerPublicKey   string
 	providerSecret      string
+	providerEnvironment string
 	providerCheckoutURL string
 	webhookSecret       string
 	sseMu               sync.Mutex
@@ -74,6 +75,7 @@ func (a *API) ConfigureRazorpay(provider config.RazorpayConfig) {
 	a.providerBaseURL = provider.BaseURL
 	a.providerPublicKey = provider.KeyID
 	a.providerSecret = provider.KeySecret
+	a.providerEnvironment = provider.Environment
 	a.providerCheckoutURL = provider.CheckoutURL
 	a.webhookSecret = provider.WebhookSecret
 }
