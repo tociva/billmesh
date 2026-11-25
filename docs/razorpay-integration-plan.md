@@ -286,9 +286,10 @@ acceptance evidence is available.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build ./...`
   — completed successfully on 2026-11-25; Go emitted only the known sandbox
   stat-cache warning after the build.
-- [ ] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver ./tests/testkit`
-  — awaiting user execution.
-- [ ] `make test-e2e` — awaiting user execution.
+- [x] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver ./tests/testkit`
+  — all focused tests passed on 2026-11-25.
+- [x] `make test-e2e` — all 67 E2E tests passed on 2026-11-25 after correcting
+  the UUID cast in the rollback assertion helper.
 
 ## 7. Checkout confirmation and consumer integration
 
@@ -339,6 +340,17 @@ acceptance evidence is available.
   terminal transition status.
 - [ ] Never expose `RAZORPAY_KEY_SECRET` or `RAZORPAY_WEBHOOK_SECRET` to browser
   code, runtime configuration, analytics, or error reporting.
+
+### Verification evidence
+
+- [ ] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
+  ./tests/testkit` — focused backend result pending.
+- [ ] `make test-e2e` — end-to-end result pending.
+- [ ] `pnpm nx test console --skip-nx-cache` in `billmesh-web` — consumer unit,
+  component, accessibility, responsive, and CSP result pending.
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
+  ./...` and `NX_DAEMON=false pnpm nx build console --skip-nx-cache` — backend
+  and console production builds completed successfully on 2026-11-25.
 
 ## 8. Reconciliation and recovery
 

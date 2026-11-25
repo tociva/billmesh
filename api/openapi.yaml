@@ -1006,6 +1006,27 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/PaymentOrder" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/payments/{id}/confirm:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: confirmRazorpayCheckout
+      tags: [Payments]
+      summary: Verify a Razorpay checkout result and refresh captured payment state
+      x-required-client-profile: billing
+      requestBody: { $ref: "#/components/requestBodies/RazorpayCheckoutConfirmation" }
+      responses:
+        "200":
+          description: Provider capture was verified and applied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutConfirmationResult" }
+        "202":
+          description: Checkout result is valid but capture is not yet authoritative.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutConfirmationResult" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/payments/webhook:
     post:
       operationId: receivePaymentWebhook
@@ -1580,6 +1601,18 @@ components:
               effective: { type: string, enum: [immediate, period_end] }
               success_url: { type: string, format: uri }
               cancel_url: { type: string, format: uri }
+    RazorpayCheckoutConfirmation:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [razorpay_payment_id, razorpay_order_id, razorpay_signature]
+            properties:
+              razorpay_payment_id: { type: string, minLength: 1 }
+              razorpay_order_id: { type: string, minLength: 1 }
+              razorpay_signature: { type: string, pattern: "^[0-9a-f]{64}$" }
     Cancellation:
       required: true
       content:
@@ -2239,6 +2272,15 @@ components:
         order_id: { type: string, minLength: 1 }
         amount_minor: { type: integer, format: int64, minimum: 0 }
         currency: { type: string, pattern: "^[A-Z]{3}$" }
+    CheckoutConfirmationResult:
+      type: object
+      additionalProperties: false
+      required: [status, payment_id, provider_payment_id, snapshot_url]
+      properties:
+        status: { type: string, enum: [processing, captured] }
+        payment_id: { $ref: "#/components/schemas/UUID" }
+        provider_payment_id: { type: string }
+        snapshot_url: { type: string, format: uri-reference }
     CancellationResult:
       type: object
       required: [id, status, cancel_at_period_end, revision, duplicate]

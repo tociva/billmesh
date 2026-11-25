@@ -174,6 +174,7 @@ func captureOrderFixture(t *testing.T, prefix string) (*testkit.HTTP, *pgxpool.P
 	h := testkit.NewHTTP(t)
 	org := testkit.Unique(prefix)
 	token := h.IssueToken(t, org, "daybook", testkit.AllPermissions(), nil)
+	h.Token = token
 	accountID := testkit.CreateFixtureAccount(t, h, org, token)
 	order := testkit.CreateCreditPackOrder(t, h, "daybook", 500, token)
 	pool := e2ePool(t)

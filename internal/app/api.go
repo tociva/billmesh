@@ -155,6 +155,7 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/usage-events", auth.RequireClient(runtimeClients, true, a.recordUsage))
 	protected.HandleFunc("GET /v1/usage-events", auth.RequireClient(billingClients, true, a.listUsage))
 	protected.HandleFunc("POST /v1/payments/orders", auth.RequireClient(billingClients, true, a.createPaymentOrder))
+	protected.HandleFunc("POST /v1/payments/{id}/confirm", auth.RequireClient(billingClients, true, a.confirmRazorpayCheckout))
 	protected.HandleFunc("GET /v1/payments", auth.RequireClient(billingClients, true, a.listPayments))
 	protected.HandleFunc("GET /v1/invoices", auth.RequireClient(billingClients, true, a.listInvoices))
 	protected.HandleFunc("POST /v1/webhooks", auth.RequireClient(billingClients, true, a.registerWebhook))
