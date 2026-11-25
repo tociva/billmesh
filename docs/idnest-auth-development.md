@@ -66,7 +66,7 @@ BFF_CONSOLE_STANDALONE_LOGOUT_URI="https://auth-dev.idnest.cloud/logout"
 BFF_ADMIN_ISSUER="https://hydra-dev.idnest.cloud/"
 BFF_ADMIN_CLIENT_ID="billmesh-admin-bff-dev"
 BFF_ADMIN_CLIENT_SECRET="<IDNEST_GENERATED_ADMIN_SECRET>"
-BFF_ADMIN_AUDIENCE="billmesh"
+BFF_ADMIN_AUDIENCE="billme.sh-admins"
 BFF_ADMIN_SCOPE="openid profile email offline_access"
 BFF_ADMIN_REDIRECT_URI="https://api-dev.billme.sh/api/v1/auth/admin/callback"
 BFF_ADMIN_POST_LOGOUT_REDIRECT_URI="https://api-dev.billme.sh/api/v1/auth/admin/logout/callback"
@@ -236,7 +236,7 @@ context values over 512 bytes, and delegated JWTs over 16 KiB.
 Billmesh registers the authenticated pair, not the actor alone:
 
 ```dotenv
-DELEGATION_ISSUER="https://auth-dev.idnest.cloud/auth/v1/delegation"
+DELEGATION_ISSUER="https://auth-dev.idnest.cloud/delegation"
 DELEGATION_DISCOVERY_URL="https://auth-dev.idnest.cloud/.well-known/idnest-delegation-configuration"
 DELEGATION_AUDIENCE="https://api-dev.billme.sh"
 DELEGATION_PROFILE_REFRESH_INTERVAL="10s"
