@@ -119,6 +119,9 @@ func (h *HTTP) RequireStatusWithHeaders(t *testing.T, want int, method, path str
 }
 func (h *HTTP) SignedWebhook(t *testing.T, path string, body any, secret string) int {
 	t.Helper()
+	if legacy, ok := body.(map[string]any); ok {
+		body = razorpayEnvelopeFromLegacyWebhook(legacy)
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +138,14 @@ func (h *HTTP) SignedWebhookRaw(t *testing.T, path string, raw []byte, secret st
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	eventID := "evt_malformed_test"
+	var identity struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &identity) == nil && identity.ID != "" {
+		eventID = identity.ID
+	}
+	req.Header.Set("X-Razorpay-Event-Id", eventID)
 	req.Header.Set("X-Razorpay-Signature", hex.EncodeToString(mac.Sum(nil)))
 	resp, err := h.Client.Do(req)
 	if err != nil {
@@ -142,6 +153,57 @@ func (h *HTTP) SignedWebhookRaw(t *testing.T, path string, raw []byte, secret st
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode
+}
+
+func razorpayEnvelopeFromLegacyWebhook(legacy map[string]any) map[string]any {
+	eventType, _ := legacy["type"].(string)
+	eventID, _ := legacy["id"].(string)
+	paymentID, _ := legacy["payment_id"].(string)
+	orderID, _ := legacy["order_id"].(string)
+	status, _ := legacy["status"].(string)
+	currency, _ := legacy["currency"].(string)
+	amount := integerValue(legacy["amount_minor"])
+	payload := map[string]any{}
+	if eventType == "refund.processed" {
+		refundID, _ := legacy["refund_id"].(string)
+		payload["refund"] = map[string]any{"entity": map[string]any{
+			"id": refundID, "entity": "refund", "payment_id": paymentID,
+			"status": "processed", "amount": amount, "currency": currency,
+		}}
+	} else {
+		paymentStatus := status
+		if eventType == "order.paid" && paymentStatus == "paid" {
+			paymentStatus = "captured"
+		}
+		payload["payment"] = map[string]any{"entity": map[string]any{
+			"id": paymentID, "entity": "payment", "order_id": orderID,
+			"status": paymentStatus, "amount": amount, "currency": currency,
+		}}
+		if eventType == "order.paid" {
+			payload["order"] = map[string]any{"entity": map[string]any{
+				"id": orderID, "entity": "order", "status": "paid",
+				"amount": amount, "currency": currency,
+			}}
+		}
+	}
+	return map[string]any{
+		"id":     eventID, // Used only by SignedWebhookRaw to build the provider header.
+		"entity": "event", "account_id": RazorpayTestAccountID, "event": eventType,
+		"contains": []string{"payment"}, "payload": payload, "created_at": int64(1_700_000_000),
+	}
+}
+
+func integerValue(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
 }
 
 func (h *HTTP) IssueToken(t *testing.T, org, app string, permissions []string, overrides map[string]any) string {

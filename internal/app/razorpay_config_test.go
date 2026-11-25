@@ -26,7 +26,7 @@ func TestRazorpayDisabledDoesNotAffectNonPaymentHealthEndpoint(t *testing.T) {
 func TestConfigureRazorpayAppliesValidatedProviderValues(t *testing.T) {
 	provider := config.RazorpayConfig{
 		Enabled: true, Environment: "development", BaseURL: "https://api.razorpay.com",
-		KeyID: "rzp_test_billmesh", KeySecret: "provider-secret", WebhookSecret: "webhook-secret",
+		KeyID: "rzp_test_billmesh", KeySecret: "provider-secret", WebhookSecret: "webhook-secret", AccountID: "acc_billmesh",
 	}
 	api := NewAPI(nil, nil, nil)
 	api.ConfigureRazorpay(provider)
@@ -34,7 +34,7 @@ func TestConfigureRazorpayAppliesValidatedProviderValues(t *testing.T) {
 		t.Fatal("validated payment provider was not configured")
 	}
 	if api.providerBaseURL != provider.BaseURL || api.providerPublicKey != provider.KeyID || api.providerSecret != provider.KeySecret ||
-		api.providerEnvironment != provider.Environment || api.webhookSecret != provider.WebhookSecret {
+		api.providerEnvironment != provider.Environment || api.webhookSecret != provider.WebhookSecret || api.providerAccountID != provider.AccountID {
 		t.Fatal("API did not receive the validated Razorpay configuration")
 	}
 }

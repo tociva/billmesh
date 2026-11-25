@@ -7,21 +7,25 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 type RazorpayConfig struct {
-	Enabled       bool
-	Environment   string
-	BaseURL       string
-	KeyID         string
-	KeySecret     string
-	CheckoutURL   string
-	WebhookSecret string
+	Enabled                        bool
+	Environment                    string
+	BaseURL                        string
+	KeyID                          string
+	KeySecret                      string
+	CheckoutURL                    string
+	WebhookSecret                  string
+	AccountID                      string
+	PreviousWebhookSecret          string
+	PreviousWebhookSecretExpiresAt *time.Time
 }
 
 func (config RazorpayConfig) String() string {
-	return fmt.Sprintf("enabled=%t environment=%s base_url=%s key_id=%s key_secret=[redacted] webhook_secret=[redacted]",
-		config.Enabled, config.Environment, config.BaseURL, config.KeyID)
+	return fmt.Sprintf("enabled=%t environment=%s base_url=%s key_id=%s account_id=%s key_secret=[redacted] webhook_secret=[redacted] previous_webhook_secret=[redacted]",
+		config.Enabled, config.Environment, config.BaseURL, config.KeyID, config.AccountID)
 }
 
 func (config RazorpayConfig) LogValue() slog.Value {
@@ -30,8 +34,10 @@ func (config RazorpayConfig) LogValue() slog.Value {
 		slog.String("environment", config.Environment),
 		slog.String("base_url", config.BaseURL),
 		slog.String("key_id", config.KeyID),
+		slog.String("account_id", config.AccountID),
 		slog.String("key_secret", "[redacted]"),
 		slog.String("webhook_secret", "[redacted]"),
+		slog.String("previous_webhook_secret", "[redacted]"),
 	)
 }
 
@@ -51,6 +57,9 @@ func loadRazorpay() (RazorpayConfig, error) {
 		"RAZORPAY_WEBHOOK_SECRET": strings.TrimSpace(os.Getenv("RAZORPAY_WEBHOOK_SECRET")),
 	}
 	checkoutURL := strings.TrimSpace(os.Getenv("RAZORPAY_CHECKOUT_URL"))
+	accountID := strings.TrimSpace(os.Getenv("RAZORPAY_ACCOUNT_ID"))
+	previousWebhookSecret := strings.TrimSpace(os.Getenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET"))
+	previousWebhookSecretExpiresAtRaw := strings.TrimSpace(os.Getenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT"))
 	present := 0
 	missing := make([]string, 0, len(values))
 	for key, configured := range values {
@@ -61,8 +70,8 @@ func loadRazorpay() (RazorpayConfig, error) {
 		}
 	}
 	if present == 0 {
-		if checkoutURL != "" {
-			return RazorpayConfig{}, fmt.Errorf("RAZORPAY_CHECKOUT_URL requires the complete Razorpay configuration")
+		if checkoutURL != "" || accountID != "" || previousWebhookSecret != "" || previousWebhookSecretExpiresAtRaw != "" {
+			return RazorpayConfig{}, fmt.Errorf("optional Razorpay settings require the complete Razorpay configuration")
 		}
 		return RazorpayConfig{Environment: environment}, nil
 	}
@@ -78,6 +87,17 @@ func loadRazorpay() (RazorpayConfig, error) {
 			return RazorpayConfig{}, err
 		}
 	}
+	if (previousWebhookSecret == "") != (previousWebhookSecretExpiresAtRaw == "") {
+		return RazorpayConfig{}, fmt.Errorf("RAZORPAY_PREVIOUS_WEBHOOK_SECRET and RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT must be configured together")
+	}
+	var previousWebhookSecretExpiresAt *time.Time
+	if previousWebhookSecretExpiresAtRaw != "" {
+		parsed, err := time.Parse(time.RFC3339, previousWebhookSecretExpiresAtRaw)
+		if err != nil {
+			return RazorpayConfig{}, fmt.Errorf("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT must use RFC3339")
+		}
+		previousWebhookSecretExpiresAt = &parsed
+	}
 	expectedPrefix := "rzp_test_"
 	if environment == "production" {
 		expectedPrefix = "rzp_live_"
@@ -89,6 +109,8 @@ func loadRazorpay() (RazorpayConfig, error) {
 		Enabled: true, Environment: environment, BaseURL: strings.TrimRight(values["RAZORPAY_BASE_URL"], "/"),
 		KeyID: values["RAZORPAY_KEY_ID"], KeySecret: values["RAZORPAY_KEY_SECRET"],
 		CheckoutURL: strings.TrimRight(checkoutURL, "/"), WebhookSecret: values["RAZORPAY_WEBHOOK_SECRET"],
+		AccountID: accountID, PreviousWebhookSecret: previousWebhookSecret,
+		PreviousWebhookSecretExpiresAt: previousWebhookSecretExpiresAt,
 	}, nil
 }
 

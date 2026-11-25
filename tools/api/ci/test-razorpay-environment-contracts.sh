@@ -79,6 +79,29 @@ write_base_environment "$modal" development
 append_razorpay "$modal" https://api.razorpay.com rzp_test_billmesh
 expect_valid "modal checkout without checkout URL" "$modal"
 
+rotation="$temporary_dir/rotation.env"
+write_base_environment "$rotation" development
+append_razorpay "$rotation" https://api.razorpay.com rzp_test_billmesh
+cat >>"$rotation" <<EOF
+RAZORPAY_ACCOUNT_ID=acc_billmesh
+RAZORPAY_PREVIOUS_WEBHOOK_SECRET=previous-webhook-secret
+RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT=2099-01-02T03:04:05Z
+EOF
+expect_valid "merchant identity and webhook rotation" "$rotation"
+
+incomplete_rotation="$temporary_dir/incomplete-rotation.env"
+write_base_environment "$incomplete_rotation" development
+append_razorpay "$incomplete_rotation" https://api.razorpay.com rzp_test_billmesh
+echo 'RAZORPAY_PREVIOUS_WEBHOOK_SECRET=previous-webhook-secret' >>"$incomplete_rotation"
+expect_invalid "rotation secret without expiry" "$incomplete_rotation"
+
+malformed_rotation="$temporary_dir/malformed-rotation.env"
+write_base_environment "$malformed_rotation" development
+append_razorpay "$malformed_rotation" https://api.razorpay.com rzp_test_billmesh
+echo 'RAZORPAY_PREVIOUS_WEBHOOK_SECRET=previous-webhook-secret' >>"$malformed_rotation"
+echo 'RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT=tomorrow' >>"$malformed_rotation"
+expect_invalid "malformed rotation expiry" "$malformed_rotation"
+
 partial="$temporary_dir/partial.env"
 write_base_environment "$partial" development
 echo 'RAZORPAY_BASE_URL=https://api.razorpay.com' >>"$partial"

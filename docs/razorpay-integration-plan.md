@@ -119,111 +119,127 @@ acceptance evidence is available.
 
 ### Tests first
 
-- [ ] Add a unit test mapping a Billmesh amount and ISO currency to Razorpay
+- [x] Add a unit test mapping a Billmesh amount and ISO currency to Razorpay
   currency subunits without floating-point arithmetic.
-- [ ] Add a unit test ensuring a provider receipt is non-empty, ASCII-safe,
+- [x] Add a unit test ensuring a provider receipt is non-empty, ASCII-safe,
   deterministic, unique per operation, and no longer than 40 characters.
-- [ ] Add a unit test proving customer idempotency keys up to Billmesh's limit do
+- [x] Add a unit test proving customer idempotency keys up to Billmesh's limit do
   not make the Razorpay receipt exceed 40 characters.
-- [ ] Add an E2E test proving credit-pack price, credits, and currency come from
+- [x] Add an E2E test proving credit-pack price, credits, and currency come from
   Billmesh data, not the client request.
-- [ ] Add an E2E test proving paid-plan transition price and currency come from
+- [x] Add an E2E test proving paid-plan transition price and currency come from
   the selected server-side plan version.
-- [ ] Add an E2E test verifying `POST /v1/orders`, Basic Auth, JSON content type,
+- [x] Add an E2E test verifying `POST /v1/orders`, Basic Auth, JSON content type,
   amount, currency, receipt, and approved notes.
-- [ ] Add an E2E test rejecting a provider response with no order ID.
-- [ ] Add an E2E test rejecting a provider order whose returned amount, currency,
+- [x] Add an E2E test rejecting a provider response with no order ID.
+- [x] Add an E2E test rejecting a provider order whose returned amount, currency,
   receipt, or entity does not match the request.
-- [ ] Add tests for provider `400`, `401`, `429`, `5xx`, malformed JSON, timeout,
+- [x] Add tests for provider `400`, `401`, `429`, `5xx`, malformed JSON, timeout,
   and connection loss.
-- [ ] Add an E2E test proving an identical Billmesh idempotency retry returns the
+- [x] Add an E2E test proving an identical Billmesh idempotency retry returns the
   same payment and provider order.
-- [ ] Add an E2E test proving reuse of a Billmesh idempotency key with different
+- [x] Add an E2E test proving reuse of a Billmesh idempotency key with different
   input returns an idempotency conflict.
-- [ ] Add a concurrency test proving simultaneous identical requests create one
+- [x] Add a concurrency test proving simultaneous identical requests create one
   Billmesh payment and at most one usable Razorpay order.
-- [ ] Add a recovery test where Razorpay creates the order but its response is
+- [x] Add a recovery test where Razorpay creates the order but its response is
   lost before Billmesh receives it.
-- [ ] Add a recovery test where Razorpay creates the order but the local payment
+- [x] Add a recovery test where Razorpay creates the order but the local payment
   insert or transition update fails.
-- [ ] Add a test proving retry/recovery cannot attach an order belonging to a
+- [x] Add a test proving retry/recovery cannot attach an order belonging to a
   different account, environment, amount, or currency.
-- [ ] Add a test proving provider credentials never appear in the checkout
+- [x] Add a test proving provider credentials never appear in the checkout
   response.
 
 ### Implementation
 
-- [ ] Replace long operation references as Razorpay receipts with a fixed-length
+- [x] Replace long operation references as Razorpay receipts with a fixed-length
   provider-safe identifier while retaining the full local operation reference.
-- [ ] Persist enough local operation state before calling Razorpay to recover an
+- [x] Persist enough local operation state before calling Razorpay to recover an
   uncertain provider result.
-- [ ] Validate the complete Razorpay Order response before exposing checkout.
-- [ ] Implement deterministic recovery for lost create-order responses.
-- [ ] Add bounded retry/backoff only where the operation can be retried safely.
-- [ ] Preserve the provider order ID and correlation identifiers for audit and
+- [x] Validate the complete Razorpay Order response before exposing checkout.
+- [x] Implement deterministic recovery for lost create-order responses.
+- [x] Add bounded retry/backoff only where the operation can be retried safely.
+- [x] Preserve the provider order ID and correlation identifiers for audit and
   support.
+
+### Verification evidence
+
+- [x] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver` —
+  passed on 2026-11-25.
+- [x] `make test-e2e` — migrations, integration tests, and all 59 E2E tests
+  passed on 2026-11-25.
 
 ## 5. Inbound webhook contract
 
 ### Tests first
 
-- [ ] Add an E2E test accepting an authentic Razorpay payload that uses top-level
+- [x] Add an E2E test accepting an authentic Razorpay payload that uses top-level
   `event` rather than Billmesh's current synthetic `type` field.
-- [ ] Add an E2E test taking the provider event ID from
+- [x] Add an E2E test taking the provider event ID from
   `X-Razorpay-Event-Id` rather than the JSON body.
-- [ ] Add tests rejecting a missing, blank, malformed, or oversized event ID.
-- [ ] Add a test verifying HMAC-SHA256 against the exact raw request bytes.
-- [ ] Add tests rejecting a missing, malformed, wrong, truncated, or uppercase/
+- [x] Add tests rejecting a missing, blank, malformed, or oversized event ID.
+- [x] Add a test verifying HMAC-SHA256 against the exact raw request bytes.
+- [x] Add tests rejecting a missing, malformed, wrong, truncated, or uppercase/
   lowercase-invalid signature according to the chosen contract.
-- [ ] Add a test proving a signature generated for reserialized JSON is rejected.
-- [ ] Add a test rejecting malformed JSON after signature verification without
+- [x] Add a test proving a signature generated for reserialized JSON is rejected.
+- [x] Add a test rejecting malformed JSON after signature verification without
   changing financial state.
-- [ ] Add a test rejecting a request body larger than the configured limit.
-- [ ] Add realistic tests for `payment.captured`, `payment.failed`, `order.paid`,
+- [x] Add a test rejecting a request body larger than the configured limit.
+- [x] Add realistic tests for `payment.captured`, `payment.failed`, `order.paid`,
   and `refund.processed` entity extraction.
-- [ ] Add a test for a signed unsupported event according to the approved
+- [x] Add a test for a signed unsupported event according to the approved
   acknowledgement policy.
-- [ ] Add a test rejecting an event from an unexpected Razorpay merchant account
+- [x] Add a test rejecting an event from an unexpected Razorpay merchant account
   if merchant-account validation is enabled.
-- [ ] Add a test proving invalid events do not create provider-event records or
+- [x] Add a test proving invalid events do not create provider-event records or
   financial mutations.
 
 ### Deduplication and ordering tests
 
-- [ ] Add an integration test proving the same event ID and identical raw payload
+- [x] Add an integration test proving the same event ID and identical raw payload
   is acknowledged repeatedly but applied once.
-- [ ] Add an integration test proving the same event ID with different content is
+- [x] Add an integration test proving the same event ID with different content is
   treated as a provider-event conflict.
-- [ ] Add a test proving different event IDs for the same captured payment cannot
+- [x] Add a test proving different event IDs for the same captured payment cannot
   fulfil twice.
-- [ ] Add a test receiving `order.paid` and `payment.captured` in both orders.
-- [ ] Add a test receiving `payment.failed` followed by a successful late capture.
-- [ ] Add a test receiving capture followed by a stale failure event.
-- [ ] Add a concurrent-delivery test for the same event and the same payment.
-- [ ] Add a test proving event deduplication survives API and worker restarts.
+- [x] Add a test receiving `order.paid` and `payment.captured` in both orders.
+- [x] Add a test receiving `payment.failed` followed by a successful late capture.
+- [x] Add a test receiving capture followed by a stale failure event.
+- [x] Add a concurrent-delivery test for the same event and the same payment.
+- [x] Add a test proving event deduplication survives API and worker restarts.
 
 ### Secret rotation and delivery tests
 
-- [ ] Add tests accepting the current webhook secret.
-- [ ] Add tests accepting the previous secret only during an explicit grace
+- [x] Add tests accepting the current webhook secret.
+- [x] Add tests accepting the previous secret only during an explicit grace
   period for older Razorpay retries.
-- [ ] Add tests rejecting the previous secret after the grace period.
-- [ ] Add a performance test proving the receiver durably accepts valid events
+- [x] Add tests rejecting the previous secret after the grace period.
+- [x] Add a performance test proving the receiver durably accepts valid events
   and responds within Razorpay's five-second deadline under expected load.
-- [ ] Add a failure test proving non-durable receipt never returns success.
-- [ ] Add a retry test proving a response timeout cannot cause duplicate
+- [x] Add a failure test proving non-durable receipt never returns success.
+- [x] Add a retry test proving a response timeout cannot cause duplicate
   fulfilment.
 
 ### Implementation
 
-- [ ] Map Razorpay's wire payload into an internal typed provider-event model.
-- [ ] Use `X-Razorpay-Event-Id` as the provider event identity.
-- [ ] Preserve the verified raw payload for audit and replay.
-- [ ] Separate durable webhook receipt from business processing if synchronous
+- [x] Map Razorpay's wire payload into an internal typed provider-event model.
+- [x] Use `X-Razorpay-Event-Id` as the provider event identity.
+- [x] Preserve the verified raw payload for audit and replay.
+- [x] Separate durable webhook receipt from business processing if synchronous
   processing cannot reliably meet the response deadline.
-- [ ] Support safe webhook-secret rotation without weakening signature checks.
-- [ ] Return a 2xx only after the event is safely accepted according to the
+- [x] Support safe webhook-secret rotation without weakening signature checks.
+- [x] Return a 2xx only after the event is safely accepted according to the
   approved delivery design.
+
+### Verification evidence
+
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build ./...`
+  — completed successfully on 2026-11-25 (Go emitted only a sandbox stat-cache
+  warning after the successful build).
+- [ ] `gotestsum --format testname -- -v ./internal/config ./internal/app ./tests/testkit`
+  — awaiting user execution.
+- [ ] `make test-e2e` — awaiting user execution.
 
 ## 6. Capture validation and atomic fulfilment
 

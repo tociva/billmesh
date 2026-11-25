@@ -1014,6 +1014,11 @@ paths:
       security:
         - razorpaySignature: []
       parameters:
+        - name: X-Razorpay-Event-Id
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+          description: Stable delivery identifier supplied by Razorpay and used for durable deduplication.
         - name: X-Razorpay-Signature
           in: header
           required: true
@@ -2473,17 +2478,16 @@ components:
         checkout: { $ref: "#/components/schemas/Checkout" }
     PaymentWebhook:
       type: object
-      required: [id, type]
+      required: [entity, account_id, event, payload]
       properties:
-        id: { type: string }
-        type: { type: string, enum: [payment.captured, order.paid, payment.failed, refund.processed] }
-        payment_id: { type: string }
-        order_id: { type: string }
-        status: { type: string }
-        refund_id: { type: string }
-        amount_minor: { type: integer, format: int64 }
-        currency: { type: string }
+        entity: { type: string, const: event }
+        account_id: { type: string }
+        event: { type: string, example: payment.captured }
+        contains:
+          type: array
+          items: { type: string }
         payload: { type: object, additionalProperties: true }
+        created_at: { type: integer, format: int64 }
     Payment:
       type: object
       required: [id, provider, status, amount_minor, currency, created_at]

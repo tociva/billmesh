@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,9 @@ func TestLoadRazorpayDisabledWhenAllValuesAreOmitted(t *testing.T) {
 	require.Empty(t, config.KeyID)
 	require.Empty(t, config.KeySecret)
 	require.Empty(t, config.WebhookSecret)
+	require.Empty(t, config.AccountID)
+	require.Empty(t, config.PreviousWebhookSecret)
+	require.Nil(t, config.PreviousWebhookSecretExpiresAt)
 }
 
 func TestLoadRazorpayRejectsPartialConfiguration(t *testing.T) {
@@ -100,22 +104,60 @@ func TestLoadRazorpayRejectsUnknownRuntimeEnvironment(t *testing.T) {
 	require.ErrorContains(t, err, "BILLMESH_ENVIRONMENT")
 }
 
+func TestLoadRazorpayWebhookIdentityAndSecretRotation(t *testing.T) {
+	setRazorpayEnvironment(t, "development", "rzp_test_billmesh")
+	t.Setenv("RAZORPAY_ACCOUNT_ID", "acc_billmesh")
+	t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET", "previous-secret-value")
+	t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT", "2099-01-02T03:04:05Z")
+
+	config, err := loadRazorpay()
+	require.NoError(t, err)
+	require.Equal(t, "acc_billmesh", config.AccountID)
+	require.Equal(t, "previous-secret-value", config.PreviousWebhookSecret)
+	require.Equal(t, "2099-01-02T03:04:05Z", config.PreviousWebhookSecretExpiresAt.Format(time.RFC3339))
+}
+
+func TestLoadRazorpayRejectsIncompleteOrMalformedSecretRotation(t *testing.T) {
+	tests := []struct {
+		name, secret, expires string
+	}{
+		{name: "missing expiry", secret: "previous-secret"},
+		{name: "missing secret", expires: "2099-01-02T03:04:05Z"},
+		{name: "malformed expiry", secret: "previous-secret", expires: "tomorrow"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setRazorpayEnvironment(t, "development", "rzp_test_billmesh")
+			t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET", test.secret)
+			t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT", test.expires)
+			_, err := loadRazorpay()
+			require.Error(t, err)
+			if test.secret != "" {
+				require.NotContains(t, err.Error(), test.secret)
+			}
+		})
+	}
+}
+
 func TestRazorpayConfigStringRedactsSecrets(t *testing.T) {
 	config := RazorpayConfig{
 		Enabled: true, Environment: "development", BaseURL: "https://api.razorpay.com",
 		KeyID: "rzp_test_billmesh", KeySecret: "provider-secret-value", WebhookSecret: "webhook-secret-value",
+		PreviousWebhookSecret: "previous-webhook-secret-value",
 	}
 	formatted := fmt.Sprintf("%s", config)
 	require.Contains(t, formatted, "enabled=true")
 	require.Contains(t, formatted, "environment=development")
 	require.NotContains(t, formatted, config.KeySecret)
 	require.NotContains(t, formatted, config.WebhookSecret)
+	require.NotContains(t, formatted, config.PreviousWebhookSecret)
 }
 
 func TestRazorpayConfigStructuredLogValueRedactsSecrets(t *testing.T) {
 	config := RazorpayConfig{
 		Enabled: true, Environment: "development", BaseURL: "https://api.razorpay.com",
 		KeyID: "rzp_test_billmesh", KeySecret: "provider-secret-value", WebhookSecret: "webhook-secret-value",
+		PreviousWebhookSecret: "previous-webhook-secret-value",
 	}
 	var output bytes.Buffer
 	slog.New(slog.NewJSONHandler(&output, nil)).Info("Razorpay configured", "razorpay", config)
@@ -125,6 +167,7 @@ func TestRazorpayConfigStructuredLogValueRedactsSecrets(t *testing.T) {
 	require.Contains(t, logged, "[redacted]")
 	require.NotContains(t, logged, config.KeySecret)
 	require.NotContains(t, logged, config.WebhookSecret)
+	require.NotContains(t, logged, config.PreviousWebhookSecret)
 }
 
 func TestLoadIncludesRazorpayConfiguration(t *testing.T) {
@@ -151,6 +194,7 @@ func clearRazorpayEnvironment(t *testing.T) {
 	for _, key := range []string{
 		"RAZORPAY_BASE_URL", "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET",
 		"RAZORPAY_CHECKOUT_URL", "RAZORPAY_WEBHOOK_SECRET",
+		"RAZORPAY_ACCOUNT_ID", "RAZORPAY_PREVIOUS_WEBHOOK_SECRET", "RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT",
 	} {
 		t.Setenv(key, "")
 	}

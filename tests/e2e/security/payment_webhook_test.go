@@ -5,7 +5,6 @@ package security_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -48,12 +47,9 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	defer pool.Close()
 	eventID := testkit.Unique("provider-event")
 	providerPaymentID := testkit.Unique("provider-payment")
-	event := map[string]any{"id": eventID, "type": "payment.captured", "payment_id": providerPaymentID, "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": order.Checkout.ClientConfig.AmountMinor, "currency": order.Checkout.ClientConfig.Currency}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", raw, "wrong-secret"); status != http.StatusUnauthorized {
+	fixture := testkit.RazorpayPaymentCaptured(eventID, order.Checkout.ClientConfig.OrderID, providerPaymentID, order.Checkout.ClientConfig.AmountMinor, order.Checkout.ClientConfig.Currency)
+	raw := fixture.Raw
+	if status := h.RazorpayWebhookRaw(t, "/v1/payments/webhook", eventID, raw, "wrong-secret"); status != http.StatusUnauthorized {
 		t.Fatalf("PAY-006: invalid signature returned %d", status)
 	}
 	modified := bytes.Replace(raw, []byte(`"captured"`), []byte(`"failed"`), 1)
@@ -62,6 +58,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Razorpay-Event-Id", eventID)
 	req.Header.Set("X-Razorpay-Signature", webhookSignature(string(raw), "test-webhook-secret"))
 	resp, err := h.Client.Do(req)
 	if err != nil {
@@ -72,11 +69,20 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("GAP-SEC-003: modified raw body returned %d", resp.StatusCode)
 	}
-	missingSigStatus, _ := rawJSON(t, h, http.MethodPost, "/v1/payments/webhook", raw, "", "application/json")
-	if missingSigStatus != http.StatusUnauthorized {
-		t.Fatalf("GAP-SEC-003: absent signature returned %d", missingSigStatus)
+	missingSignature, err := http.NewRequest(http.MethodPost, h.BaseURL+"/v1/payments/webhook", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", []byte(`{"id":`), "test-webhook-secret"); status != http.StatusBadRequest {
+	missingSignature.Header.Set("X-Razorpay-Event-Id", eventID)
+	missingSignatureResponse, err := h.Client.Do(missingSignature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingSignatureResponse.Body.Close()
+	if missingSignatureResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GAP-SEC-003: absent signature returned %d", missingSignatureResponse.StatusCode)
+	}
+	if status := h.RazorpayWebhookRaw(t, "/v1/payments/webhook", "evt_malformed", []byte(`{"entity":`), "test-webhook-secret"); status != http.StatusBadRequest {
 		t.Fatalf("PAY-007: signed malformed JSON returned %d", status)
 	}
 	status, grants, ledger, invoices := paymentState(t, pool, order.Checkout.ClientConfig.OrderID)
@@ -90,7 +96,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	if persisted != 0 {
 		t.Fatalf("invalid signature persisted provider event")
 	}
-	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", raw, "test-webhook-secret"); status != http.StatusNoContent {
+	if status := h.RazorpayWebhook(t, "/v1/payments/webhook", fixture, "test-webhook-secret"); status != http.StatusNoContent {
 		t.Fatalf("PAY-005: valid capture returned %d", status)
 	}
 	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM provider_events WHERE provider_event_id=$1 AND processed_at IS NOT NULL`, eventID).Scan(&persisted); err != nil {
@@ -103,15 +109,11 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	if status != "captured" || grants != 1 || ledger != 1 || invoices != 1 {
 		t.Fatalf("valid capture did not atomically grant and invoice: %s %d %d %d", status, grants, ledger, invoices)
 	}
-	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", raw, "test-webhook-secret"); status != http.StatusNoContent {
+	if status := h.RazorpayWebhook(t, "/v1/payments/webhook", fixture, "test-webhook-secret"); status != http.StatusNoContent {
 		t.Fatalf("identical replay returned %d", status)
 	}
-	event["payment_id"] = testkit.Unique("conflicting-payment")
-	conflictRaw, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status := h.SignedWebhookRaw(t, "/v1/payments/webhook", conflictRaw, "test-webhook-secret"); status != http.StatusConflict {
+	conflict := testkit.RazorpayPaymentCaptured(eventID, order.Checkout.ClientConfig.OrderID, testkit.Unique("conflicting-payment"), order.Checkout.ClientConfig.AmountMinor, order.Checkout.ClientConfig.Currency)
+	if status := h.RazorpayWebhook(t, "/v1/payments/webhook", conflict, "test-webhook-secret"); status != http.StatusConflict {
 		t.Fatalf("GAP-SEC-004: conflicting replay returned %d", status)
 	}
 	status, grants, ledger, invoices = paymentState(t, pool, order.Checkout.ClientConfig.OrderID)
@@ -131,6 +133,7 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 				return
 			}
 			req.Header.Set("X-Razorpay-Signature", webhookSignature(string(raw), "test-webhook-secret"))
+			req.Header.Set("X-Razorpay-Event-Id", eventID)
 			resp, err := h.Client.Do(req)
 			if err != nil {
 				errors <- err
@@ -161,8 +164,8 @@ func TestSecurityPaymentWebhookSignatureCaptureAndReplay(t *testing.T) {
 	testkit.CreateFixtureAccount(t, h, otherOrg, otherToken)
 	otherOrder := testkit.CreateCreditPackOrder(t, h, "daybook", 500, otherToken)
 	crossEventID := testkit.Unique("cross-provider-event")
-	crossEvent := map[string]any{"id": crossEventID, "type": "payment.captured", "payment_id": providerPaymentID, "order_id": otherOrder.Checkout.ClientConfig.OrderID, "status": "captured", "amount_minor": otherOrder.Checkout.ClientConfig.AmountMinor, "currency": otherOrder.Checkout.ClientConfig.Currency}
-	if status := h.SignedWebhook(t, "/v1/payments/webhook", crossEvent, "test-webhook-secret"); status != http.StatusConflict {
+	crossEvent := testkit.RazorpayPaymentCaptured(crossEventID, otherOrder.Checkout.ClientConfig.OrderID, providerPaymentID, otherOrder.Checkout.ClientConfig.AmountMinor, otherOrder.Checkout.ClientConfig.Currency)
+	if status := h.RazorpayWebhook(t, "/v1/payments/webhook", crossEvent, "test-webhook-secret"); status != http.StatusConflict {
 		t.Fatalf("GAP-SEC-004: reused payment reference across accounts returned %d", status)
 	}
 	status, grants, ledger, invoices = paymentState(t, pool, otherOrder.Checkout.ClientConfig.OrderID)

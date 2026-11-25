@@ -93,6 +93,9 @@ services:
       RAZORPAY_KEY_ID: rzp_test_billmesh
       RAZORPAY_KEY_SECRET: test-provider-secret
       RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
+      RAZORPAY_ACCOUNT_ID: acc_billmesh_test
+      RAZORPAY_PREVIOUS_WEBHOOK_SECRET: test-previous-webhook-secret
+      RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT: "2099-01-01T00:00:00Z"
       WEBHOOK_ALLOWED_PRIVATE_HOSTS: mock-external
       AUTH_FAILURES_PER_MINUTE: "1000"
       MUTATION_BURST: "500"

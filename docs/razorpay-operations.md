@@ -14,6 +14,10 @@ RAZORPAY_BASE_URL=https://api.razorpay.com
 RAZORPAY_KEY_ID=rzp_test_or_live_value
 RAZORPAY_KEY_SECRET=provider-api-secret
 RAZORPAY_WEBHOOK_SECRET=independent-webhook-secret
+RAZORPAY_ACCOUNT_ID=acc_your_merchant_account
+# Configure both rotation values only for a bounded retry grace period.
+RAZORPAY_PREVIOUS_WEBHOOK_SECRET=previous-independent-webhook-secret
+RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT=2026-12-01T00:00:00Z
 ```
 
 `RAZORPAY_CHECKOUT_URL` is optional and is not used for modal Standard Checkout.

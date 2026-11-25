@@ -29,22 +29,25 @@ import (
 )
 
 type API struct {
-	pool                *pgxpool.Pool
-	wallets             *wallets.Service
-	auth                auth.TokenVerifier
-	log                 *slog.Logger
-	client              *http.Client
-	providerBaseURL     string
-	providerPublicKey   string
-	providerSecret      string
-	providerEnvironment string
-	providerCheckoutURL string
-	webhookSecret       string
-	sseMu               sync.Mutex
-	sseActive           map[uuid.UUID]int
-	authFailures        *failureWindow
-	mutations           *keyedBuckets
-	browser             browserAuth
+	pool                           *pgxpool.Pool
+	wallets                        *wallets.Service
+	auth                           auth.TokenVerifier
+	log                            *slog.Logger
+	client                         *http.Client
+	providerBaseURL                string
+	providerPublicKey              string
+	providerSecret                 string
+	providerEnvironment            string
+	providerCheckoutURL            string
+	webhookSecret                  string
+	webhookPreviousSecret          string
+	webhookPreviousSecretExpiresAt *time.Time
+	providerAccountID              string
+	sseMu                          sync.Mutex
+	sseActive                      map[uuid.UUID]int
+	authFailures                   *failureWindow
+	mutations                      *keyedBuckets
+	browser                        browserAuth
 }
 
 type browserAuth interface {
@@ -78,6 +81,9 @@ func (a *API) ConfigureRazorpay(provider config.RazorpayConfig) {
 	a.providerEnvironment = provider.Environment
 	a.providerCheckoutURL = provider.CheckoutURL
 	a.webhookSecret = provider.WebhookSecret
+	a.webhookPreviousSecret = provider.PreviousWebhookSecret
+	a.webhookPreviousSecretExpiresAt = provider.PreviousWebhookSecretExpiresAt
+	a.providerAccountID = provider.AccountID
 }
 
 func (a *API) ConfigureBrowserAuth(browser browserAuth) {
