@@ -240,7 +240,7 @@ func exerciseReviewPayment(t *testing.T, h *HTTP, id, org, token string) {
 		if status := h.SignedWebhook(t, "/v1/payments/webhook", event, "test-webhook-secret"); status != http.StatusNoContent {
 			t.Fatalf("%s: capture status %d", id, status)
 		}
-		refund := map[string]any{"id": Unique("refund-event"), "type": "refund.processed", "payment_id": event["payment_id"], "refund_id": Unique("refund"), "amount_minor": config.AmountMinor}
+		refund := map[string]any{"id": Unique("refund-event"), "type": "refund.processed", "payment_id": event["payment_id"], "refund_id": Unique("refund"), "amount_minor": config.AmountMinor, "currency": config.Currency}
 		if status := h.SignedWebhook(t, "/v1/payments/webhook", refund, "test-webhook-secret"); status != http.StatusNoContent {
 			t.Fatalf("%s: refund status %d", id, status)
 		}

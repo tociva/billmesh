@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,7 +17,10 @@ import (
 	"github.com/tociva/billmesh/internal/products"
 )
 
-var errConflictingProviderEvent = errors.New("conflicting provider event")
+var (
+	errConflictingProviderEvent = errors.New("conflicting provider event")
+	errRefundMismatch           = errors.New("refund conflicts with the captured payment")
+)
 
 var supportedWebhookEventTypes = map[string]struct{}{
 	"billing.ownership_transferred":       {},
@@ -177,20 +181,40 @@ func (a *API) writeCreditPackOrder(w http.ResponseWriter, r *http.Request, payme
 	writeJSON(w, statusCode, paymentOrderResponse{PaymentID: paymentID, CreditPackID: packID, Credits: credits, Checkout: checkout})
 }
 
-func refundPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
+func refundPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64, refundCurrency string) error {
 	var purpose string
 	if err := tx.QueryRow(ctx, `SELECT purpose FROM payments WHERE provider='razorpay' AND provider_payment_id=$1`, providerPaymentID).Scan(&purpose); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: provider payment is unknown", errRefundMismatch)
+		}
 		return err
 	}
 	if purpose == "subscription" {
-		return refundSubscriptionPayment(ctx, tx, providerPaymentID, providerRefundID, refundAmount)
+		return refundSubscriptionPayment(ctx, tx, providerPaymentID, providerRefundID, refundAmount, refundCurrency)
 	}
-	return refundCreditPackPayment(ctx, tx, providerPaymentID, providerRefundID, refundAmount)
+	return refundCreditPackPayment(ctx, tx, providerPaymentID, providerRefundID, refundAmount, refundCurrency)
 }
 
-func refundCreditPackPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
-	if providerPaymentID == "" || providerRefundID == "" || refundAmount <= 0 {
-		return errors.New("refund event is missing payment, refund, or amount")
+func existingRefund(ctx context.Context, tx pgx.Tx, paymentID uuid.UUID, providerRefundID string, refundAmount int64) (bool, error) {
+	var storedPaymentID uuid.UUID
+	var storedAmount int64
+	err := tx.QueryRow(ctx, `SELECT payment_id,amount_minor FROM refunds WHERE provider_refund_id=$1`, providerRefundID).
+		Scan(&storedPaymentID, &storedAmount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if storedPaymentID != paymentID || storedAmount != refundAmount {
+		return false, fmt.Errorf("%w: provider refund ID was reused with different details", errRefundMismatch)
+	}
+	return true, nil
+}
+
+func refundCreditPackPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64, refundCurrency string) error {
+	if providerPaymentID == "" || providerRefundID == "" || refundAmount <= 0 || refundCurrency == "" {
+		return fmt.Errorf("%w: refund event is incomplete", errRefundMismatch)
 	}
 	var paymentID, accountID, productID uuid.UUID
 	var amount, credits int64
@@ -202,14 +226,21 @@ func refundCreditPackPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, 
 		return err
 	}
 	if status != "captured" && status != "refunded" {
-		return errors.New("payment is not refundable")
+		return fmt.Errorf("%w: payment is not captured", errRefundMismatch)
+	}
+	if refundCurrency != currency {
+		return fmt.Errorf("%w: currency does not match", errRefundMismatch)
+	}
+	duplicate, err := existingRefund(ctx, tx, paymentID, providerRefundID, refundAmount)
+	if err != nil || duplicate {
+		return err
 	}
 	var refunded int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount_minor),0) FROM refunds WHERE payment_id=$1`, paymentID).Scan(&refunded); err != nil {
 		return err
 	}
 	if refunded+refundAmount > amount {
-		return errors.New("refund exceeds captured amount")
+		return fmt.Errorf("%w: cumulative amount exceeds capture", errRefundMismatch)
 	}
 	creditsToReverse := credits * refundAmount / amount
 	if refunded+refundAmount == amount {
@@ -231,7 +262,11 @@ func refundCreditPackPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, 
 	var refundID uuid.UUID
 	if err := tx.QueryRow(ctx, `INSERT INTO refunds(payment_id,provider_refund_id,amount_minor,credits_reversed)
 		VALUES($1,$2,$3,$4) ON CONFLICT(provider_refund_id) DO NOTHING RETURNING id`, paymentID, providerRefundID, refundAmount, creditsToReverse).Scan(&refundID); errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		duplicate, conflictErr := existingRefund(ctx, tx, paymentID, providerRefundID, refundAmount)
+		if duplicate {
+			return nil
+		}
+		return conflictErr
 	} else if err != nil {
 		return err
 	}
@@ -382,9 +417,9 @@ func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerEnvironm
 		map[string]any{"payment_id": paymentID, "transition_id": transitionID, "subscription_id": subscriptionID, "deferred": deferred})
 }
 
-func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64) error {
-	if providerRefundID == "" || refundAmount <= 0 {
-		return errors.New("refund event is missing refund or amount")
+func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, providerRefundID string, refundAmount int64, refundCurrency string) error {
+	if providerPaymentID == "" || providerRefundID == "" || refundAmount <= 0 || refundCurrency == "" {
+		return fmt.Errorf("%w: refund event is incomplete", errRefundMismatch)
 	}
 	var paymentID, accountID, transitionID, subscriptionID, productID uuid.UUID
 	var amount int64
@@ -398,19 +433,30 @@ func refundSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerPaymentID
 		return err
 	}
 	if status != "captured" && status != "refunded" {
-		return errors.New("payment is not refundable")
+		return fmt.Errorf("%w: payment is not captured", errRefundMismatch)
+	}
+	if refundCurrency != currency {
+		return fmt.Errorf("%w: currency does not match", errRefundMismatch)
+	}
+	duplicate, err := existingRefund(ctx, tx, paymentID, providerRefundID, refundAmount)
+	if err != nil || duplicate {
+		return err
 	}
 	var refunded int64
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount_minor),0) FROM refunds WHERE payment_id=$1`, paymentID).Scan(&refunded); err != nil {
 		return err
 	}
 	if refunded+refundAmount > amount {
-		return errors.New("refund exceeds captured amount")
+		return fmt.Errorf("%w: cumulative amount exceeds capture", errRefundMismatch)
 	}
 	var refundID uuid.UUID
 	if err := tx.QueryRow(ctx, `INSERT INTO refunds(payment_id,provider_refund_id,amount_minor,credits_reversed)
 		VALUES($1,$2,$3,0) ON CONFLICT(provider_refund_id) DO NOTHING RETURNING id`, paymentID, providerRefundID, refundAmount).Scan(&refundID); errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		duplicate, conflictErr := existingRefund(ctx, tx, paymentID, providerRefundID, refundAmount)
+		if duplicate {
+			return nil
+		}
+		return conflictErr
 	} else if err != nil {
 		return err
 	}

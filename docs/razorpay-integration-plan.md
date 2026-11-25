@@ -407,38 +407,65 @@ acceptance evidence is available.
 
 ### Tests first
 
-- [ ] Add a realistic `payment.failed` test that records the provider payment ID
+- [x] Add a realistic `payment.failed` test that records the provider payment ID
   and failure state without granting value.
-- [ ] Add a test proving a later valid capture can supersede an earlier failed
+- [x] Add a test proving a later valid capture can supersede an earlier failed
   attempt according to Razorpay's late-authorization behavior.
-- [ ] Add realistic full and partial `refund.processed` tests.
-- [ ] Add tests rejecting missing refund ID, missing payment ID, zero amount,
+- [x] Add realistic full and partial `refund.processed` tests.
+- [x] Add tests rejecting missing refund ID, missing payment ID, zero amount,
   negative amount, and over-refund.
-- [ ] Add duplicate and out-of-order refund-event tests.
-- [ ] Add a test proving cumulative partial refunds cannot exceed the captured
+- [x] Add duplicate and out-of-order refund-event tests.
+- [x] Add a test proving cumulative partial refunds cannot exceed the captured
   amount.
-- [ ] Add tests for the approved credit-reversal policy when purchased credits
+- [x] Add tests for the approved credit-reversal policy when purchased credits
   are unspent, partially spent, or fully spent.
-- [ ] Add tests for paid-subscription refund policy and entitlement revocation or
+- [x] Add tests for paid-subscription refund policy and entitlement revocation or
   retention.
-- [ ] Add an integration test proving refund, credit reversal, ledger entry,
+- [x] Add an integration test proving refund, credit reversal, ledger entry,
   credit note, billing revision, and outbox event commit atomically.
-- [ ] Add rollback tests for failures during refund processing.
-- [ ] If Billmesh initiates refunds, add tests for Razorpay's refund idempotency
-  header, identical retries, conflicts, pending status, failed status, and lost
-  responses.
-- [ ] Decide whether disputes/chargebacks are phase-one scope.
-- [ ] If disputes are in scope, add recorded dispute fixtures and tests for opened,
-  won, lost, reversed, duplicate, and out-of-order events before implementation.
+- [x] Add rollback tests for failures during refund processing.
+- [x] Record that phase one is webhook-only for refunds; Billmesh does not call
+  Razorpay's refund API, so initiation retry, pending, failed, and lost-response
+  tests are intentionally not applicable.
+- [x] Record the phase-one disputes/chargebacks scope decision.
+- [x] Record that dispute fixtures and state-transition tests are deferred until
+  a separately approved dispute model enters scope.
 
 ### Implementation
 
-- [ ] Implement the approved refund initiation and/or webhook-only responsibility
+- [x] Implement the approved refund initiation and/or webhook-only responsibility
   boundary.
-- [ ] Make refund processing independently idempotent from webhook-event
+- [x] Make refund processing independently idempotent from webhook-event
   deduplication.
-- [ ] Surface refund and dispute mismatches to finance and support owners.
-- [ ] Document manual remediation that preserves ledger auditability.
+- [x] Surface refund mismatches to finance and support owners; keep disputes out
+  of the event allowlist until their model is approved.
+- [x] Document manual remediation that preserves ledger auditability.
+
+### Phase-one responsibility boundary
+
+- Billmesh consumes signed, processed Razorpay refund webhooks but does not
+  initiate provider refunds. Refund initiation remains an explicitly approved
+  external finance operation. Supporting initiation later requires its own TDD
+  phase covering provider idempotency, pending and failed states, timeouts, and
+  lost responses.
+- Disputes and chargebacks are not phase-one events. They require a separate
+  lifecycle model, entitlement policy, accounting entries, evidence workflow,
+  and recorded fixtures before their event types may enter the allowlist.
+- A provider refund is independently idempotent by `provider_refund_id`; webhook
+  event deduplication is an additional transport guarantee, not the accounting
+  idempotency key.
+- Amount, currency, payment, state, cumulative-total, and reused-refund-ID
+  mismatches create an operator-visible `refund_mismatch` reconciliation issue.
+
+### Verification evidence
+
+- [ ] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
+  ./tests/testkit` — focused contract and application tests pass.
+- [ ] `make test-e2e` — failed-payment, late-capture, refund, entitlement-policy,
+  mismatch, atomicity, and rollback scenarios pass.
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
+  ./...` — production build completed successfully on 2026-11-25; Go emitted
+  only the known sandbox stat-cache warning.
 
 ## 10. Subscription lifecycle boundary
 

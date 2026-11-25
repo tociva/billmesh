@@ -132,6 +132,13 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "conflicting provider event")
 			return
 		}
+		if errors.Is(err, errRefundMismatch) {
+			if issueErr := a.recordRefundMismatch(r.Context(), event); issueErr != nil {
+				a.log.Error("failed to record refund reconciliation issue", "event_id", event.ID, "refund_id", event.RefundID, "error", issueErr)
+			}
+			writeCodedError(w, http.StatusConflict, "refund_mismatch", "refund conflicts with the captured payment")
+			return
+		}
 		writeDBError(w, err)
 		return
 	}
@@ -190,7 +197,7 @@ func parseRazorpayWebhook(eventID string, raw []byte, expectedAccountID string) 
 		event.Amount, event.Currency, event.Supported = payment.Amount, payment.Currency, true
 	case "refund.processed":
 		refund := envelope.Payload.Refund.Entity
-		if refund.Entity != "refund" || refund.ID == "" || refund.PaymentID == "" || refund.Status != "processed" || refund.Amount <= 0 {
+		if refund.Entity != "refund" || refund.ID == "" || refund.PaymentID == "" || refund.Status != "processed" || refund.Amount <= 0 || refund.Currency == "" {
 			return normalizedRazorpayEvent{}, errors.New("incomplete Razorpay refund entity")
 		}
 		event.PaymentID, event.RefundID, event.Status = refund.PaymentID, refund.ID, refund.Status
@@ -272,11 +279,34 @@ func (a *API) persistAndApplyRazorpayEvent(ctx context.Context, event normalized
 					map[string]any{"payment_id": paymentID, "reason": "provider_reported_failure"})
 			}
 		case "refund.processed":
-			err = refundPayment(ctx, tx, event.PaymentID, event.RefundID, event.Amount)
+			err = refundPayment(ctx, tx, event.PaymentID, event.RefundID, event.Amount, event.Currency)
 		}
 		if err == nil {
 			_, err = tx.Exec(ctx, `UPDATE provider_events SET processed_at=now() WHERE id=$1`, inserted)
 		}
 		return err
+	})
+}
+
+func (a *API) recordRefundMismatch(ctx context.Context, event normalizedRazorpayEvent) error {
+	var paymentID, accountID uuid.UUID
+	var orderID string
+	err := a.pool.QueryRow(ctx, `SELECT id,account_id,COALESCE(provider_order_id,'') FROM payments
+		WHERE provider='razorpay' AND provider_payment_id=$1`, event.PaymentID).Scan(&paymentID, &accountID, &orderID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	issue := reconciliationIssue{
+		Environment: a.providerEnvironment, Type: "refund_mismatch", PaymentRef: event.PaymentID,
+		RefundRef: event.RefundID, Summary: "provider refund could not be applied to Billmesh financial records",
+		Details: map[string]any{"event_id": event.ID, "amount_minor": event.Amount, "currency": event.Currency},
+	}
+	if err == nil {
+		issue.PaymentID = &paymentID
+		issue.AccountID = &accountID
+		issue.OrderID = orderID
+	}
+	return pgx.BeginFunc(ctx, a.pool, func(tx pgx.Tx) error {
+		return upsertReconciliationIssue(ctx, tx, issue)
 	})
 }

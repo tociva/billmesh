@@ -78,6 +78,50 @@ references with the Billmesh payment, invoice or credit note, grant, and ledger
 operation. Use a separately approved refund or adjustment workflow for any
 financial correction. Never repair a mismatch with direct SQL.
 
+## Refunds and disputes
+
+Phase one has a deliberately narrow responsibility boundary. Billmesh processes
+signed `refund.processed` webhooks after finance has initiated a refund outside
+Billmesh; it does not call Razorpay's refund API. A future refund-initiation flow
+must be designed and tested separately for provider idempotency, pending and
+failed refunds, timeouts, and lost responses before it is enabled.
+
+Refund accounting uses the Razorpay refund ID as its durable idempotency key,
+independently of webhook event IDs. Partial refunds remain linked to the captured
+payment. Their cumulative amount may not exceed the capture, and the final
+partial refund closes the payment as refunded. Purchased credits are reversed
+only while they remain unspent. A fully refunded paid subscription follows the
+product snapshot's `lifecycle.refund_entitlements` policy: `revoke` cancels the
+subscription and removes remaining included credits; `retain` leaves the
+entitlement intact. Every accepted refund, credit reversal, ledger entry, credit
+note, billing revision, provider event, and outbox event commits in one database
+transaction.
+
+Billmesh rejects a refund whose payment, amount, currency, state, cumulative
+total, or reused refund ID conflicts with local financial records. The failed
+event is not marked processed; instead, an open `refund_mismatch` reconciliation
+issue records safe provider references for finance and support.
+
+For manual remediation:
+
+1. Acknowledge the reconciliation issue through the Admin API so ownership is
+   visible in `audit_log`.
+2. Compare the Razorpay payment/refund with the Billmesh payment, invoice,
+   credit note, grant, ledger, and outbox records.
+3. Perform any provider-side refund or separately approved compensating
+   financial operation through its normal audited workflow. Do not insert,
+   update, or delete financial rows with SQL.
+4. Replay the original signed webhook only when its immutable provider details
+   are now consistent. Otherwise retain the mismatch as evidence and use the
+   approved adjustment workflow.
+5. Resolve the issue through the Admin API with a specific resolution note and
+   the current optimistic-concurrency version.
+
+Disputes and chargebacks are outside phase-one scope. Their webhooks must remain
+outside the supported event allowlist until a separately approved model defines
+opened, won, lost, reversed, duplicate, out-of-order, entitlement, and accounting
+behavior with recorded fixtures and tests.
+
 ## Readiness and logging
 
 `GET /readyz` reports whether `razorpay_checkout` is `enabled` or `disabled` but

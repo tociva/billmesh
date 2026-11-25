@@ -2175,7 +2175,8 @@ Razorpay fixture and harness coverage maps to the existing cases as follows:
   ordering: `PAY-005`, `PAY-006`, `PAY-007`, `PAY-010`, and `PAY-011`;
 - capture isolation and financial validation: `PAY-008`, `PAY-009`, `PAY-014`,
   `PAY-015`, `PAY-021`, `PAY-022`, `PAY-024`, and `PAY-027`; and
-- refunds and late capture: `PAY-016`, `PAY-017`, `PAY-023`, and `PAY-025`.
+- refunds and late capture: `PAY-016`, `PAY-017`, `PAY-023`, `PAY-025`, and
+  `PAY-037` through `PAY-043`.
 - scheduled provider and finance reconciliation, restart recovery, orphan
   detection, and audited remediation: `PAY-028` through `PAY-036`.
 
@@ -3524,6 +3525,13 @@ These cases are exercised by the current test suites and were omitted from the c
 | PAY-034 | I | Reconcile provider captures and refunds against invoices, credit notes, grants, and ledger entries. |
 | PAY-035 | E | Require audited optimistic-concurrency actions for reconciliation issue remediation. |
 | PAY-036 | I | Keep an already fulfilled payment unchanged during scheduled reconciliation. |
+| PAY-037 | E | Record a realistic failed provider attempt without granting value and allow a later valid capture to win. |
+| PAY-038 | E | Reject malformed, wrong-currency, and cumulative over-refund events without changing financial state. |
+| PAY-039 | I | Deduplicate refunds by provider refund ID independently of webhook IDs and safely handle refund-before-capture delivery. |
+| PAY-040 | I | Reverse only remaining purchased credits for unspent, partially spent, and fully spent grants. |
+| PAY-041 | E | Apply paid-subscription refund entitlement revocation or retention from the immutable policy snapshot. |
+| PAY-042 | I | Atomically commit or roll back refund, grant, wallet, ledger, credit-note, revision, provider-event, and outbox state. |
+| PAY-043 | E | Surface refund identity, amount, currency, payment-state, and cumulative-total conflicts for audited operator remediation. |
 | RES-022 | I | Return the original reservation for an identical idempotent retry without reserving credits twice. |
 | RES-023 | I | Prevent concurrent settlement and release from producing contradictory ledger movements. |
 | RES-024 | E | Reject settlement above the reserved amount unless an authorized extension succeeds. |
