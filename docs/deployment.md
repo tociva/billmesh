@@ -76,7 +76,8 @@ script preserves populated deployment values and can be rerun safely as later
 values become available:
 
 ```sh
-./tools/api/ci/bootstrap-development-config.sh
+KUBERNETES_ACCESS_HOSTNAME=k8s-tociva-dev.tociva.com \
+  ./tools/api/ci/bootstrap-development-config.sh
 ```
 
 Create the two repository environments before creating their OIDC roles:
@@ -101,14 +102,15 @@ In **Terminal 1**, authenticate explicitly. The command opens a browser; do not
 share the temporary login URL if it is printed in the terminal:
 
 ```sh
-cloudflared access login https://k8s-dev.tociva.com
+export KUBERNETES_ACCESS_HOSTNAME=k8s-tociva-dev.tociva.com
+cloudflared access login "https://${KUBERNETES_ACCESS_HOSTNAME}"
 ```
 
 After authentication succeeds, start the local TCP proxy and leave it running:
 
 ```sh
 cloudflared access tcp \
-  --hostname k8s-dev.tociva.com \
+  --hostname "${KUBERNETES_ACCESS_HOSTNAME}" \
   --url 127.0.0.1:6443
 ```
 
@@ -152,9 +154,9 @@ A successful `nc` check proves only that the local proxy is listening. If
 with `Ctrl-C`, authenticate again, and restart one proxy with diagnostics:
 
 ```sh
-cloudflared access login https://k8s-dev.tociva.com
+cloudflared access login "https://${KUBERNETES_ACCESS_HOSTNAME}"
 cloudflared access tcp \
-  --hostname k8s-dev.tociva.com \
+  --hostname "${KUBERNETES_ACCESS_HOSTNAME}" \
   --url 127.0.0.1:6443 \
   --loglevel debug \
   --logfile "${TMPDIR:-/tmp}/tociva-k8s-access.log"
@@ -171,7 +173,8 @@ tail -n 100 "${TMPDIR:-/tmp}/tociva-k8s-access.log"
 ```
 
 If TLS still does not complete, inspect the Cloudflare Access policy, the
-shared connector's health, and the `k8s-dev.tociva.com` route to K3s. The
+shared connector's health, and the `${KUBERNETES_ACCESS_HOSTNAME}` route to
+K3s. The
 Billmesh namespace does not need to exist for `/version` to succeed.
 
 ### 3. Provision AWS with Terraform
@@ -272,7 +275,8 @@ The ignored `tmp/development.env` file is the local source of truth for
 Terraform outputs and the restricted kubeconfig exist:
 
 ```sh
-./tools/api/ci/bootstrap-development-config.sh
+KUBERNETES_ACCESS_HOSTNAME=k8s-tociva-dev.tociva.com \
+  ./tools/api/ci/bootstrap-development-config.sh
 ```
 
 The script fills AWS outputs, fixed Billmesh development values, and

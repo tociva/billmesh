@@ -15,10 +15,14 @@ local_env_file=$repo_root/.env
 env_file=${1:-$repo_root/tmp/development.env}
 tfvars_file=${2:-$terraform_dir/terraform.tfvars}
 kubeconfig_file=${3:-${HOME:?HOME is required}/.kube/restricted-billmesh-kubeconfig.yaml}
+kubernetes_access_hostname=${KUBERNETES_ACCESS_HOSTNAME:-k8s-tociva-dev.tociva.com}
 
 for command in awk base64 cp gh grep jq mkdir mktemp mv sort terraform tr; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
+
+printf '%s' "$kubernetes_access_hostname" | grep -Eq '^[A-Za-z0-9.-]+$' ||
+  fail 'KUBERNETES_ACCESS_HOSTNAME is invalid'
 
 gh auth status -h github.com >/dev/null 2>&1 ||
   fail 'GitHub CLI is not authenticated; run: gh auth login -h github.com'
@@ -131,7 +135,7 @@ terraform fmt "$tfvars_file" >/dev/null
 
 set_env_value KUBE_NAMESPACE billmesh-development
 set_env_value API_HOSTNAME api-dev.billme.sh
-set_env_value KUBERNETES_ACCESS_HOSTNAME k8s-dev.tociva.com
+set_env_value KUBERNETES_ACCESS_HOSTNAME "$kubernetes_access_hostname"
 set_env_value ECR_REPOSITORY billmesh/api
 set_env_value DELEGATION_ISSUER https://auth-dev.idnest.cloud/auth/v1/delegation
 set_env_value DELEGATION_DISCOVERY_URL https://auth-dev.idnest.cloud/.well-known/idnest-delegation-configuration
