@@ -2167,6 +2167,16 @@ Preserve gateway transaction references for auditing.
 
 All E2E payment cases should use a fake Razorpay HTTP service and realistic signed webhook payloads.
 
+Razorpay fixture and harness coverage maps to the existing cases as follows:
+
+- order request validation, provider failures, lost responses, and recovery:
+  `PAY-001`, `PAY-002`, `PAY-012`, `PAY-013`, `PAY-020`, and `PAY-026`;
+- authentic raw-body signatures, event headers, malformed payloads, replay, and
+  ordering: `PAY-005`, `PAY-006`, `PAY-007`, `PAY-010`, and `PAY-011`;
+- capture isolation and financial validation: `PAY-008`, `PAY-009`, `PAY-014`,
+  `PAY-015`, `PAY-021`, `PAY-022`, `PAY-024`, and `PAY-027`; and
+- refunds and late capture: `PAY-016`, `PAY-017`, `PAY-023`, and `PAY-025`.
+
 ## 11. Billing Records & Invoices
 
 |

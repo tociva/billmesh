@@ -1300,9 +1300,15 @@ components:
         application/json:
           schema:
             type: object
-            required: [status]
+            required: [status, capabilities]
             properties:
               status: { type: string, const: ready }
+              capabilities:
+                type: object
+                additionalProperties: false
+                required: [razorpay_checkout]
+                properties:
+                  razorpay_checkout: { type: string, enum: [enabled, disabled] }
     Error:
       description: Request failed. The HTTP status communicates the failure category.
       headers:

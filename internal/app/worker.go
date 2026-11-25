@@ -12,14 +12,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/tociva/billmesh/internal/config"
 	"github.com/tociva/billmesh/internal/products"
 	"github.com/tociva/billmesh/internal/wallets"
 )
@@ -41,9 +40,13 @@ func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, 
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Worker{pool: pool, client: client, interval: interval, log: log,
-		providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"),
-		providerKey:     strings.TrimSpace(os.Getenv("RAZORPAY_KEY_ID")), providerSecret: strings.TrimSpace(os.Getenv("RAZORPAY_KEY_SECRET"))}
+	return &Worker{pool: pool, client: client, interval: interval, log: log}
+}
+
+func (w *Worker) ConfigureRazorpay(provider config.RazorpayConfig) {
+	w.providerBaseURL = provider.BaseURL
+	w.providerKey = provider.KeyID
+	w.providerSecret = provider.KeySecret
 }
 func (w *Worker) Run(ctx context.Context) error {
 	ticker := time.NewTicker(w.interval)

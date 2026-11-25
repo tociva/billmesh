@@ -24,6 +24,7 @@ type Config struct {
 	AuthFailuresPerMinute            int
 	MutationRatePerSecond            int
 	MutationBurst                    int
+	Razorpay                         RazorpayConfig
 	BFF                              BrowserAuthConfig
 }
 
@@ -90,6 +91,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if c.MutationBurst, err = positiveInt("MUTATION_BURST", 50); err != nil {
+		return Config{}, err
+	}
+	if c.Razorpay, err = loadRazorpay(); err != nil {
 		return Config{}, err
 	}
 	if c.BFF, err = loadBrowserAuth(); err != nil {

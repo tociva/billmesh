@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 
 	apidocs "github.com/tociva/billmesh/api"
 	"github.com/tociva/billmesh/internal/auth"
+	"github.com/tociva/billmesh/internal/config"
 	"github.com/tociva/billmesh/internal/httpresponse"
 	"github.com/tociva/billmesh/internal/products"
 	"github.com/tociva/billmesh/internal/wallets"
@@ -65,9 +65,17 @@ func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *
 	if log == nil {
 		log = slog.Default()
 	}
-	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, providerBaseURL: strings.TrimRight(os.Getenv("RAZORPAY_BASE_URL"), "/"), providerPublicKey: strings.TrimSpace(os.Getenv("RAZORPAY_KEY_ID")), providerSecret: strings.TrimSpace(os.Getenv("RAZORPAY_KEY_SECRET")), providerCheckoutURL: strings.TrimRight(os.Getenv("RAZORPAY_CHECKOUT_URL"), "/"), webhookSecret: os.Getenv("RAZORPAY_WEBHOOK_SECRET"), sseActive: make(map[uuid.UUID]int)}
+	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, sseActive: make(map[uuid.UUID]int)}
 	a.ConfigureRequestLimits(30, 10, 50)
 	return a
+}
+
+func (a *API) ConfigureRazorpay(provider config.RazorpayConfig) {
+	a.providerBaseURL = provider.BaseURL
+	a.providerPublicKey = provider.KeyID
+	a.providerSecret = provider.KeySecret
+	a.providerCheckoutURL = provider.CheckoutURL
+	a.webhookSecret = provider.WebhookSecret
 }
 
 func (a *API) ConfigureBrowserAuth(browser browserAuth) {
@@ -181,7 +189,18 @@ func (a *API) ready(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, a.readinessPayload())
+}
+
+func (a *API) readinessPayload() map[string]any {
+	paymentCapability := "disabled"
+	if a.paymentProviderConfigured() && a.webhookSecret != "" {
+		paymentCapability = "enabled"
+	}
+	return map[string]any{
+		"status":       "ready",
+		"capabilities": map[string]string{"razorpay_checkout": paymentCapability},
+	}
 }
 
 func (a *API) createAccount(w http.ResponseWriter, r *http.Request) {

@@ -9,9 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,18 +26,53 @@ import (
 )
 
 type server struct {
-	key           *rsa.PrivateKey
-	kid           string
-	delegationKey *ecdsa.PrivateKey
-	delegationKid string
-	mu            sync.Mutex
-	webhooks      []map[string]any
-	failureCode   int
-	receiverDelay time.Duration
-	ssrfHits      int
-	orderCalls    int
-	oauthCodes    map[string]oauthGrant
-	refreshTokens map[string]oauthGrant
+	key                  *rsa.PrivateKey
+	kid                  string
+	delegationKey        *ecdsa.PrivateKey
+	delegationKid        string
+	mu                   sync.Mutex
+	webhooks             []map[string]any
+	failureCode          int
+	receiverDelay        time.Duration
+	ssrfHits             int
+	orderCalls           int
+	razorpayOrders       map[string]fakeRazorpayOrder
+	razorpayOrderReceipt map[string]string
+	razorpayPayments     map[string][]fakeRazorpayPayment
+	razorpayBehavior     fakeRazorpayBehavior
+	oauthCodes           map[string]oauthGrant
+	refreshTokens        map[string]oauthGrant
+}
+
+type fakeRazorpayOrder struct {
+	ID         string            `json:"id,omitempty"`
+	Entity     string            `json:"entity"`
+	Amount     int64             `json:"amount"`
+	AmountPaid int64             `json:"amount_paid"`
+	AmountDue  int64             `json:"amount_due"`
+	Currency   string            `json:"currency"`
+	Receipt    string            `json:"receipt"`
+	Status     string            `json:"status"`
+	Attempts   int               `json:"attempts"`
+	Notes      map[string]string `json:"notes"`
+	CreatedAt  int64             `json:"created_at"`
+}
+
+type fakeRazorpayPayment struct {
+	ID       string `json:"id"`
+	Entity   string `json:"entity"`
+	OrderID  string `json:"order_id"`
+	Status   string `json:"status"`
+	Amount   int64  `json:"amount"`
+	Currency string `json:"currency"`
+}
+
+type fakeRazorpayBehavior struct {
+	Status          int  `json:"status"`
+	DelayMS         int  `json:"delay_ms"`
+	MalformedJSON   bool `json:"malformed_json"`
+	MissingOrderID  bool `json:"missing_order_id"`
+	DropAfterCommit bool `json:"drop_after_commit"`
 }
 
 type oauthGrant struct {
@@ -51,7 +88,38 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &server{key: key, kid: "billmesh-test-key", delegationKey: delegationKey, delegationKid: "billmesh-delegation-test-key", oauthCodes: make(map[string]oauthGrant), refreshTokens: make(map[string]oauthGrant)}
+	s := newFakeServerState()
+	s.key = key
+	s.kid = "billmesh-test-key"
+	s.delegationKey = delegationKey
+	s.delegationKid = "billmesh-delegation-test-key"
+	handler := newHandler(s)
+	addr := os.Getenv("HTTP_ADDR")
+	if addr == "" {
+		addr = ":8090"
+	}
+	certFile := os.Getenv("TLS_CERT_FILE")
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	if certFile != "" || keyFile != "" {
+		if certFile == "" || keyFile == "" {
+			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must be configured together")
+		}
+		log.Printf("fake external services listening with TLS on %s", addr)
+		log.Fatal(http.ListenAndServeTLS(addr, certFile, keyFile, handler))
+	}
+	log.Printf("fake external services listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+func newFakeServerState() *server {
+	return &server{
+		oauthCodes: make(map[string]oauthGrant), refreshTokens: make(map[string]oauthGrant),
+		razorpayOrders: make(map[string]fakeRazorpayOrder), razorpayOrderReceipt: make(map[string]string),
+		razorpayPayments: make(map[string][]fakeRazorpayPayment),
+	}
+}
+
+func newHandler(s *server) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.jwks)
@@ -67,27 +135,16 @@ func main() {
 	mux.HandleFunc("GET /v1/orders/{id}/payments", s.orderPayments)
 	mux.HandleFunc("GET /test/order-count", s.orderCount)
 	mux.HandleFunc("GET /v1/payments/{id}", s.payment)
+	mux.HandleFunc("GET /test/razorpay/orders", s.listRazorpayOrders)
+	mux.HandleFunc("POST /test/razorpay/payments", s.addRazorpayPayment)
+	mux.HandleFunc("POST /test/razorpay/behavior", s.setRazorpayBehavior)
 	mux.HandleFunc("POST /receivers/{app}", s.receiver)
 	mux.HandleFunc("GET /test/webhooks", s.listWebhooks)
 	mux.HandleFunc("POST /test/failure", s.setFailure)
 	mux.HandleFunc("POST /test/receiver-delay", s.setReceiverDelay)
 	mux.HandleFunc("POST /test/ssrf-hit", s.ssrfHit)
 	mux.HandleFunc("GET /test/ssrf-hits", s.listSSRFHits)
-	addr := os.Getenv("HTTP_ADDR")
-	if addr == "" {
-		addr = ":8090"
-	}
-	certFile := os.Getenv("TLS_CERT_FILE")
-	keyFile := os.Getenv("TLS_KEY_FILE")
-	if certFile != "" || keyFile != "" {
-		if certFile == "" || keyFile == "" {
-			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must be configured together")
-		}
-		log.Printf("fake external services listening with TLS on %s", addr)
-		log.Fatal(http.ListenAndServeTLS(addr, certFile, keyFile, mux))
-	}
-	log.Printf("fake external services listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	return mux
 }
 
 var mockIssuer = value("MOCK_ISSUER", "http://mock-external:8090")
@@ -460,23 +517,93 @@ func (s *server) rotateKey(w http.ResponseWriter, _ *http.Request) {
 	write(w, map[string]string{"kid": kid})
 }
 func (s *server) order(w http.ResponseWriter, r *http.Request) {
+	if !validRazorpayAuth(r) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="razorpay-test"`)
+		http.Error(w, "invalid Razorpay credentials", http.StatusUnauthorized)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	var request struct {
+		Amount   int64             `json:"amount"`
+		Currency string            `json:"currency"`
+		Receipt  string            `json:"receipt"`
+		Notes    map[string]string `json:"notes"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid order JSON", http.StatusBadRequest)
+		return
+	}
+	if request.Amount <= 0 {
+		http.Error(w, "amount must be positive", http.StatusBadRequest)
+		return
+	}
+	if len(request.Currency) != 3 || strings.ToUpper(request.Currency) != request.Currency {
+		http.Error(w, "currency must be a three-letter uppercase code", http.StatusBadRequest)
+		return
+	}
+	if !validRazorpayReceipt(request.Receipt) {
+		http.Error(w, "receipt must be 1-40 printable ASCII characters", http.StatusBadRequest)
+		return
+	}
+
 	s.mu.Lock()
 	s.orderCalls++
 	failureCode := s.failureCode
+	behavior := s.razorpayBehavior
 	s.mu.Unlock()
 	if failureCode != 0 {
 		http.Error(w, "configured failure", failureCode)
 		return
 	}
-	var request struct {
-		Amount   int64  `json:"amount"`
-		Currency string `json:"currency"`
+	if behavior.DelayMS > 0 {
+		time.Sleep(time.Duration(behavior.DelayMS) * time.Millisecond)
 	}
-	_ = json.NewDecoder(r.Body).Decode(&request)
-	if request.Currency == "" {
-		request.Currency = "INR"
+	if behavior.Status != 0 {
+		http.Error(w, "configured Razorpay failure", behavior.Status)
+		return
 	}
-	write(w, map[string]any{"id": "order_" + time.Now().UTC().Format("20060102150405.000000000"), "status": "created", "currency": request.Currency, "amount": request.Amount})
+
+	s.mu.Lock()
+	if _, duplicate := s.razorpayOrderReceipt[request.Receipt]; duplicate {
+		s.mu.Unlock()
+		http.Error(w, "duplicate receipt", http.StatusBadRequest)
+		return
+	}
+	order := fakeRazorpayOrder{
+		ID: fmt.Sprintf("order_billmesh_test_%06d", len(s.razorpayOrders)+1), Entity: "order",
+		Amount: request.Amount, AmountDue: request.Amount, Currency: request.Currency,
+		Receipt: request.Receipt, Status: "created", Notes: request.Notes, CreatedAt: time.Now().UTC().Unix(),
+	}
+	s.razorpayOrders[order.ID] = order
+	s.razorpayOrderReceipt[order.Receipt] = order.ID
+	s.mu.Unlock()
+
+	if behavior.DropAfterCommit {
+		if hijacker, ok := w.(http.Hijacker); ok {
+			connection, _, err := hijacker.Hijack()
+			if err == nil {
+				_ = connection.Close()
+				return
+			}
+		}
+		http.Error(w, "configured connection drop unsupported", http.StatusInternalServerError)
+		return
+	}
+	if behavior.MalformedJSON {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":`)
+		return
+	}
+	if behavior.MissingOrderID {
+		order.ID = ""
+	}
+	write(w, order)
 }
 func (s *server) orderCount(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
@@ -484,11 +611,131 @@ func (s *server) orderCount(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Unlock()
 	write(w, map[string]any{"count": count})
 }
-func (s *server) orderPayments(w http.ResponseWriter, _ *http.Request) {
-	write(w, map[string]any{"entity": "collection", "count": 0, "items": []any{}})
+func (s *server) orderPayments(w http.ResponseWriter, r *http.Request) {
+	if !validRazorpayAuth(r) {
+		http.Error(w, "invalid Razorpay credentials", http.StatusUnauthorized)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	orderID := r.PathValue("id")
+	if _, exists := s.razorpayOrders[orderID]; !exists {
+		http.Error(w, "order not found", http.StatusNotFound)
+		return
+	}
+	items := append([]fakeRazorpayPayment(nil), s.razorpayPayments[orderID]...)
+	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
 }
 func (s *server) payment(w http.ResponseWriter, r *http.Request) {
-	write(w, map[string]any{"id": r.PathValue("id"), "order_id": "order_test_001", "status": "captured", "currency": "INR", "amount": 50000})
+	if !validRazorpayAuth(r) {
+		http.Error(w, "invalid Razorpay credentials", http.StatusUnauthorized)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, payments := range s.razorpayPayments {
+		for _, payment := range payments {
+			if payment.ID == r.PathValue("id") {
+				write(w, payment)
+				return
+			}
+		}
+	}
+	http.Error(w, "payment not found", http.StatusNotFound)
+}
+
+func (s *server) listRazorpayOrders(w http.ResponseWriter, r *http.Request) {
+	if !validRazorpayAuth(r) {
+		http.Error(w, "invalid Razorpay credentials", http.StatusUnauthorized)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]fakeRazorpayOrder, 0, len(s.razorpayOrders))
+	if receipt := r.URL.Query().Get("receipt"); receipt != "" {
+		if orderID := s.razorpayOrderReceipt[receipt]; orderID != "" {
+			items = append(items, s.razorpayOrders[orderID])
+		}
+	} else {
+		for _, order := range s.razorpayOrders {
+			items = append(items, order)
+		}
+	}
+	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
+}
+
+func (s *server) addRazorpayPayment(w http.ResponseWriter, r *http.Request) {
+	var payment fakeRazorpayPayment
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&payment); err != nil {
+		http.Error(w, "invalid payment JSON", http.StatusBadRequest)
+		return
+	}
+	if payment.ID == "" || payment.OrderID == "" || payment.Amount <= 0 || len(payment.Currency) != 3 {
+		http.Error(w, "payment fields are required", http.StatusBadRequest)
+		return
+	}
+	if payment.Status != "created" && payment.Status != "authorized" && payment.Status != "captured" && payment.Status != "failed" {
+		http.Error(w, "invalid payment status", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	order, exists := s.razorpayOrders[payment.OrderID]
+	if !exists {
+		http.Error(w, "order not found", http.StatusNotFound)
+		return
+	}
+	if payment.Entity == "" {
+		payment.Entity = "payment"
+	}
+	s.razorpayPayments[payment.OrderID] = append(s.razorpayPayments[payment.OrderID], payment)
+	order.Attempts++
+	if payment.Status == "captured" {
+		order.AmountPaid = payment.Amount
+		order.AmountDue = order.Amount - payment.Amount
+		order.Status = "paid"
+	} else if order.Status == "created" {
+		order.Status = "attempted"
+	}
+	s.razorpayOrders[order.ID] = order
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) setRazorpayBehavior(w http.ResponseWriter, r *http.Request) {
+	var behavior fakeRazorpayBehavior
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&behavior); err != nil {
+		http.Error(w, "invalid behavior JSON", http.StatusBadRequest)
+		return
+	}
+	if behavior.Status != 0 && (behavior.Status < 400 || behavior.Status > 599) {
+		http.Error(w, "status must be zero or an error status", http.StatusBadRequest)
+		return
+	}
+	if behavior.DelayMS < 0 || behavior.DelayMS > 10_000 {
+		http.Error(w, "delay_ms must be between 0 and 10000", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.razorpayBehavior = behavior
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func validRazorpayAuth(r *http.Request) bool {
+	keyID, keySecret, ok := r.BasicAuth()
+	return ok && keyID == "rzp_test_billmesh" && keySecret == "test-provider-secret"
+}
+
+func validRazorpayReceipt(receipt string) bool {
+	if len(receipt) == 0 || len(receipt) > 40 {
+		return false
+	}
+	for _, value := range []byte(receipt) {
+		if value < 0x20 || value > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 func (s *server) receiver(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()

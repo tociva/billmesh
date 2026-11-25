@@ -87,6 +87,7 @@ func run() error {
 		})
 		verifier := auth.NewDelegationVerifier(cfg.DelegationIssuer, cfg.DelegationAudience, cfg.DelegationDiscoveryURL, profiles, nil)
 		api := app.NewAPI(pool, verifier, nil)
+		api.ConfigureRazorpay(cfg.Razorpay)
 		managers := make([]*bff.Manager, 0, len(cfg.BFF.Realms))
 		for _, realm := range cfg.BFF.Realms {
 			browserVerifier := auth.NewJWKSVerifier(realm.Issuer, realm.Audience, nil)
@@ -119,7 +120,9 @@ func run() error {
 		}
 		return err
 	case "worker":
-		return app.NewWorker(pool, nil, cfg.WorkerInterval, nil).Run(ctx)
+		worker := app.NewWorker(pool, nil, cfg.WorkerInterval, nil)
+		worker.ConfigureRazorpay(cfg.Razorpay)
+		return worker.Run(ctx)
 	default:
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}

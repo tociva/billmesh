@@ -1,0 +1,31 @@
+{
+  "entity": "event",
+  "account_id": "acc_billmesh_test",
+  "event": "order.paid",
+  "contains": ["payment", "order"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_billmesh_test_001",
+        "entity": "payment",
+        "amount": 50000,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_billmesh_test_001"
+      }
+    },
+    "order": {
+      "entity": {
+        "id": "order_billmesh_test_001",
+        "entity": "order",
+        "amount": 50000,
+        "amount_paid": 50000,
+        "amount_due": 0,
+        "currency": "INR",
+        "receipt": "bm_01JTESTPAYMENT000000000000001",
+        "status": "paid"
+      }
+    }
+  },
+  "created_at": 1700000002
+}

@@ -23,6 +23,7 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 | [Webhook contract](docs/webhook-contract.md) | Integration engineers | Version 2 signing, delivery semantics, retries, rotation, and receiver requirements |
 | [API error codes](docs/api-error-codes.md) | API consumers | Stable machine-readable errors and expected HTTP statuses |
 | [Development deployment runbook](docs/deployment.md) | Release engineers and operators | AWS/ECR setup, Kubernetes access, GitHub environments, build, deployment, and rollback |
+| [Razorpay operations](docs/razorpay-operations.md) | Payment and operations engineers | Environment isolation, credential handling, rotation, readiness, and reconciliation |
 | [Deployment helper reference](tools/api/ci/README.md) | Release engineers | Purpose of the environment, scan, smoke-test, and Helm validation scripts |
 | [Backend test-case manifest](tests/testdata/test-cases.md) | Contributors and reviewers | Unit, integration, E2E, performance, and business-journey coverage |
 

@@ -1,0 +1,19 @@
+{
+  "entity": "event",
+  "account_id": "acc_billmesh_test",
+  "event": "payment.captured",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_billmesh_test_001",
+        "entity": "payment",
+        "amount": 50000,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_billmesh_test_001"
+      }
+    }
+  },
+  "created_at": 1700000000
+}
