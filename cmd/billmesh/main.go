@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -106,6 +107,9 @@ func run() error {
 		}
 		api.ConfigureBrowserAuth(browser)
 		api.ConfigureRequestLimits(cfg.AuthFailuresPerMinute, cfg.MutationRatePerSecond, cfg.MutationBurst)
+		if _, err := startMetricsServer(ctx, cfg.MetricsAddr, api.MetricsHandler()); err != nil {
+			return err
+		}
 		server := newAPIServer(cfg.HTTPAddr, api.Handler())
 		go func() {
 			<-ctx.Done()
@@ -122,10 +126,38 @@ func run() error {
 	case "worker":
 		worker := app.NewWorker(pool, nil, cfg.WorkerInterval, nil)
 		worker.ConfigureRazorpay(cfg.Razorpay)
+		worker.ConfigureOperationalRetention(cfg.RazorpayRawPayloadRetention)
+		if _, err := startMetricsServer(ctx, cfg.MetricsAddr, worker.MetricsHandler()); err != nil {
+			return err
+		}
 		return worker.Run(ctx)
 	default:
 		return fmt.Errorf("unknown command %q", os.Args[1])
 	}
+}
+
+func startMetricsServer(ctx context.Context, addr string, handler http.Handler) (*http.Server, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen for metrics: %w", err)
+	}
+	server := &http.Server{
+		Addr: addr, Handler: handler, ReadHeaderTimeout: 3 * time.Second,
+		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second,
+		MaxHeaderBytes: 8 << 10,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownContext)
+	}()
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			slog.Error("metrics server stopped", "error", serveErr)
+		}
+	}()
+	return server, nil
 }
 
 func loadEnvironment(filenames ...string) error {

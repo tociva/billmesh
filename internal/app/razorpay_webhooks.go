@@ -95,8 +95,18 @@ type normalizedRazorpayEvent struct {
 }
 
 func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	outcome := "processing_failure"
+	if a.metrics != nil {
+		a.metrics.webhook("received")
+		defer func() {
+			a.metrics.webhook(outcome)
+			a.metrics.webhookAcknowledgement(outcome, time.Since(started))
+		}()
+	}
 	release, admitted := a.admitWebhook(w, r)
 	if !admitted {
+		outcome = "rate_limited"
 		return
 	}
 	defer release()
@@ -117,6 +127,7 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusUnauthorized, "invalid webhook signature")
 		}
+		outcome = "signature_failure"
 		return
 	}
 
@@ -136,8 +147,15 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	if !verifyRazorpayWebhookSignature(raw, signature, a.webhookSecret, a.webhookPreviousSecret, a.webhookPreviousSecretExpiresAt, time.Now().UTC()) {
 		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
+		outcome = "signature_failure"
 		return
 	}
+	processingStarted := time.Now()
+	defer func() {
+		if a.metrics != nil {
+			a.metrics.webhookProcessing(outcome, time.Since(processingStarted))
+		}
+	}()
 
 	event, err := parseRazorpayWebhook(eventID, raw, a.providerAccountID)
 	if err != nil {
@@ -150,12 +168,16 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := a.persistAndApplyRazorpayEvent(r.Context(), event, raw); err != nil {
+	duplicate, err := a.persistAndApplyRazorpayEvent(r.Context(), event, raw, w.Header().Get("X-Request-ID"))
+	if err != nil {
 		if errors.Is(err, errConflictingProviderEvent) {
 			writeError(w, http.StatusConflict, "conflicting provider event")
 			return
 		}
 		if errors.Is(err, errRefundMismatch) {
+			if a.metrics != nil {
+				a.metrics.paymentLifecycle("mismatched")
+			}
 			if issueErr := a.recordRefundMismatch(r.Context(), event); issueErr != nil {
 				a.log.Error("failed to record refund reconciliation issue", "event_id", event.ID, "refund_id", event.RefundID, "error", issueErr)
 			}
@@ -164,6 +186,25 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		writeDBError(w, err)
 		return
+	}
+	if duplicate {
+		outcome = "duplicate"
+	} else {
+		outcome = "success"
+		switch event.Type {
+		case "payment.captured", "order.paid":
+			if a.metrics != nil {
+				a.metrics.paymentLifecycle("captured")
+			}
+		case "payment.failed":
+			if a.metrics != nil {
+				a.metrics.paymentLifecycle("failed")
+			}
+		case "refund.processed":
+			if a.metrics != nil {
+				a.metrics.paymentLifecycle("refunded")
+			}
+		}
 	}
 	a.logRazorpayWebhook(w.Header().Get("X-Request-ID"), event)
 	writeNoContent(w)
@@ -329,17 +370,42 @@ func (a *API) validateRazorpayEvent(ctx context.Context, event normalizedRazorpa
 	return nil
 }
 
-func (a *API) persistAndApplyRazorpayEvent(ctx context.Context, event normalizedRazorpayEvent, raw []byte) error {
+func (a *API) persistAndApplyRazorpayEvent(ctx context.Context, event normalizedRazorpayEvent, raw []byte, requestID string) (bool, error) {
 	digest := fmt.Sprintf("%x", sha256.Sum256(raw))
-	return pgx.BeginFunc(ctx, a.pool, func(tx pgx.Tx) error {
+	duplicate := false
+	err := pgx.BeginFunc(ctx, a.pool, func(tx pgx.Tx) error {
+		if event.Type == "refund.processed" && event.RefundID != "" {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "razorpay-refund:"+event.RefundID); err != nil {
+				return err
+			}
+		}
 		var inserted uuid.UUID
-		err := tx.QueryRow(ctx, `INSERT INTO provider_events(provider,provider_event_id,event_type,payload,raw_payload,payload_sha256,provider_account_id)
-			VALUES('razorpay',$1,$2,$3::jsonb,$4,$5,$6)
-			ON CONFLICT(provider,provider_event_id) DO NOTHING RETURNING id`, event.ID, event.Type, string(raw), raw, digest, event.AccountID).Scan(&inserted)
+		var billmeshPaymentID *uuid.UUID
+		if event.OrderID != "" {
+			var paymentID uuid.UUID
+			if lookupErr := tx.QueryRow(ctx, `SELECT id FROM payments WHERE provider='razorpay' AND provider_order_id=$1 AND provider_environment=$2`, event.OrderID, a.providerEnvironment).Scan(&paymentID); lookupErr == nil {
+				billmeshPaymentID = &paymentID
+			} else if !errors.Is(lookupErr, pgx.ErrNoRows) {
+				return lookupErr
+			}
+		} else if event.PaymentID != "" {
+			var paymentID uuid.UUID
+			if lookupErr := tx.QueryRow(ctx, `SELECT id FROM payments WHERE provider='razorpay' AND provider_payment_id=$1`, event.PaymentID).Scan(&paymentID); lookupErr == nil {
+				billmeshPaymentID = &paymentID
+			} else if !errors.Is(lookupErr, pgx.ErrNoRows) {
+				return lookupErr
+			}
+		}
+		err := tx.QueryRow(ctx, `INSERT INTO provider_events(provider,provider_event_id,event_type,payload,raw_payload,payload_sha256,provider_account_id,
+			billmesh_payment_id,request_id,provider_order_id,provider_payment_id,provider_refund_id)
+			VALUES('razorpay',$1,$2,$3::jsonb,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''),NULLIF($10,''),NULLIF($11,''))
+			ON CONFLICT(provider,provider_event_id) DO NOTHING RETURNING id`, event.ID, event.Type, string(raw), raw, digest, event.AccountID,
+			billmeshPaymentID, requestID, event.OrderID, event.PaymentID, event.RefundID).Scan(&inserted)
 		if errors.Is(err, pgx.ErrNoRows) {
+			duplicate = true
 			var identical bool
-			if err := tx.QueryRow(ctx, `SELECT raw_payload=$2 AND event_type=$3 AND provider_account_id=$4
-				FROM provider_events WHERE provider='razorpay' AND provider_event_id=$1`, event.ID, raw, event.Type, event.AccountID).Scan(&identical); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(payload_sha256=$2,raw_payload=$3,false) AND event_type=$4 AND COALESCE(provider_account_id=$5,true)
+				FROM provider_events WHERE provider='razorpay' AND provider_event_id=$1`, event.ID, digest, raw, event.Type, event.AccountID).Scan(&identical); err != nil {
 				return err
 			}
 			if !identical {
@@ -373,6 +439,7 @@ func (a *API) persistAndApplyRazorpayEvent(ctx context.Context, event normalized
 		}
 		return err
 	})
+	return duplicate, err
 }
 
 func (a *API) recordRefundMismatch(ctx context.Context, event normalizedRazorpayEvent) error {

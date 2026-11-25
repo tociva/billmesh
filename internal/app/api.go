@@ -49,6 +49,7 @@ type API struct {
 	mutations                      *keyedBuckets
 	webhookRequests                *keyedBuckets
 	webhookSlots                   chan struct{}
+	metrics                        *paymentMetrics
 	browser                        browserAuth
 }
 
@@ -71,11 +72,13 @@ func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *
 	if log == nil {
 		log = slog.Default()
 	}
-	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: newProviderHTTPClient(), sseActive: make(map[uuid.UUID]int)}
+	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: newProviderHTTPClient(), sseActive: make(map[uuid.UUID]int), metrics: newPaymentMetrics()}
 	a.ConfigureRequestLimits(30, 10, 50)
 	a.ConfigureWebhookLimits(50, 200, 64)
 	return a
 }
+
+func (a *API) MetricsHandler() http.Handler { return a.metrics.handler() }
 
 func (a *API) ConfigureRazorpay(provider config.RazorpayConfig) {
 	a.providerBaseURL = provider.BaseURL
@@ -172,6 +175,7 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", a.requireAdmin("webhook.replay", "webhook_delivery", a.replayWebhook))
 	protected.HandleFunc("GET /v1/admin/reconciliation/issues", a.requireAdmin("reconciliation.issue.list", "reconciliation_issue", a.listReconciliationIssues))
 	protected.HandleFunc("POST /v1/admin/reconciliation/issues/{id}/actions", a.requireAdmin("reconciliation.issue.action", "reconciliation_issue", a.actOnReconciliationIssue))
+	protected.HandleFunc("GET /v1/admin/payments/lookup", a.requireAdmin("payment.support.lookup", "payment", a.lookupPaymentSupport))
 	protected.HandleFunc("GET /v1/events", auth.RequireClient(billingClients, true, a.events))
 	protectedAPI := httpresponse.JSONFallbacks(protected)
 	if a.auth != nil {

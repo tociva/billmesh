@@ -12,18 +12,28 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("HTTP_ADDR", "")
+	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("WORKER_INTERVAL", "250ms")
 	t.Setenv("DELEGATION_PROFILE_REFRESH_INTERVAL", "")
 	t.Setenv("DELEGATION_PROFILE_MAX_STALENESS", "")
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, ":8080", cfg.HTTPAddr)
+	require.Equal(t, ":9090", cfg.MetricsAddr)
 	require.Equal(t, 250*time.Millisecond, cfg.WorkerInterval)
 	require.Equal(t, 30, cfg.AuthFailuresPerMinute)
 	require.Equal(t, 10, cfg.MutationRatePerSecond)
 	require.Equal(t, 50, cfg.MutationBurst)
 	require.Equal(t, 10*time.Second, cfg.DelegationProfileRefreshInterval)
 	require.Equal(t, time.Minute, cfg.DelegationProfileMaxStaleness)
+	require.Equal(t, 30*24*time.Hour, cfg.RazorpayRawPayloadRetention)
+}
+
+func TestLoadRejectsInvalidRazorpayRawPayloadRetention(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("RAZORPAY_RAW_PAYLOAD_RETENTION", "0s")
+	_, err := Load()
+	require.ErrorContains(t, err, "RAZORPAY_RAW_PAYLOAD_RETENTION")
 }
 
 func TestLoadRejectsInvalidRequestLimits(t *testing.T) {

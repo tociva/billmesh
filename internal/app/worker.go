@@ -23,14 +23,18 @@ import (
 )
 
 type Worker struct {
-	pool                *pgxpool.Pool
-	client              *http.Client
-	interval            time.Duration
-	log                 *slog.Logger
-	providerBaseURL     string
-	providerKey         string
-	providerSecret      string
-	providerEnvironment string
+	pool                 *pgxpool.Pool
+	client               *http.Client
+	interval             time.Duration
+	log                  *slog.Logger
+	providerBaseURL      string
+	providerKey          string
+	providerSecret       string
+	providerEnvironment  string
+	metrics              *paymentMetrics
+	rawPayloadRetention  time.Duration
+	lastRetentionCleanup time.Time
+	lastMetricRefresh    time.Time
 }
 
 func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, log *slog.Logger) *Worker {
@@ -40,7 +44,13 @@ func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, 
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Worker{pool: pool, client: client, interval: interval, log: log}
+	return &Worker{pool: pool, client: client, interval: interval, log: log, metrics: newPaymentMetrics(), rawPayloadRetention: 30 * 24 * time.Hour}
+}
+
+func (w *Worker) MetricsHandler() http.Handler { return w.metrics.handler() }
+
+func (w *Worker) ConfigureOperationalRetention(rawPayloadRetention time.Duration) {
+	w.rawPayloadRetention = rawPayloadRetention
 }
 
 func (w *Worker) ConfigureRazorpay(provider config.RazorpayConfig) {
@@ -106,7 +116,7 @@ func (w *Worker) process(ctx context.Context) error {
 			return err
 		}
 	}
-	return pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
+	if err := pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT d.id,d.event_id,d.target_url,e.event_type,e.payload,d.attempts,COALESCE(ep.secret,''),
 			COALESCE(ep.previous_secret,''),ep.previous_secret_expires_at,COALESCE(ep.api_version,'1'),e.created_at,e.account_id,e.product_id,
 			e.billing_revision,e.aggregate_type,e.aggregate_id
@@ -218,7 +228,13 @@ func (w *Worker) process(ctx context.Context) error {
 		_, err = tx.Exec(ctx, `UPDATE outbox_events e SET published_at=COALESCE(published_at,now())
 			WHERE published_at IS NULL AND NOT EXISTS(SELECT 1 FROM webhook_deliveries d WHERE d.event_id=e.id)`)
 		return err
-	})
+	}); err != nil {
+		return err
+	}
+	if err := w.purgeExpiredRazorpayPayloads(ctx); err != nil {
+		return err
+	}
+	return w.refreshOperationalMetricsIfDue(ctx)
 }
 
 func (w *Worker) processSubscriptionTransitions(ctx context.Context) error {

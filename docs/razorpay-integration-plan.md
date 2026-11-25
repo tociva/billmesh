@@ -549,34 +549,55 @@ source-IP policy, and completed threat model are recorded in
 - [x] `gotestsum --format testname -- -v ./internal/app ./internal/database
   ./tests/fakeserver ./tests/testkit` — focused security, transport, database,
   fake-provider, and fixture tests passed on 2026-11-25.
-- [ ] `make test-e2e`
+- [x] `make test-e2e` — the complete end-to-end suite passed on 2026-11-25,
+  including webhook abuse controls, isolation, concurrency, and refund coverage.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
   ./...` — production build completed successfully on 2026-11-25; Go emitted
   only the known sandbox stat-cache warning.
 
 ## 12. Observability and operations
 
-- [ ] Add metrics for order-create attempts, successes, failures, latency, and
+- [x] Add metrics for order-create attempts, successes, failures, latency, and
   ambiguous outcomes.
-- [ ] Add metrics for webhook receipt, signature failure, duplicate, processing
+- [x] Add metrics for webhook receipt, signature failure, duplicate, processing
   failure, processing latency, and acknowledgement latency.
-- [ ] Add metrics for captured, failed, late-captured, refunded, unreconciled, and
+- [x] Add metrics for captured, failed, late-captured, refunded, unreconciled, and
   mismatched payments.
-- [ ] Add metrics for provider API latency, status classes, timeouts, and rate
+- [x] Add metrics for provider API latency, status classes, timeouts, and rate
   limits without high-cardinality customer labels.
-- [ ] Add dashboards for checkout health, webhook health, reconciliation backlog,
+- [x] Add dashboards for checkout health, webhook health, reconciliation backlog,
   fulfilment failures, refunds, and subscription transitions.
-- [ ] Add alerts for sustained provider failures, invalid-signature spikes,
+- [x] Add alerts for sustained provider failures, invalid-signature spikes,
   webhook processing failures, acknowledgement latency, reconciliation backlog,
   captured-but-unfulfilled payments, and ledger mismatches.
-- [ ] Add a runbook for webhook disablement, delayed delivery, key rotation,
+- [x] Add a runbook for webhook disablement, delayed delivery, key rotation,
   provider outage, ambiguous order creation, missed capture, duplicate charge,
   refund mismatch, and reconciliation failure.
-- [ ] Add a runbook for rotating API keys and webhook secrets without downtime.
-- [ ] Define retention and access controls for raw provider payloads and financial
+- [x] Add a runbook for rotating API keys and webhook secrets without downtime.
+- [x] Define retention and access controls for raw provider payloads and financial
   audit data.
-- [ ] Define support-safe lookup by Billmesh payment ID, provider order ID,
+- [x] Define support-safe lookup by Billmesh payment ID, provider order ID,
   provider payment ID, event ID, and request ID.
+
+Prometheus assets are in [`deploy/observability`](../deploy/observability), the
+incident procedures are in [`runbooks/razorpay-operations.md`](runbooks/razorpay-operations.md)
+and [`runbooks/razorpay-key-rotation.md`](runbooks/razorpay-key-rotation.md), and
+retention/access rules are in
+[`razorpay-data-governance.md`](razorpay-data-governance.md).
+
+### Verification evidence
+
+- [x] `gotestsum --format testname -- -v ./internal/app ./internal/config
+  ./internal/database ./cmd/billmesh ./tests/fakeserver ./tests/testkit` — focused
+  metrics, operational assets, configuration, database, provider, and fixture
+  tests passed on 2026-11-25.
+- [ ] `make test-e2e`
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
+  ./...` — production build completed successfully on 2026-11-25; Go emitted
+  only the known sandbox stat-cache warning.
+- [x] `jq empty deploy/observability/razorpay-dashboard.json` and `helm lint
+  deploy/charts/billmesh-api` — dashboard JSON and Helm chart validation passed
+  on 2026-11-25.
 
 ## 13. Razorpay Dashboard setup
 

@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	HTTPAddr                         string
+	MetricsAddr                      string
 	DatabaseURL                      string
 	DelegationIssuer                 string
 	DelegationAudience               string
@@ -24,6 +25,7 @@ type Config struct {
 	AuthFailuresPerMinute            int
 	MutationRatePerSecond            int
 	MutationBurst                    int
+	RazorpayRawPayloadRetention      time.Duration
 	Razorpay                         RazorpayConfig
 	BFF                              BrowserAuthConfig
 }
@@ -61,6 +63,7 @@ func Load() (Config, error) {
 	}
 	c := Config{
 		HTTPAddr:               value("HTTP_ADDR", ":8080"),
+		MetricsAddr:            value("METRICS_ADDR", ":9090"),
 		DatabaseURL:            databaseURL,
 		DelegationIssuer:       strings.TrimSpace(os.Getenv("DELEGATION_ISSUER")),
 		DelegationAudience:     strings.TrimSpace(os.Getenv("DELEGATION_AUDIENCE")),
@@ -91,6 +94,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if c.MutationBurst, err = positiveInt("MUTATION_BURST", 50); err != nil {
+		return Config{}, err
+	}
+	if c.RazorpayRawPayloadRetention, err = duration("RAZORPAY_RAW_PAYLOAD_RETENTION", 30*24*time.Hour); err != nil {
 		return Config{}, err
 	}
 	if c.Razorpay, err = loadRazorpay(); err != nil {

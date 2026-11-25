@@ -23,6 +23,15 @@ the tunnel namespace and pod labels. The complete webhook boundary, source-IP
 allowlisting decision, and threat model are in
 [`razorpay-security.md`](razorpay-security.md).
 
+The API and worker each expose Prometheus metrics on the separate cluster-only
+port configured by `metrics.port` (default `9090`). The API Service includes a
+named `metrics` port and the worker has a dedicated metrics Service. Do not route
+either metrics port through the public tunnel. When NetworkPolicy is enabled,
+only pods matching `metrics.scrapeNamespace` and `metrics.scrapePodLabels` may
+scrape it. Import `deploy/observability/razorpay-dashboard.json` and apply
+`deploy/observability/razorpay-alerts.yaml` after replacing runbook URLs with the
+deployment's documentation URL.
+
 ## Required infrastructure
 
 - An ARM64 Kubernetes node pool.

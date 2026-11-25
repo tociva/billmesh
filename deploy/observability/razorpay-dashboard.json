@@ -1,0 +1,76 @@
+{
+  "title": "Billmesh Razorpay Operations",
+  "uid": "billmesh-razorpay",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "tags": ["billmesh", "razorpay", "payments"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Checkout outcomes",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(billmesh_razorpay_order_create_total{outcome=~\"success|failure|ambiguous\"}[5m])) by (outcome)", "legendFormat": "{{outcome}}"}]
+    },
+    {
+      "id": 2,
+      "title": "Checkout p95 latency",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(billmesh_razorpay_order_create_duration_seconds_bucket[5m])) by (le, outcome))", "legendFormat": "{{outcome}}"}]
+    },
+    {
+      "id": 3,
+      "title": "Webhook health",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "sum(rate(billmesh_razorpay_webhook_requests_total[5m])) by (outcome)", "legendFormat": "{{outcome}}"}]
+    },
+    {
+      "id": 4,
+      "title": "Webhook acknowledgement p95",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(billmesh_razorpay_webhook_acknowledgement_duration_seconds_bucket[5m])) by (le, outcome))", "legendFormat": "{{outcome}}"}]
+    },
+    {
+      "id": 5,
+      "title": "Reconciliation backlog",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
+      "targets": [{"expr": "sum(billmesh_razorpay_reconciliation_backlog)"}]
+    },
+    {
+      "id": 6,
+      "title": "Captured but unfulfilled",
+      "type": "stat",
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 16},
+      "targets": [{"expr": "sum(billmesh_razorpay_captured_unfulfilled)"}]
+    },
+    {
+      "id": 7,
+      "title": "Refunds and finance mismatches",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 16},
+      "targets": [
+        {"expr": "sum(billmesh_razorpay_payment_records{state=\"refunded\"})", "legendFormat": "refunded"},
+        {"expr": "sum(billmesh_razorpay_reconciliation_issues{type=~\"refund_mismatch|ledger_mismatch|invoice_mismatch\"}) by (type)", "legendFormat": "{{type}}"}
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Subscription transitions",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 16},
+      "targets": [{"expr": "sum(billmesh_subscription_transitions) by (state)", "legendFormat": "{{state}}"}]
+    },
+    {
+      "id": 9,
+      "title": "Provider API outcomes",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 22},
+      "targets": [{"expr": "sum(rate(billmesh_razorpay_provider_api_requests_total[5m])) by (operation, outcome, status_class)", "legendFormat": "{{operation}} {{outcome}} {{status_class}}"}]
+    }
+  ]
+}

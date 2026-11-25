@@ -40,11 +40,18 @@ spec:
           image: {{ include "billmesh-api.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["worker"]
+          env:
+            - name: METRICS_ADDR
+              value: ":{{ .Values.metrics.port }}"
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           envFrom:
             - secretRef:
                 name: {{ required "secrets.runtimeSecretName is required" .Values.secrets.runtimeSecretName }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:

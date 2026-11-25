@@ -233,21 +233,40 @@ func (a *API) createRazorpayOrderOnce(ctx context.Context, expected razorpayOrde
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth(a.providerPublicKey, a.providerSecret)
-	response, err := a.client.Do(request)
+	started := time.Now()
+	if a.metrics != nil {
+		a.metrics.orderCreate("attempt", 0)
+	}
+	response, err := a.doRazorpayRequest("create_order", request)
 	if err != nil {
+		if a.metrics != nil {
+			a.metrics.orderCreate("ambiguous", time.Since(started))
+		}
 		return razorpayOrder{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 32<<10))
+		if a.metrics != nil {
+			a.metrics.orderCreate("failure", time.Since(started))
+		}
 		return razorpayOrder{}, &razorpayHTTPError{Status: response.StatusCode}
 	}
 	order, err := decodeRazorpayOrder(response.Body)
 	if err != nil {
+		if a.metrics != nil {
+			a.metrics.orderCreate("ambiguous", time.Since(started))
+		}
 		return razorpayOrder{}, fmt.Errorf("%w: %v", errInvalidProviderOrder, err)
 	}
 	if err := validateRazorpayOrder(order, expected); err != nil {
+		if a.metrics != nil {
+			a.metrics.orderCreate("ambiguous", time.Since(started))
+		}
 		return razorpayOrder{}, fmt.Errorf("%w: %v", errInvalidProviderOrder, err)
+	}
+	if a.metrics != nil {
+		a.metrics.orderCreate("success", time.Since(started))
 	}
 	return order, nil
 }
@@ -268,7 +287,7 @@ func (a *API) recoverRazorpayOrder(ctx context.Context, expected razorpayOrderEx
 			return razorpayOrder{}, err
 		}
 		request.SetBasicAuth(a.providerPublicKey, a.providerSecret)
-		response, err := a.client.Do(request)
+		response, err := a.doRazorpayRequest("recover_order", request)
 		if err != nil {
 			return razorpayOrder{}, err
 		}

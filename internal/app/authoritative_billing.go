@@ -415,9 +415,9 @@ func (a *API) createSubscriptionTransition(w http.ResponseWriter, r *http.Reques
 			operationRef := "transition:" + transitionID.String()
 			receipt := razorpayReceipt(a.providerEnvironment, operationRef)
 			if _, err := tx.Exec(r.Context(), `INSERT INTO payments(id,account_id,provider,status,amount_minor,currency,operation_ref,purpose,transition_id,
-				checkout_expires_at,provider_receipt,provider_environment)
-				VALUES($1,$2,'razorpay','created',$3,$4,$5,'subscription',$6,$7,$8,$9)`, paymentID, accountID, plan.PriceMinor, plan.Currency,
-				operationRef, transitionID, checkoutExpiresAt, receipt, a.providerEnvironment); err != nil {
+				checkout_expires_at,provider_receipt,provider_environment,request_id)
+				VALUES($1,$2,'razorpay','created',$3,$4,$5,'subscription',$6,$7,$8,$9,$10)`, paymentID, accountID, plan.PriceMinor, plan.Currency,
+				operationRef, transitionID, checkoutExpiresAt, receipt, a.providerEnvironment, w.Header().Get("X-Request-ID")); err != nil {
 				return err
 			}
 		}

@@ -88,6 +88,9 @@ func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
 			if err := w.finishReconciliation(ctx, item, "no_capture", "", "", time.Now().UTC().Add(time.Duration(item.retrySeconds)*time.Second)); err != nil {
 				return err
 			}
+			if w.metrics != nil {
+				w.metrics.paymentLifecycle("unreconciled")
+			}
 			continue
 		}
 		if err := w.applyReconciledCapture(ctx, item, paymentID); err != nil {
@@ -98,6 +101,9 @@ func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
 				continue
 			}
 			return err
+		}
+		if w.metrics != nil {
+			w.metrics.paymentLifecycle("captured")
 		}
 	}
 	return nil
@@ -173,9 +179,9 @@ func (w *Worker) applyReconciledCapture(ctx context.Context, item reconciliation
 			return err
 		}
 		var eventID uuid.UUID
-		if err := tx.QueryRow(ctx, `INSERT INTO provider_events(provider,provider_event_id,event_type,payload)
-			VALUES('razorpay',$1,'payment.reconciled',$2) ON CONFLICT(provider,provider_event_id) DO UPDATE
-			SET provider_event_id=excluded.provider_event_id RETURNING id`, providerEventID, payload).Scan(&eventID); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO provider_events(provider,provider_event_id,event_type,payload,billmesh_payment_id,provider_order_id,provider_payment_id)
+			VALUES('razorpay',$1,'payment.reconciled',$2,$3,$4,$5) ON CONFLICT(provider,provider_event_id) DO UPDATE
+			SET provider_event_id=excluded.provider_event_id RETURNING id`, providerEventID, payload, item.id, item.orderID, providerPaymentID).Scan(&eventID); err != nil {
 			return err
 		}
 		if err := capturePayment(ctx, tx, w.providerEnvironment, item.orderID, providerPaymentID); err != nil {
@@ -230,6 +236,9 @@ func (w *Worker) recordReconciliationFailure(ctx context.Context, item reconcili
 
 func (w *Worker) recordReconciliationAttention(ctx context.Context, item reconciliationCandidate, issueType, providerPaymentID, summary string) error {
 	w.log.Error("provider reconciliation requires attention", "payment_id", item.id, "order_id", item.orderID, "issue_type", issueType)
+	if w.metrics != nil {
+		w.metrics.paymentLifecycle("mismatched")
+	}
 	return pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE payments SET reconciliation_outcome='attention_required',
 			reconciliation_error_code=$2,reconciliation_provider_payment_id=NULLIF($3,''),reconciliation_next_attempt_at=NULL WHERE id=$1`,
@@ -285,7 +294,7 @@ func (w *Worker) fetchCapturedProviderPayment(ctx context.Context, orderID strin
 		return "", false, err
 	}
 	request.SetBasicAuth(w.providerKey, w.providerSecret)
-	response, err := w.client.Do(request)
+	response, err := w.doRazorpayRequest("list_order_payments", request)
 	if err != nil {
 		return "", false, &providerReconciliationError{code: "transport", cause: err}
 	}
@@ -431,7 +440,7 @@ func (w *Worker) fetchProviderOrders(ctx context.Context, from, to time.Time) ([
 			return nil, err
 		}
 		request.SetBasicAuth(w.providerKey, w.providerSecret)
-		response, err := w.client.Do(request)
+		response, err := w.doRazorpayRequest("list_orders", request)
 		if err != nil {
 			return nil, &providerReconciliationError{code: "transport", cause: err}
 		}
@@ -653,7 +662,7 @@ func (w *Worker) fetchProviderPayment(ctx context.Context, paymentID string) (pr
 		return providerPayment{}, err
 	}
 	request.SetBasicAuth(w.providerKey, w.providerSecret)
-	response, err := w.client.Do(request)
+	response, err := w.doRazorpayRequest("fetch_payment", request)
 	if err != nil {
 		return providerPayment{}, &providerReconciliationError{code: "transport", cause: err}
 	}
@@ -677,7 +686,7 @@ func (w *Worker) fetchProviderRefunds(ctx context.Context, paymentID string) ([]
 			return nil, err
 		}
 		request.SetBasicAuth(w.providerKey, w.providerSecret)
-		response, err := w.client.Do(request)
+		response, err := w.doRazorpayRequest("list_refunds", request)
 		if err != nil {
 			return nil, &providerReconciliationError{code: "transport", cause: err}
 		}

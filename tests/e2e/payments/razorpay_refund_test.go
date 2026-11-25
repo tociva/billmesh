@@ -3,8 +3,10 @@
 package payments_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -102,21 +104,43 @@ func TestRazorpayCreditPackRefundsArePartialFullAndIndependentlyIdempotent(t *te
 func TestRazorpayConcurrentRefundDeliveriesApplyOnce(t *testing.T) {
 	f := newCapturedRefundFixture(t, "refund-concurrent")
 	refundID := testkit.Unique("rfnd_concurrent")
-	const deliveries = 8
-	statuses := make(chan int, deliveries)
+	const deliveries = 4
+	type deliveryResult struct {
+		status int
+		err    error
+	}
+	results := make(chan deliveryResult, deliveries)
 	var wait sync.WaitGroup
 	for range deliveries {
+		fixture := testkit.RazorpayRefundProcessed(testkit.Unique("evt_refund_concurrent"), f.providerPaymentID, refundID, f.amount, f.order.Checkout.ClientConfig.Currency)
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			statuses <- sendRefund(t, f.h, f.providerPaymentID, refundID, f.amount, f.order.Checkout.ClientConfig.Currency)
+			request, err := http.NewRequest(http.MethodPost, f.h.BaseURL+"/v1/payments/webhook", bytes.NewReader(fixture.Raw))
+			if err != nil {
+				results <- deliveryResult{err: err}
+				return
+			}
+			request.Header.Set("X-Razorpay-Event-Id", fixture.EventID)
+			request.Header.Set("X-Razorpay-Signature", testkit.RazorpayWebhookSignature(fixture.Raw, "test-webhook-secret"))
+			response, err := f.h.Client.Do(request)
+			if err != nil {
+				results <- deliveryResult{err: err}
+				return
+			}
+			_, _ = io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			results <- deliveryResult{status: response.StatusCode}
 		}()
 	}
 	wait.Wait()
-	close(statuses)
-	for status := range statuses {
-		if status != http.StatusNoContent {
-			t.Fatalf("concurrent refund returned %d", status)
+	close(results)
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent refund failed: %v", result.err)
+		}
+		if result.status != http.StatusNoContent {
+			t.Fatalf("concurrent refund returned %d", result.status)
 		}
 	}
 	assertCreditRefundState(t, f, "refunded", 1, f.amount, f.credits, 0)

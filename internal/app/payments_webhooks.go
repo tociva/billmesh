@@ -135,9 +135,9 @@ func (a *API) createPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().UTC().Add(30 * time.Minute)
 	receipt := razorpayReceipt(a.providerEnvironment, operationRef)
 	_, err = conn.Exec(r.Context(), `INSERT INTO payments(id,account_id,provider,status,amount_minor,currency,credit_pack_id,credits,operation_ref,
-		checkout_expires_at,provider_receipt,provider_environment)
-		VALUES($1,$2,'razorpay','created',$3,$4,$5,$6,$7,$8,$9,$10)`, id, accountID, price, currency, packID, credits,
-		operationRef, expiresAt, receipt, a.providerEnvironment)
+		checkout_expires_at,provider_receipt,provider_environment,request_id)
+		VALUES($1,$2,'razorpay','created',$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, accountID, price, currency, packID, credits,
+		operationRef, expiresAt, receipt, a.providerEnvironment, w.Header().Get("X-Request-ID"))
 	if err != nil {
 		writeDBError(w, err)
 		return

@@ -50,12 +50,17 @@ spec:
           env:
             - name: HTTP_ADDR
               value: ":{{ .Values.service.targetPort }}"
+            - name: METRICS_ADDR
+              value: ":{{ .Values.metrics.port }}"
           envFrom:
             - secretRef:
                 name: {{ required "secrets.runtimeSecretName is required" .Values.secrets.runtimeSecretName }}
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
               protocol: TCP
           startupProbe:
             exec:

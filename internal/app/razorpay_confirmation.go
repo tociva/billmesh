@@ -173,7 +173,7 @@ func (a *API) fetchRazorpayPayment(ctx context.Context, paymentID string) (razor
 		return razorpayProviderPayment{}, err
 	}
 	request.SetBasicAuth(a.providerPublicKey, a.providerSecret)
-	response, err := a.client.Do(request)
+	response, err := a.doRazorpayRequest("fetch_payment", request)
 	if err != nil {
 		return razorpayProviderPayment{}, err
 	}

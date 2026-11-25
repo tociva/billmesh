@@ -1,0 +1,59 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: billmesh-razorpay
+  labels:
+    app.kubernetes.io/name: billmesh
+spec:
+  groups:
+    - name: billmesh.razorpay
+      rules:
+        - alert: BillmeshRazorpayProviderFailures
+          expr: sum(rate(billmesh_razorpay_provider_api_requests_total{outcome=~"timeout|transport_error|provider_error|rate_limited"}[10m])) / clamp_min(sum(rate(billmesh_razorpay_provider_api_requests_total[10m])), 0.001) > 0.10
+          for: 10m
+          labels: {severity: page}
+          annotations:
+            summary: Razorpay provider calls are failing
+            runbook_url: docs/runbooks/razorpay-operations.md#provider-outage
+        - alert: BillmeshRazorpayInvalidSignatureSpike
+          expr: sum(increase(billmesh_razorpay_webhook_requests_total{outcome="signature_failure"}[5m])) > 10
+          for: 5m
+          labels: {severity: page}
+          annotations:
+            summary: Razorpay webhook signature failures spiked
+            runbook_url: docs/runbooks/razorpay-operations.md#webhook-disablement-or-signature-failures
+        - alert: BillmeshRazorpayWebhookProcessingFailures
+          expr: sum(increase(billmesh_razorpay_webhook_requests_total{outcome="processing_failure"}[10m])) > 5
+          for: 5m
+          labels: {severity: page}
+          annotations:
+            summary: Razorpay webhook processing is failing
+            runbook_url: docs/runbooks/razorpay-operations.md#delayed-or-failed-delivery
+        - alert: BillmeshRazorpayWebhookAcknowledgementSlow
+          expr: histogram_quantile(0.95, sum(rate(billmesh_razorpay_webhook_acknowledgement_duration_seconds_bucket[10m])) by (le)) > 2.5
+          for: 10m
+          labels: {severity: ticket}
+          annotations:
+            summary: Razorpay webhook acknowledgement p95 is above 2.5 seconds
+            runbook_url: docs/runbooks/razorpay-operations.md#delayed-or-failed-delivery
+        - alert: BillmeshRazorpayReconciliationBacklog
+          expr: sum(billmesh_razorpay_reconciliation_backlog) > 10
+          for: 15m
+          labels: {severity: page}
+          annotations:
+            summary: Razorpay reconciliation backlog is growing
+            runbook_url: docs/runbooks/razorpay-operations.md#reconciliation-failure
+        - alert: BillmeshRazorpayCapturedUnfulfilled
+          expr: sum(billmesh_razorpay_captured_unfulfilled) > 0
+          for: 5m
+          labels: {severity: page}
+          annotations:
+            summary: Captured Razorpay payments are not fulfilled
+            runbook_url: docs/runbooks/razorpay-operations.md#missed-capture-or-captured-but-unfulfilled
+        - alert: BillmeshRazorpayLedgerMismatch
+          expr: sum(billmesh_razorpay_reconciliation_issues{type="ledger_mismatch"}) > 0
+          for: 5m
+          labels: {severity: page}
+          annotations:
+            summary: Razorpay finance reconciliation found a ledger mismatch
+            runbook_url: docs/runbooks/razorpay-operations.md#refund-or-ledger-mismatch
