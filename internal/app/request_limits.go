@@ -101,6 +101,33 @@ func (a *API) ConfigureRequestLimits(authFailuresPerMinute, mutationRatePerSecon
 	a.mutations = &keyedBuckets{entries: make(map[string]tokenBucket), rate: float64(mutationRatePerSecond), burst: float64(mutationBurst), now: time.Now}
 }
 
+// ConfigureWebhookLimits bounds unauthenticated webhook traffic independently
+// of authenticated API mutation limits. It is exported so deployments and
+// tests can select limits appropriate for their expected provider burst size.
+func (a *API) ConfigureWebhookLimits(ratePerSecond, burst, concurrent int) {
+	a.webhookRequests = &keyedBuckets{entries: make(map[string]tokenBucket), rate: float64(ratePerSecond), burst: float64(burst), now: time.Now}
+	a.webhookSlots = make(chan struct{}, concurrent)
+}
+
+func (a *API) admitWebhook(w http.ResponseWriter, r *http.Request) (release func(), ok bool) {
+	if a.webhookRequests != nil && !a.webhookRequests.allow(remoteHost(r.RemoteAddr)) {
+		w.Header().Set("Retry-After", "1")
+		writeCodedError(w, http.StatusTooManyRequests, "webhook_rate_limited", "webhook request rate limit exceeded")
+		return nil, false
+	}
+	if a.webhookSlots == nil {
+		return func() {}, true
+	}
+	select {
+	case a.webhookSlots <- struct{}{}:
+		return func() { <-a.webhookSlots }, true
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeCodedError(w, http.StatusTooManyRequests, "webhook_capacity_exceeded", "webhook processing capacity exceeded")
+		return nil, false
+	}
+}
+
 func (a *API) requestLimitHooks() auth.MiddlewareHooks {
 	return auth.MiddlewareHooks{
 		Rejected: func(r *http.Request) bool {

@@ -3,6 +3,7 @@ package database
 import (
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -12,6 +13,17 @@ func TestRuntimeConnectionsUseBillmeshSchemaOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "billmesh", cfg.ConnConfig.RuntimeParams["search_path"])
+}
+
+func TestRuntimeDatabasePoolHasFiniteConnectionLimits(t *testing.T) {
+	cfg, err := poolConfig("postgres://user:password@localhost:5432/billmesh?sslmode=disable")
+	require.NoError(t, err)
+	configurePoolLimits(cfg)
+
+	require.Equal(t, int32(20), cfg.MaxConns)
+	require.Equal(t, int32(2), cfg.MinConns)
+	require.Equal(t, time.Hour, cfg.MaxConnLifetime)
+	require.Equal(t, 15*time.Minute, cfg.MaxConnIdleTime)
 }
 
 func TestMigrationURLUsesBillmeshThenPublic(t *testing.T) {

@@ -12,12 +12,16 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-const razorpayWebhookBodyLimit int64 = 1 << 20
+const (
+	razorpayWebhookBodyLimit int64 = 1 << 20
+	razorpayWebhookMaxDepth        = 64
+)
 
 var (
 	razorpayEventIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -91,9 +95,28 @@ type normalizedRazorpayEvent struct {
 }
 
 func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
-	eventID := r.Header.Get("X-Razorpay-Event-Id")
+	release, admitted := a.admitWebhook(w, r)
+	if !admitted {
+		return
+	}
+	defer release()
+
+	eventID, eventIDPresent := singleHeaderValue(r.Header, "X-Razorpay-Event-Id")
+	if !eventIDPresent {
+		writeError(w, http.StatusBadRequest, "Razorpay event ID header must occur exactly once")
+		return
+	}
 	if !razorpayEventIDPattern.MatchString(eventID) {
 		writeError(w, http.StatusBadRequest, "invalid Razorpay event ID")
+		return
+	}
+	signature, signaturePresent := singleHeaderValue(r.Header, "X-Razorpay-Signature")
+	if !signaturePresent {
+		if len(r.Header.Values("X-Razorpay-Signature")) > 1 {
+			writeError(w, http.StatusBadRequest, "Razorpay signature header must occur exactly once")
+		} else {
+			writeError(w, http.StatusUnauthorized, "invalid webhook signature")
+		}
 		return
 	}
 
@@ -111,7 +134,7 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "webhook secret is not configured")
 		return
 	}
-	if !verifyRazorpayWebhookSignature(raw, r.Header.Get("X-Razorpay-Signature"), a.webhookSecret, a.webhookPreviousSecret, a.webhookPreviousSecretExpiresAt, time.Now().UTC()) {
+	if !verifyRazorpayWebhookSignature(raw, signature, a.webhookSecret, a.webhookPreviousSecret, a.webhookPreviousSecretExpiresAt, time.Now().UTC()) {
 		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
 		return
 	}
@@ -142,10 +165,28 @@ func (a *API) paymentWebhook(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	if !event.Supported {
-		a.log.Info("acknowledged unsupported Razorpay event", "event_id", event.ID, "event_type", event.Type, "account_id", event.AccountID)
-	}
+	a.logRazorpayWebhook(w.Header().Get("X-Request-ID"), event)
 	writeNoContent(w)
+}
+
+func (a *API) logRazorpayWebhook(requestID string, event normalizedRazorpayEvent) {
+	a.log.Info("processed Razorpay webhook",
+		"request_id", requestID,
+		"event_id", event.ID,
+		"event_type", event.Type,
+		"provider_account_id", event.AccountID,
+		"provider_payment_id", event.PaymentID,
+		"provider_order_id", event.OrderID,
+		"provider_refund_id", event.RefundID,
+		"supported", event.Supported)
+}
+
+func singleHeaderValue(header http.Header, name string) (string, bool) {
+	values := header.Values(name)
+	if len(values) != 1 {
+		return "", false
+	}
+	return values[0], true
 }
 
 func verifyRazorpayWebhookSignature(raw []byte, signature, current, previous string, previousExpiresAt *time.Time, now time.Time) bool {
@@ -159,7 +200,7 @@ func verifyRazorpayWebhookSignature(raw []byte, signature, current, previous str
 	validFor := func(secret string) bool {
 		mac := hmac.New(sha256.New, []byte(secret))
 		_, _ = mac.Write(raw)
-		return hmac.Equal(mac.Sum(nil), provided)
+		return secureHMACEqual(mac.Sum(nil), provided)
 	}
 	if validFor(current) {
 		return true
@@ -168,6 +209,12 @@ func verifyRazorpayWebhookSignature(raw []byte, signature, current, previous str
 }
 
 func parseRazorpayWebhook(eventID string, raw []byte, expectedAccountID string) (normalizedRazorpayEvent, error) {
+	if !utf8.Valid(raw) {
+		return normalizedRazorpayEvent{}, errors.New("webhook payload is not valid UTF-8")
+	}
+	if err := validateJSONDepth(raw, razorpayWebhookMaxDepth); err != nil {
+		return normalizedRazorpayEvent{}, err
+	}
 	var envelope razorpayWebhookEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return normalizedRazorpayEvent{}, errors.New("malformed webhook payload")
@@ -207,6 +254,46 @@ func parseRazorpayWebhook(eventID string, raw []byte, expectedAccountID string) 
 		// recorded and acknowledged so Razorpay does not retry them indefinitely.
 	}
 	return event, nil
+}
+
+func validateJSONDepth(raw []byte, maximum int) error {
+	depth := 0
+	inString := false
+	escaped := false
+	for _, character := range raw {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch character {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+			if depth > maximum {
+				return errors.New("webhook JSON nesting exceeds limit")
+			}
+		case '}', ']':
+			depth--
+			if depth < 0 {
+				return errors.New("malformed webhook payload")
+			}
+		}
+	}
+	if inString || depth != 0 {
+		return errors.New("malformed webhook payload")
+	}
+	return nil
 }
 
 func (a *API) validateRazorpayEvent(ctx context.Context, event normalizedRazorpayEvent) error {

@@ -26,8 +26,7 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
-	cfg.MaxConns = 20
-	cfg.MaxConnLifetime = time.Hour
+	configurePoolLimits(cfg)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -37,6 +36,13 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 	return pool, nil
+}
+
+func configurePoolLimits(cfg *pgxpool.Config) {
+	cfg.MaxConns = 20
+	cfg.MinConns = 2
+	cfg.MaxConnLifetime = time.Hour
+	cfg.MaxConnIdleTime = 15 * time.Minute
 }
 
 func poolConfig(databaseURL string) (*pgxpool.Config, error) {

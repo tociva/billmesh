@@ -15,6 +15,14 @@ The application chart does not create an Ingress, HTTPRoute, LoadBalancer, or
 NodePort. The cluster's existing Cloudflare Tunnel must route the public API
 hostname to the `billmesh-api` Service in the Billmesh namespace.
 
+For the Razorpay webhook, the public edge must expose HTTPS on TCP 443 only,
+require TLS 1.2 or newer, and forward internally to the ClusterIP service.
+Plaintext HTTP, alternate public ports, and direct service exposure are not
+supported. Enable the chart NetworkPolicy in production and restrict ingress to
+the tunnel namespace and pod labels. The complete webhook boundary, source-IP
+allowlisting decision, and threat model are in
+[`razorpay-security.md`](razorpay-security.md).
+
 ## Required infrastructure
 
 - An ARM64 Kubernetes node pool.

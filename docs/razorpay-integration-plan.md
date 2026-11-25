@@ -506,38 +506,53 @@ test requirements, and production-readiness gate are recorded in
 
 ### Verification evidence
 
-- [ ] `gotestsum --format testname -- -v ./internal/products ./tests/unit/plans
+- [x] `gotestsum --format testname -- -v ./internal/products ./tests/unit/plans
   ./internal/app ./tests/fakeserver ./tests/testkit` — focused policy and contract
-  tests pass.
-- [ ] `make test-e2e` — one-time-order boundary, manual renewal, grace, expiry,
-  cancellation, and late-capture scenarios pass.
+  tests passed on 2026-11-25.
+- [x] `make test-e2e` — all 81 end-to-end tests passed on 2026-11-25,
+  including the one-time-order boundary, manual renewal, grace, expiry,
+  cancellation, and late-capture scenarios.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
   ./...` — production build completed successfully on 2026-11-25; Go emitted
   only the known sandbox stat-cache warning.
 
 ## 11. Security and abuse resistance
 
-- [ ] Add a test proving constant-time webhook and checkout-signature comparison.
-- [ ] Add a test proving signature verification occurs before JSON parsing or
+- [x] Add a test proving constant-time webhook and checkout-signature comparison.
+- [x] Add a test proving signature verification occurs before JSON parsing or
   financial lookup.
-- [ ] Add tests for missing/duplicate signature and event-ID headers.
-- [ ] Add tests for oversized bodies, deeply nested JSON, unexpected fields, and
+- [x] Add tests for missing/duplicate signature and event-ID headers.
+- [x] Add tests for oversized bodies, deeply nested JSON, unexpected fields, and
   malformed encodings.
-- [ ] Add tests for account, product, application, and environment isolation on
+- [x] Add tests for account, product, application, and environment isolation on
   every payment read and mutation.
-- [ ] Add concurrency tests for event replay, duplicate checkout, reconciliation,
+- [x] Add concurrency tests for event replay, duplicate checkout, reconciliation,
   and refunds.
-- [ ] Add rate-limit and resource-exhaustion tests for public webhook traffic.
-- [ ] Add a test proving request IDs and provider references are logged without
+- [x] Add rate-limit and resource-exhaustion tests for public webhook traffic.
+- [x] Add a test proving request IDs and provider references are logged without
   card, bank, token, signature, or secret data.
-- [ ] Add dependency timeouts and connection-pool limits appropriate for provider
+- [x] Add dependency timeouts and connection-pool limits appropriate for provider
   calls and webhook bursts.
-- [ ] Verify production TLS policy and restrict the webhook endpoint to ports and
+- [x] Verify production TLS policy and restrict the webhook endpoint to ports and
   protocols supported by Razorpay.
-- [ ] Evaluate Razorpay webhook IP allowlisting as defence in depth while keeping
+- [x] Evaluate Razorpay webhook IP allowlisting as defence in depth while keeping
   HMAC verification mandatory.
-- [ ] Complete threat-model review for replay, tampering, cross-account fulfilment,
+- [x] Complete threat-model review for replay, tampering, cross-account fulfilment,
   leaked credentials, dependency compromise, and operator misuse.
+
+The implemented trust boundaries, safe logging contract, production TLS and
+source-IP policy, and completed threat model are recorded in
+[`razorpay-security.md`](razorpay-security.md).
+
+### Verification evidence
+
+- [x] `gotestsum --format testname -- -v ./internal/app ./internal/database
+  ./tests/fakeserver ./tests/testkit` — focused security, transport, database,
+  fake-provider, and fixture tests passed on 2026-11-25.
+- [ ] `make test-e2e`
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
+  ./...` — production build completed successfully on 2026-11-25; Go emitted
+  only the known sandbox stat-cache warning.
 
 ## 12. Observability and operations
 

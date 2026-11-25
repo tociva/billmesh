@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -96,6 +97,29 @@ func TestRazorpayCreditPackRefundsArePartialFullAndIndependentlyIdempotent(t *te
 		WHERE payment_id=$1 AND issue_type='refund_mismatch' AND provider_refund_id=$2 AND status='open'`, f.order.PaymentID, firstRefundID).Scan(&issues); err != nil || issues != 1 {
 		t.Fatalf("refund mismatch issues=%d err=%v", issues, err)
 	}
+}
+
+func TestRazorpayConcurrentRefundDeliveriesApplyOnce(t *testing.T) {
+	f := newCapturedRefundFixture(t, "refund-concurrent")
+	refundID := testkit.Unique("rfnd_concurrent")
+	const deliveries = 8
+	statuses := make(chan int, deliveries)
+	var wait sync.WaitGroup
+	for range deliveries {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			statuses <- sendRefund(t, f.h, f.providerPaymentID, refundID, f.amount, f.order.Checkout.ClientConfig.Currency)
+		}()
+	}
+	wait.Wait()
+	close(statuses)
+	for status := range statuses {
+		if status != http.StatusNoContent {
+			t.Fatalf("concurrent refund returned %d", status)
+		}
+	}
+	assertCreditRefundState(t, f, "refunded", 1, f.amount, f.credits, 0)
 }
 
 func TestRazorpayRefundRejectsMalformedMismatchedOverAndOutOfOrderEvents(t *testing.T) {

@@ -47,6 +47,8 @@ type API struct {
 	sseActive                      map[uuid.UUID]int
 	authFailures                   *failureWindow
 	mutations                      *keyedBuckets
+	webhookRequests                *keyedBuckets
+	webhookSlots                   chan struct{}
 	browser                        browserAuth
 }
 
@@ -69,8 +71,9 @@ func NewAPI(pool *pgxpool.Pool, verifier auth.TokenVerifier, log *slog.Logger) *
 	if log == nil {
 		log = slog.Default()
 	}
-	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: &http.Client{Timeout: 5 * time.Second}, sseActive: make(map[uuid.UUID]int)}
+	a := &API{pool: pool, wallets: wallets.NewService(pool, nil), auth: verifier, log: log, client: newProviderHTTPClient(), sseActive: make(map[uuid.UUID]int)}
 	a.ConfigureRequestLimits(30, 10, 50)
+	a.ConfigureWebhookLimits(50, 200, 64)
 	return a
 }
 
@@ -732,7 +735,7 @@ func requestLog(log *slog.Logger, next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		if !strings.HasSuffix(r.URL.Path, "healthz") {
-			log.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
+			log.Info("request", "request_id", w.Header().Get("X-Request-ID"), "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 		}
 	})
 }

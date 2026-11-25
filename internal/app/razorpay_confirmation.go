@@ -57,7 +57,7 @@ func verifyRazorpayCheckoutSignature(serverOrderID, providerPaymentID, signature
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(razorpayCheckoutSignatureMessage(serverOrderID, providerPaymentID)))
-	return hmac.Equal(mac.Sum(nil), provided)
+	return secureHMACEqual(mac.Sum(nil), provided)
 }
 
 func (a *API) confirmRazorpayCheckout(w http.ResponseWriter, r *http.Request) {

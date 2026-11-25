@@ -9,9 +9,23 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestSecurityWebhookClientHasFiniteTimeoutsAndConnectionLimits(t *testing.T) {
+	client := newWebhookClient(nil, nil)
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, 5*time.Second, client.Timeout)
+	require.Positive(t, transport.ResponseHeaderTimeout)
+	require.Positive(t, transport.TLSHandshakeTimeout)
+	require.Positive(t, transport.IdleConnTimeout)
+	require.Positive(t, transport.MaxConnsPerHost)
+	require.Positive(t, transport.MaxIdleConnsPerHost)
+	require.Positive(t, transport.MaxIdleConns)
+}
 
 func TestSecurityWebhookRejectsPrivateAddressFamilies(t *testing.T) {
 	for _, host := range []string{"127.0.0.1", "::1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "198.18.0.1", "0.0.0.0", "fc00::1", "fe80::1", "::ffff:127.0.0.1"} {
