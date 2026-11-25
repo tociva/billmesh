@@ -295,59 +295,60 @@ acceptance evidence is available.
 
 ### Backend tests first
 
-- [ ] Add a unit test for the checkout-success signature message
+- [x] Add a unit test for the checkout-success signature message
   `server_order_id + "|" + razorpay_payment_id`.
-- [ ] Add tests accepting a valid `razorpay_signature` and rejecting a wrong,
+- [x] Add tests accepting a valid `razorpay_signature` and rejecting a wrong,
   missing, malformed, or replayed signature.
-- [ ] Add a test proving the server uses its stored order ID rather than trusting
+- [x] Add a test proving the server uses its stored order ID rather than trusting
   `razorpay_order_id` from the browser.
-- [ ] Add a test proving a valid checkout signature does not by itself grant
+- [x] Add a test proving a valid checkout signature does not by itself grant
   access before captured status is verified.
-- [ ] Add a test proving confirmation is account-scoped and cannot confirm
+- [x] Add a test proving confirmation is account-scoped and cannot confirm
   another customer's order.
-- [ ] Add a test for confirmation racing with webhook and reconciliation paths.
+- [x] Add a test for confirmation racing with webhook and reconciliation paths.
 
 ### Consumer tests first
 
-- [ ] Add a consumer unit test loading Razorpay Checkout once and handling script
+- [x] Add a consumer unit test loading Razorpay Checkout once and handling script
   load failure.
-- [ ] Add a consumer unit test mapping only Billmesh-returned public key, order
+- [x] Add a consumer unit test mapping only Billmesh-returned public key, order
   ID, amount, and currency into Checkout options.
-- [ ] Add a consumer test proving catalogue price or client-edited state cannot
+- [x] Add a consumer test proving catalogue price or client-edited state cannot
   override the returned checkout configuration.
-- [ ] Add a consumer test for successful handler response followed by a
+- [x] Add a consumer test for successful handler response followed by a
   processing state until Billmesh confirms capture.
-- [ ] Add tests for checkout failure, dismissal, abandonment, retry, offline
+- [x] Add tests for checkout failure, dismissal, abandonment, retry, offline
   interruption, and duplicate button clicks.
-- [ ] Add a test proving a success redirect, modal handler, or query parameter
+- [x] Add a test proving a success redirect, modal handler, or query parameter
   cannot directly enable paid UI or API access.
-- [ ] Add a test polling the transition/snapshot with bounded backoff and stopping
+- [x] Add a test polling the transition/snapshot with bounded backoff and stopping
   at completed, failed, expired, or cancelled states.
-- [ ] Add an accessibility test for focus restoration, keyboard operation,
+- [x] Add an accessibility test for focus restoration, keyboard operation,
   progress announcements, error messages, and retry controls.
-- [ ] Add a responsive test for supported mobile viewport and WebView behavior.
-- [ ] Add a CSP test allowing only the explicitly required Razorpay checkout
+- [x] Add a responsive test for supported mobile viewport and WebView behavior.
+- [x] Add a CSP test allowing only the explicitly required Razorpay checkout
   origins.
 
 ### Implementation
 
-- [ ] Add the approved server-side confirmation/status path if selected in the
+- [x] Add the approved server-side confirmation/status path if selected in the
   architecture decision.
-- [ ] Load `https://checkout.razorpay.com/v1/checkout.js` in the consuming product,
+- [x] Load `https://checkout.razorpay.com/v1/checkout.js` in the consuming product,
   not in the Billmesh Admin application.
-- [ ] Display payment as processing until the authoritative snapshot advances.
-- [ ] Refresh the billing snapshot after callback, webhook invalidation, or
+- [x] Display payment as processing until the authoritative snapshot advances.
+- [x] Refresh the billing snapshot after callback, webhook invalidation, or
   terminal transition status.
-- [ ] Never expose `RAZORPAY_KEY_SECRET` or `RAZORPAY_WEBHOOK_SECRET` to browser
+- [x] Never expose `RAZORPAY_KEY_SECRET` or `RAZORPAY_WEBHOOK_SECRET` to browser
   code, runtime configuration, analytics, or error reporting.
 
 ### Verification evidence
 
-- [ ] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
-  ./tests/testkit` — focused backend result pending.
-- [ ] `make test-e2e` — end-to-end result pending.
-- [ ] `pnpm nx test console --skip-nx-cache` in `billmesh-web` — consumer unit,
-  component, accessibility, responsive, and CSP result pending.
+- [x] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
+  ./tests/testkit` — all focused backend tests passed on 2026-11-25.
+- [x] `make test-e2e` — all end-to-end tests passed on 2026-11-25.
+- [x] `pnpm nx test console --skip-nx-cache` in `billmesh-web` — all consumer
+  unit, component, accessibility, responsive, and CSP tests passed on
+  2026-11-25.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
   ./...` and `NX_DAEMON=false pnpm nx build console --skip-nx-cache` — backend
   and console production builds completed successfully on 2026-11-25.
@@ -356,40 +357,51 @@ acceptance evidence is available.
 
 ### Tests first
 
-- [ ] Add an E2E test recovering a captured payment when the webhook never
+- [x] Add an E2E test recovering a captured payment when the webhook never
   arrives.
-- [ ] Add a test selecting only a captured payment whose order, amount, and
+- [x] Add a test selecting only a captured payment whose order, amount, and
   currency exactly match Billmesh.
-- [ ] Add a test with multiple failed attempts followed by one captured attempt.
-- [ ] Add a test rejecting a captured provider payment with a mismatched order,
+- [x] Add a test with multiple failed attempts followed by one captured attempt.
+- [x] Add a test rejecting a captured provider payment with a mismatched order,
   amount, or currency.
-- [ ] Add a test proving an already fulfilled payment is a no-op during
+- [x] Add a test proving an already fulfilled payment is a no-op during
   reconciliation.
-- [ ] Add a race test between two workers reconciling the same payment.
-- [ ] Add restart tests proving candidates remain recoverable after worker or
+- [x] Add a race test between two workers reconciling the same payment.
+- [x] Add restart tests proving candidates remain recoverable after worker or
   database interruption.
-- [ ] Add tests for provider timeout, `401`, `404`, `429`, `5xx`, malformed JSON,
+- [x] Add tests for provider timeout, `401`, `404`, `429`, `5xx`, malformed JSON,
   and partial responses.
-- [ ] Add a test for bounded exponential backoff with jitter after rate limiting
+- [x] Add a test for bounded exponential backoff with jitter after rate limiting
   or transient provider failure.
-- [ ] Add a test proving permanent authentication/configuration errors raise an
+- [x] Add a test proving permanent authentication/configuration errors raise an
   alert rather than retrying silently forever.
-- [ ] Add a test detecting a provider order that exists without a usable local
+- [x] Add a test detecting a provider order that exists without a usable local
   payment mapping.
-- [ ] Add a test detecting a captured Razorpay payment absent from Billmesh's
+- [x] Add a test detecting a captured Razorpay payment absent from Billmesh's
   fulfilled ledger.
 
 ### Implementation
 
-- [ ] Keep scheduled provider reconciliation enabled even when webhooks appear
+- [x] Keep scheduled provider reconciliation enabled even when webhooks appear
   healthy.
-- [ ] Add recovery handling for orphaned orders and ambiguous create-order
+- [x] Add recovery handling for orphaned orders and ambiguous create-order
   results.
-- [ ] Add a periodic finance reconciliation comparing Razorpay captures and
+- [x] Add a periodic finance reconciliation comparing Razorpay captures and
   refunds with Billmesh payments, invoices, credit notes, and ledger operations.
-- [ ] Store reconciliation timestamps, outcomes, and safe provider references.
-- [ ] Provide an operator workflow for unresolved mismatches without direct
+- [x] Store reconciliation timestamps, outcomes, and safe provider references.
+- [x] Provide an operator workflow for unresolved mismatches without direct
   database mutation.
+
+### Verification evidence
+
+- [x] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
+  ./tests/testkit` — all 173 focused tests passed on 2026-11-25.
+- [x] `make test-e2e` — all 73 end-to-end tests passed on 2026-11-25,
+  including reconciliation, restart, concurrency, orphan, finance, and operator
+  workflow scenarios.
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
+  ./...` — production build completed successfully on 2026-11-25; Go emitted
+  only the known sandbox stat-cache warning.
 
 ## 9. Failed payments, refunds, and disputes
 

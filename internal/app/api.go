@@ -167,6 +167,8 @@ func (a *API) Handler() http.Handler {
 	protected.HandleFunc("POST /v1/admin/adjustments", a.requireAdmin("credit.adjust", "wallet", a.adminAdjustment))
 	protected.HandleFunc("GET /v1/admin/audit", a.requireAdmin("audit.read", "audit_log", a.listAudit))
 	protected.HandleFunc("POST /v1/admin/webhooks/{id}/replay", a.requireAdmin("webhook.replay", "webhook_delivery", a.replayWebhook))
+	protected.HandleFunc("GET /v1/admin/reconciliation/issues", a.requireAdmin("reconciliation.issue.list", "reconciliation_issue", a.listReconciliationIssues))
+	protected.HandleFunc("POST /v1/admin/reconciliation/issues/{id}/actions", a.requireAdmin("reconciliation.issue.action", "reconciliation_issue", a.actOnReconciliationIssue))
 	protected.HandleFunc("GET /v1/events", auth.RequireClient(billingClients, true, a.events))
 	protectedAPI := httpresponse.JSONFallbacks(protected)
 	if a.auth != nil {

@@ -182,6 +182,31 @@ func TestRazorpayOrderPaymentsSupportsMultipleAttempts(t *testing.T) {
 	}
 }
 
+func TestRazorpayPaymentRefundsUseProviderCollectionContract(t *testing.T) {
+	server := httptest.NewServer(newHandler(newFakeServerState()))
+	defer server.Close()
+	response := postRazorpayOrder(t, server.URL, testRazorpayKeyID, testRazorpayKeySecret,
+		map[string]any{"amount": 2500, "currency": "INR", "receipt": "refund-collection"}, "application/json")
+	var order fakeRazorpayOrder
+	decodeResponse(t, response, &order)
+	addRazorpayPayment(t, server.URL, fakeRazorpayPayment{ID: "pay_refunded", OrderID: order.ID, Status: "captured", Amount: 2500, Currency: "INR"})
+	postTestControl(t, server.URL+"/test/razorpay/refunds", fakeRazorpayRefund{
+		ID: "rfnd_processed", PaymentID: "pay_refunded", Status: "processed", Amount: 2500, Currency: "INR",
+	})
+
+	response = getRequest(t, server.URL+"/v1/payments/pay_refunded/refunds?count=100", testRazorpayKeyID, testRazorpayKeySecret)
+	var collection struct {
+		Entity string               `json:"entity"`
+		Count  int                  `json:"count"`
+		Items  []fakeRazorpayRefund `json:"items"`
+	}
+	decodeResponse(t, response, &collection)
+	if collection.Entity != "collection" || collection.Count != 1 || collection.Items[0].Entity != "refund" ||
+		collection.Items[0].ID != "rfnd_processed" || collection.Items[0].CreatedAt == 0 {
+		t.Fatalf("unexpected refund collection: %+v", collection)
+	}
+}
+
 func postRazorpayOrder(t *testing.T, baseURL, key, secret string, body map[string]any, contentType string) *http.Response {
 	t.Helper()
 	raw, err := json.Marshal(body)

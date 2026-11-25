@@ -2176,6 +2176,8 @@ Razorpay fixture and harness coverage maps to the existing cases as follows:
 - capture isolation and financial validation: `PAY-008`, `PAY-009`, `PAY-014`,
   `PAY-015`, `PAY-021`, `PAY-022`, `PAY-024`, and `PAY-027`; and
 - refunds and late capture: `PAY-016`, `PAY-017`, `PAY-023`, and `PAY-025`.
+- scheduled provider and finance reconciliation, restart recovery, orphan
+  detection, and audited remediation: `PAY-028` through `PAY-036`.
 
 ## 11. Billing Records & Invoices
 
@@ -3513,6 +3515,15 @@ These cases are exercised by the current test suites and were omitted from the c
 | PAY-025 | E | Prevent a delayed capture from reversing an already processed refund. |
 | PAY-026 | E | Handle provider rate limits and outages without duplicating payment orders. |
 | PAY-027 | E | Reject a signed webhook for an unknown payment operation. |
+| PAY-028 | E | Recover an exact captured payment when its webhook never arrives. |
+| PAY-029 | E | Reject reconciliation when captured amount, currency, or order differs from Billmesh. |
+| PAY-030 | I | Let concurrent reconciliation workers converge on one financial fulfilment. |
+| PAY-031 | I | Preserve a retryable reconciliation candidate across worker restart. |
+| PAY-032 | U | Classify provider timeout, authentication, not-found, rate-limit, server, and malformed-response failures. |
+| PAY-033 | I | Detect an orphan provider order and a captured payment with no Billmesh mapping. |
+| PAY-034 | I | Reconcile provider captures and refunds against invoices, credit notes, grants, and ledger entries. |
+| PAY-035 | E | Require audited optimistic-concurrency actions for reconciliation issue remediation. |
+| PAY-036 | I | Keep an already fulfilled payment unchanged during scheduled reconciliation. |
 | RES-022 | I | Return the original reservation for an identical idempotent retry without reserving credits twice. |
 | RES-023 | I | Prevent concurrent settlement and release from producing contradictory ledger movements. |
 | RES-024 | E | Reject settlement above the reserved amount unless an authorized extension succeeds. |

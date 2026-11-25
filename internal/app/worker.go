@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,6 +70,12 @@ func (w *Worker) process(ctx context.Context) error {
 	}
 	if err := w.reconcileProviderPayments(ctx); err != nil {
 		w.log.Error("provider payment reconciliation", "error", err)
+	}
+	if err := w.reconcileProviderInventory(ctx); err != nil {
+		w.log.Error("provider inventory reconciliation", "error", err)
+	}
+	if err := w.reconcileFinancialRecords(ctx); err != nil {
+		w.log.Error("financial reconciliation", "error", err)
 	}
 	if err := w.processSubscriptionTransitions(ctx); err != nil {
 		return err
@@ -214,119 +219,6 @@ func (w *Worker) process(ctx context.Context) error {
 			WHERE published_at IS NULL AND NOT EXISTS(SELECT 1 FROM webhook_deliveries d WHERE d.event_id=e.id)`)
 		return err
 	})
-}
-
-func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
-	if w.providerBaseURL == "" || w.providerKey == "" || w.providerSecret == "" {
-		return nil
-	}
-	rows, err := w.pool.Query(ctx, `SELECT pay.id,pay.provider_order_id,pay.amount_minor,pay.currency
-		FROM payments pay
-		LEFT JOIN credit_packs cp ON cp.id=pay.credit_pack_id
-		LEFT JOIN subscription_transitions st ON st.id=pay.transition_id
-		JOIN products pr ON pr.id=COALESCE(cp.product_id,st.product_id)
-		WHERE pay.provider='razorpay' AND pay.status IN ('created','authorized')
-		AND pay.provider_environment=$1
-		AND pay.provider_order_id IS NOT NULL
-		AND COALESCE(pay.last_reconciled_at,pay.created_at) <= now() -
-			(COALESCE((pr.billing_policy->'projection'->>'reconciliation_seconds')::integer,300) * interval '1 second')
-		ORDER BY COALESCE(pay.last_reconciled_at,pay.created_at),pay.id LIMIT 100`, w.providerEnvironment)
-	if err != nil {
-		return err
-	}
-	type candidate struct {
-		id       uuid.UUID
-		orderID  string
-		amount   int64
-		currency string
-	}
-	items := make([]candidate, 0, 100)
-	for rows.Next() {
-		var item candidate
-		if err := rows.Scan(&item.id, &item.orderID, &item.amount, &item.currency); err != nil {
-			rows.Close()
-			return err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	rows.Close()
-	for _, item := range items {
-		if _, err := w.pool.Exec(ctx, `UPDATE payments SET last_reconciled_at=now() WHERE id=$1`, item.id); err != nil {
-			return err
-		}
-		paymentID, found, err := w.fetchCapturedProviderPayment(ctx, item.orderID, item.amount, item.currency)
-		if err != nil {
-			w.log.Warn("provider order reconciliation failed", "payment_id", item.id, "order_id", item.orderID, "error", err)
-			continue
-		}
-		if !found {
-			continue
-		}
-		if err := pgx.BeginFunc(ctx, w.pool, func(tx pgx.Tx) error {
-			providerEventID := "reconciliation:" + paymentID
-			payload, err := json.Marshal(map[string]any{"payment_id": paymentID, "order_id": item.orderID, "status": "captured", "amount": item.amount, "currency": item.currency})
-			if err != nil {
-				return err
-			}
-			var eventID uuid.UUID
-			err = tx.QueryRow(ctx, `INSERT INTO provider_events(provider,provider_event_id,event_type,payload)
-				VALUES('razorpay',$1,'payment.reconciled',$2) ON CONFLICT(provider,provider_event_id) DO UPDATE
-				SET provider_event_id=excluded.provider_event_id RETURNING id`, providerEventID, payload).Scan(&eventID)
-			if err != nil {
-				return err
-			}
-			if err := capturePayment(ctx, tx, w.providerEnvironment, item.orderID, paymentID); err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, `UPDATE provider_events SET processed_at=COALESCE(processed_at,now()) WHERE id=$1`, eventID)
-			return err
-		}); err != nil && !errors.Is(err, errConflictingProviderEvent) {
-			w.log.Error("provider payment reconciliation apply failed", "payment_id", item.id, "order_id", item.orderID, "error", err)
-		}
-	}
-	return nil
-}
-
-func (w *Worker) fetchCapturedProviderPayment(ctx context.Context, orderID string, expectedAmount int64, expectedCurrency string) (string, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.providerBaseURL+"/v1/orders/"+url.PathEscape(orderID)+"/payments", nil)
-	if err != nil {
-		return "", false, err
-	}
-	req.SetBasicAuth(w.providerKey, w.providerSecret)
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return "", false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", false, fmt.Errorf("provider returned status %d", resp.StatusCode)
-	}
-	var result struct {
-		Items []struct {
-			ID       string `json:"id"`
-			OrderID  string `json:"order_id"`
-			Status   string `json:"status"`
-			Amount   int64  `json:"amount"`
-			Currency string `json:"currency"`
-		} `json:"items"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", false, err
-	}
-	for _, payment := range result.Items {
-		if payment.Status != "captured" {
-			continue
-		}
-		if payment.ID == "" || payment.OrderID != orderID || payment.Amount != expectedAmount || payment.Currency != expectedCurrency {
-			return "", false, errors.New("captured provider payment does not match the Billmesh order")
-		}
-		return payment.ID, true, nil
-	}
-	return "", false, nil
 }
 
 func (w *Worker) processSubscriptionTransitions(ctx context.Context) error {

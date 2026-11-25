@@ -1195,6 +1195,42 @@ paths:
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/admin/reconciliation/issues:
+    get:
+      operationId: listReconciliationIssues
+      tags: [Administration, Payments]
+      summary: List provider and finance reconciliation issues
+      x-required-client-profile: admin
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, acknowledged, resolved, all], default: open }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: Reconciliation issues, most recently detected first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ReconciliationIssue" }
+        default: { $ref: "#/components/responses/Error" }
+  /v1/admin/reconciliation/issues/{id}/actions:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: actOnReconciliationIssue
+      tags: [Administration, Payments]
+      summary: Acknowledge, retry, or resolve a reconciliation issue
+      x-required-client-profile: admin
+      requestBody: { $ref: "#/components/requestBodies/ReconciliationIssueAction" }
+      responses:
+        "200":
+          description: Updated reconciliation issue.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReconciliationIssue" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/events:
     get:
       operationId: streamEvents
@@ -1759,6 +1795,18 @@ components:
               wallet_id: { $ref: "#/components/schemas/UUID" }
               amount: { type: integer, format: int64, minimum: 1 }
               reason: { type: string, minLength: 1 }
+    ReconciliationIssueAction:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [action, version]
+            properties:
+              action: { type: string, enum: [acknowledge, retry, resolve] }
+              note: { type: string, minLength: 3, maxLength: 1000 }
+              version: { type: integer, minimum: 1 }
   schemas:
     UUID:
       type: string
@@ -2665,3 +2713,28 @@ components:
         resource_id: { type: string }
         reason: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
+    ReconciliationIssue:
+      type: object
+      additionalProperties: false
+      required: [id, provider, provider_environment, account_id, payment_id, issue_type, status, provider_order_id, provider_payment_id, provider_refund_id, summary, details, first_detected_at, last_detected_at, acknowledged_at, resolved_at, resolution_note, version]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        provider: { type: string, const: razorpay }
+        provider_environment: { type: string }
+        account_id: { type: [string, "null"], format: uuid }
+        payment_id: { type: [string, "null"], format: uuid }
+        issue_type:
+          type: string
+          enum: [provider_authentication, provider_order_missing, provider_response_invalid, orphan_order, captured_payment_missing, capture_mismatch, invoice_mismatch, ledger_mismatch, refund_mismatch]
+        status: { type: string, enum: [open, acknowledged, resolved] }
+        provider_order_id: { type: [string, "null"] }
+        provider_payment_id: { type: [string, "null"] }
+        provider_refund_id: { type: [string, "null"] }
+        summary: { type: string }
+        details: { type: object, additionalProperties: true }
+        first_detected_at: { type: string, format: date-time }
+        last_detected_at: { type: string, format: date-time }
+        acknowledged_at: { type: [string, "null"], format: date-time }
+        resolved_at: { type: [string, "null"], format: date-time }
+        resolution_note: { type: [string, "null"] }
+        version: { type: integer, minimum: 1 }

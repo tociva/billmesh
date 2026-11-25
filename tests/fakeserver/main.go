@@ -41,6 +41,7 @@ type server struct {
 	razorpayOrders       map[string]fakeRazorpayOrder
 	razorpayOrderReceipt map[string]string
 	razorpayPayments     map[string][]fakeRazorpayPayment
+	razorpayRefunds      map[string][]fakeRazorpayRefund
 	razorpayBehavior     fakeRazorpayBehavior
 	oauthCodes           map[string]oauthGrant
 	refreshTokens        map[string]oauthGrant
@@ -67,6 +68,16 @@ type fakeRazorpayPayment struct {
 	Status   string `json:"status"`
 	Amount   int64  `json:"amount"`
 	Currency string `json:"currency"`
+}
+
+type fakeRazorpayRefund struct {
+	ID        string `json:"id"`
+	Entity    string `json:"entity"`
+	PaymentID string `json:"payment_id"`
+	Status    string `json:"status"`
+	Amount    int64  `json:"amount"`
+	Currency  string `json:"currency"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 type fakeRazorpayBehavior struct {
@@ -123,6 +134,7 @@ func newFakeServerState() *server {
 		oauthCodes: make(map[string]oauthGrant), refreshTokens: make(map[string]oauthGrant),
 		razorpayOrders: make(map[string]fakeRazorpayOrder), razorpayOrderReceipt: make(map[string]string),
 		razorpayPayments: make(map[string][]fakeRazorpayPayment),
+		razorpayRefunds:  make(map[string][]fakeRazorpayRefund),
 	}
 }
 
@@ -143,8 +155,10 @@ func newHandler(s *server) http.Handler {
 	mux.HandleFunc("GET /v1/orders/{id}/payments", s.orderPayments)
 	mux.HandleFunc("GET /test/order-count", s.orderCount)
 	mux.HandleFunc("GET /v1/payments/{id}", s.payment)
+	mux.HandleFunc("GET /v1/payments/{id}/refunds", s.paymentRefunds)
 	mux.HandleFunc("GET /test/razorpay/orders", s.listRazorpayOrders)
 	mux.HandleFunc("POST /test/razorpay/payments", s.addRazorpayPayment)
+	mux.HandleFunc("POST /test/razorpay/refunds", s.addRazorpayRefund)
 	mux.HandleFunc("POST /test/razorpay/behavior", s.setRazorpayBehavior)
 	mux.HandleFunc("POST /receivers/{app}", s.receiver)
 	mux.HandleFunc("GET /test/webhooks", s.listWebhooks)
@@ -676,6 +690,41 @@ func (s *server) payment(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "payment not found", http.StatusNotFound)
 }
 
+func (s *server) paymentRefunds(w http.ResponseWriter, r *http.Request) {
+	if !validRazorpayAuth(r) {
+		http.Error(w, "invalid Razorpay credentials", http.StatusUnauthorized)
+		return
+	}
+	s.mu.Lock()
+	behavior := s.razorpayBehavior
+	items := append([]fakeRazorpayRefund(nil), s.razorpayRefunds[r.PathValue("id")]...)
+	s.mu.Unlock()
+	if behavior.DelayMS > 0 {
+		time.Sleep(time.Duration(behavior.DelayMS) * time.Millisecond)
+	}
+	if behavior.Status != 0 {
+		http.Error(w, "configured Razorpay failure", behavior.Status)
+		return
+	}
+	skip := int(parseInt64(r.URL.Query().Get("skip")))
+	if skip < 0 {
+		skip = 0
+	}
+	count := int(parseInt64(r.URL.Query().Get("count")))
+	if count <= 0 || count > 100 {
+		count = 10
+	}
+	if skip >= len(items) {
+		items = nil
+	} else {
+		items = items[skip:]
+		if len(items) > count {
+			items = items[:count]
+		}
+	}
+	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
+}
+
 func (s *server) listRazorpayOrders(w http.ResponseWriter, r *http.Request) {
 	if !validRazorpayAuth(r) {
 		http.Error(w, "invalid Razorpay credentials", http.StatusUnauthorized)
@@ -763,6 +812,45 @@ func (s *server) addRazorpayPayment(w http.ResponseWriter, r *http.Request) {
 		order.Status = "attempted"
 	}
 	s.razorpayOrders[order.ID] = order
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) addRazorpayRefund(w http.ResponseWriter, r *http.Request) {
+	var refund fakeRazorpayRefund
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&refund); err != nil {
+		http.Error(w, "invalid refund JSON", http.StatusBadRequest)
+		return
+	}
+	if refund.ID == "" || refund.PaymentID == "" || refund.Amount <= 0 || len(refund.Currency) != 3 {
+		http.Error(w, "refund fields are required", http.StatusBadRequest)
+		return
+	}
+	if refund.Status != "pending" && refund.Status != "processed" && refund.Status != "failed" {
+		http.Error(w, "invalid refund status", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	found := false
+	for _, payments := range s.razorpayPayments {
+		for _, payment := range payments {
+			if payment.ID == refund.PaymentID {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		http.Error(w, "payment not found", http.StatusNotFound)
+		return
+	}
+	if refund.Entity == "" {
+		refund.Entity = "refund"
+	}
+	if refund.CreatedAt == 0 {
+		refund.CreatedAt = time.Now().UTC().Unix()
+	}
+	s.razorpayRefunds[refund.PaymentID] = append(s.razorpayRefunds[refund.PaymentID], refund)
 	w.WriteHeader(http.StatusNoContent)
 }
 

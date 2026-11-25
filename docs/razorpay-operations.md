@@ -56,6 +56,28 @@ compare Razorpay captures and refunds with Billmesh payments, invoices, credit
 notes, grants, and ledger mutations. A provider capture without exactly one
 Billmesh fulfilment is an incident requiring operator review.
 
+The worker atomically claims pending payments so multiple workers cannot own the
+same attempt. Transient timeouts, `429` responses, and provider `5xx` responses
+use bounded exponential backoff with deterministic jitter. Authentication,
+missing-order, and immutable-field failures stop automatic retries and create an
+open reconciliation issue. Orphan discovery also uses the Billmesh identifiers
+stored in Razorpay order notes to reattach an exact ambiguous order or raise an
+issue when no safe local mapping exists.
+
+Operators use the Admin API rather than editing financial tables:
+
+- `GET /v1/admin/reconciliation/issues?status=open` lists unresolved issues.
+- `POST /v1/admin/reconciliation/issues/{id}/actions` accepts `acknowledge`,
+  `retry`, or `resolve`, together with the observed issue `version`.
+- `retry` and `resolve` require an operator note. Every action is appended to
+  `audit_log`; resolving an issue does not synthesize credits, invoices, refunds,
+  or ledger entries.
+
+Before resolving a mismatch, compare the provider order, payment, and refund
+references with the Billmesh payment, invoice or credit note, grant, and ledger
+operation. Use a separately approved refund or adjustment workflow for any
+financial correction. Never repair a mismatch with direct SQL.
+
 ## Readiness and logging
 
 `GET /readyz` reports whether `razorpay_checkout` is `enabled` or `disabled` but
