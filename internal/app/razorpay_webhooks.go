@@ -217,7 +217,7 @@ func (a *API) validateRazorpayEvent(ctx context.Context, event normalizedRazorpa
 			return errors.New("contradictory payment failure")
 		}
 		var exists bool
-		if err := a.pool.QueryRow(ctx, `SELECT true FROM payments WHERE provider='razorpay' AND provider_order_id=$1`, event.OrderID).Scan(&exists); err != nil || !exists {
+		if err := a.pool.QueryRow(ctx, `SELECT true FROM payments WHERE provider='razorpay' AND provider_order_id=$1 AND provider_environment=$2`, event.OrderID, a.providerEnvironment).Scan(&exists); err != nil || !exists {
 			return errors.New("unknown payment order")
 		}
 		return nil
@@ -226,7 +226,7 @@ func (a *API) validateRazorpayEvent(ctx context.Context, event normalizedRazorpa
 	}
 	var expectedAmount int64
 	var expectedCurrency string
-	if err := a.pool.QueryRow(ctx, `SELECT amount_minor,currency FROM payments WHERE provider='razorpay' AND provider_order_id=$1`, event.OrderID).Scan(&expectedAmount, &expectedCurrency); err != nil {
+	if err := a.pool.QueryRow(ctx, `SELECT amount_minor,currency FROM payments WHERE provider='razorpay' AND provider_order_id=$1 AND provider_environment=$2`, event.OrderID, a.providerEnvironment).Scan(&expectedAmount, &expectedCurrency); err != nil {
 		return errors.New("unknown payment order")
 	}
 	if event.Amount != expectedAmount || event.Currency != expectedCurrency {
@@ -259,12 +259,12 @@ func (a *API) persistAndApplyRazorpayEvent(ctx context.Context, event normalized
 
 		switch event.Type {
 		case "payment.captured", "order.paid":
-			err = capturePayment(ctx, tx, event.OrderID, event.PaymentID)
+			err = capturePayment(ctx, tx, a.providerEnvironment, event.OrderID, event.PaymentID)
 		case "payment.failed":
 			var paymentID, accountID uuid.UUID
 			err = tx.QueryRow(ctx, `UPDATE payments SET status='failed',provider_payment_id=COALESCE(NULLIF($2,''),provider_payment_id),
 				failure_reason='provider reported failure',updated_at=now() WHERE provider='razorpay' AND provider_order_id=$1
-				AND status IN ('created','authorized') RETURNING id,account_id`, event.OrderID, event.PaymentID).Scan(&paymentID, &accountID)
+				AND provider_environment=$3 AND status IN ('created','authorized') RETURNING id,account_id`, event.OrderID, event.PaymentID, a.providerEnvironment).Scan(&paymentID, &accountID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				err = nil
 			} else if err == nil {

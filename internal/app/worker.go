@@ -24,13 +24,14 @@ import (
 )
 
 type Worker struct {
-	pool            *pgxpool.Pool
-	client          *http.Client
-	interval        time.Duration
-	log             *slog.Logger
-	providerBaseURL string
-	providerKey     string
-	providerSecret  string
+	pool                *pgxpool.Pool
+	client              *http.Client
+	interval            time.Duration
+	log                 *slog.Logger
+	providerBaseURL     string
+	providerKey         string
+	providerSecret      string
+	providerEnvironment string
 }
 
 func NewWorker(pool *pgxpool.Pool, client *http.Client, interval time.Duration, log *slog.Logger) *Worker {
@@ -47,6 +48,7 @@ func (w *Worker) ConfigureRazorpay(provider config.RazorpayConfig) {
 	w.providerBaseURL = provider.BaseURL
 	w.providerKey = provider.KeyID
 	w.providerSecret = provider.KeySecret
+	w.providerEnvironment = provider.Environment
 }
 func (w *Worker) Run(ctx context.Context) error {
 	ticker := time.NewTicker(w.interval)
@@ -224,10 +226,11 @@ func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
 		LEFT JOIN subscription_transitions st ON st.id=pay.transition_id
 		JOIN products pr ON pr.id=COALESCE(cp.product_id,st.product_id)
 		WHERE pay.provider='razorpay' AND pay.status IN ('created','authorized')
+		AND pay.provider_environment=$1
 		AND pay.provider_order_id IS NOT NULL
 		AND COALESCE(pay.last_reconciled_at,pay.created_at) <= now() -
 			(COALESCE((pr.billing_policy->'projection'->>'reconciliation_seconds')::integer,300) * interval '1 second')
-		ORDER BY COALESCE(pay.last_reconciled_at,pay.created_at),pay.id LIMIT 100`)
+		ORDER BY COALESCE(pay.last_reconciled_at,pay.created_at),pay.id LIMIT 100`, w.providerEnvironment)
 	if err != nil {
 		return err
 	}
@@ -276,7 +279,7 @@ func (w *Worker) reconcileProviderPayments(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if err := capturePayment(ctx, tx, item.orderID, paymentID); err != nil {
+			if err := capturePayment(ctx, tx, w.providerEnvironment, item.orderID, paymentID); err != nil {
 				return err
 			}
 			_, err = tx.Exec(ctx, `UPDATE provider_events SET processed_at=COALESCE(processed_at,now()) WHERE id=$1`, eventID)

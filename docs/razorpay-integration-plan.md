@@ -237,49 +237,58 @@ acceptance evidence is available.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build ./...`
   — completed successfully on 2026-11-25 (Go emitted only a sandbox stat-cache
   warning after the successful build).
-- [ ] `gotestsum --format testname -- -v ./internal/config ./internal/app ./tests/testkit`
-  — awaiting user execution.
-- [ ] `make test-e2e` — awaiting user execution.
+- [x] `gotestsum --format testname -- -v ./internal/config ./internal/app ./tests/testkit`
+  — all tests passed on 2026-11-25 after correcting the empty-secret test assertion.
+- [x] `make test-e2e` — full E2E suite passed on 2026-11-25.
 
 ## 6. Capture validation and atomic fulfilment
 
 ### Tests first
 
-- [ ] Add a test proving `authorized` is not sufficient to grant credits or paid
+- [x] Add a test proving `authorized` is not sufficient to grant credits or paid
   access.
-- [ ] Add a test proving capture requires the exact local provider order ID.
-- [ ] Add tests rejecting zero, negative, missing, or mismatched captured amount.
-- [ ] Add tests rejecting missing or mismatched currency.
-- [ ] Add a test rejecting an unknown provider order.
-- [ ] Add a test rejecting a provider payment ID already attached to another
+- [x] Add a test proving capture requires the exact local provider order ID.
+- [x] Add tests rejecting zero, negative, missing, or mismatched captured amount.
+- [x] Add tests rejecting missing or mismatched currency.
+- [x] Add a test rejecting an unknown provider order.
+- [x] Add a test rejecting a provider payment ID already attached to another
   Billmesh payment or account.
-- [ ] Add a cross-environment test proving a Test/Live or development/production
+- [x] Add a cross-environment test proving a Test/Live or development/production
   reference cannot cross the isolation boundary.
-- [ ] Add an integration test proving payment capture, credit grant, wallet
+- [x] Add an integration test proving payment capture, credit grant, wallet
   balance, ledger entry, invoice, billing revision, and outbox event commit
   atomically.
-- [ ] Add failure-injection tests at every step of the fulfilment transaction and
+- [x] Add failure-injection tests at every step of the fulfilment transaction and
   prove the entire transaction rolls back.
-- [ ] Add a duplicate-capture test proving one payment creates one grant, ledger
+- [x] Add a duplicate-capture test proving one payment creates one grant, ledger
   mutation, invoice, and subscription transition result.
-- [ ] Add a race test between webhook processing and provider reconciliation.
-- [ ] Add a late-capture test for an expired or cancelled transition.
-- [ ] Add a test proving a late capture is retained for operator resolution and
+- [x] Add a race test between webhook processing and provider reconciliation.
+- [x] Add a late-capture test for an expired or cancelled transition.
+- [x] Add a test proving a late capture is retained for operator resolution and
   never silently discarded.
-- [ ] Add a test proving a paid subscription transition becomes effective only
+- [x] Add a test proving a paid subscription transition becomes effective only
   after verified capture.
-- [ ] Add a test proving the browser callback or success URL alone cannot change
+- [x] Add a test proving the browser callback or success URL alone cannot change
   the billing snapshot.
 
 ### Implementation
 
-- [ ] Apply all financial fulfilment through one idempotent database transaction.
-- [ ] Keep business-operation uniqueness in addition to provider-event
+- [x] Apply all financial fulfilment through one idempotent database transaction.
+- [x] Keep business-operation uniqueness in addition to provider-event
   deduplication.
-- [ ] Record late captures and emit an actionable event without granting an
+- [x] Record late captures and emit an actionable event without granting an
   expired transition automatically.
-- [ ] Ensure a newer billing snapshot is the only source used by consumers to
+- [x] Ensure a newer billing snapshot is the only source used by consumers to
   enable paid capabilities.
+
+### Verification evidence
+
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build ./...`
+  — completed successfully on 2026-11-25; Go emitted only the known sandbox
+  stat-cache warning after the build.
+- [ ] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver ./tests/testkit`
+  — awaiting user execution.
+- [ ] `make test-e2e` — awaiting user execution.
 
 ## 7. Checkout confirmation and consumer integration
 

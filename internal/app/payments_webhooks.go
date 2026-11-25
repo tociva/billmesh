@@ -260,22 +260,22 @@ func refundCreditPackPayment(ctx context.Context, tx pgx.Tx, providerPaymentID, 
 	}
 	return appEvent(ctx, tx, "wallet", walletID, "payment.refunded", map[string]any{"payment_id": paymentID, "refund_id": refundID, "amount_minor": refundAmount, "credits_reversed": creditsToReverse})
 }
-func capturePayment(ctx context.Context, tx pgx.Tx, orderID, paymentID string) error {
+func capturePayment(ctx context.Context, tx pgx.Tx, providerEnvironment, orderID, paymentID string) error {
 	var purpose string
-	if err := tx.QueryRow(ctx, `SELECT purpose FROM payments WHERE provider='razorpay' AND provider_order_id=$1`, orderID).Scan(&purpose); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT purpose FROM payments WHERE provider='razorpay' AND provider_order_id=$1 AND provider_environment=$2`, orderID, providerEnvironment).Scan(&purpose); err != nil {
 		return err
 	}
 	if purpose == "subscription" {
-		return captureSubscriptionPayment(ctx, tx, orderID, paymentID)
+		return captureSubscriptionPayment(ctx, tx, providerEnvironment, orderID, paymentID)
 	}
-	return captureCreditPackPayment(ctx, tx, orderID, paymentID)
+	return captureCreditPackPayment(ctx, tx, providerEnvironment, orderID, paymentID)
 }
 
-func captureCreditPackPayment(ctx context.Context, tx pgx.Tx, orderID, paymentID string) error {
+func captureCreditPackPayment(ctx context.Context, tx pgx.Tx, providerEnvironment, orderID, paymentID string) error {
 	var payment, account, pack, product uuid.UUID
 	var credits, amount int64
 	var currency string
-	err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.credit_pack_id,cp.product_id,p.credits,p.amount_minor,p.currency FROM payments p JOIN credit_packs cp ON cp.id=p.credit_pack_id WHERE p.provider='razorpay' AND p.provider_order_id=$1 FOR UPDATE`, orderID).Scan(&payment, &account, &pack, &product, &credits, &amount, &currency)
+	err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.credit_pack_id,cp.product_id,p.credits,p.amount_minor,p.currency FROM payments p JOIN credit_packs cp ON cp.id=p.credit_pack_id WHERE p.provider='razorpay' AND p.provider_order_id=$1 AND p.provider_environment=$2 FOR UPDATE`, orderID, providerEnvironment).Scan(&payment, &account, &pack, &product, &credits, &amount, &currency)
 	if err != nil {
 		return err
 	}
@@ -319,13 +319,13 @@ func captureCreditPackPayment(ctx context.Context, tx pgx.Tx, orderID, paymentID
 	return appEvent(ctx, tx, "wallet", wallet, "payment.succeeded", map[string]any{"payment_id": payment, "credits": credits})
 }
 
-func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, orderID, providerPaymentID string) error {
+func captureSubscriptionPayment(ctx context.Context, tx pgx.Tx, providerEnvironment, orderID, providerPaymentID string) error {
 	var paymentID, accountID, transitionID uuid.UUID
 	var currentStatus, currency string
 	var existingPaymentID *string
 	var amount int64
 	if err := tx.QueryRow(ctx, `SELECT p.id,p.account_id,p.transition_id,p.status,p.provider_payment_id,p.amount_minor,p.currency
-		FROM payments p WHERE p.provider='razorpay' AND p.provider_order_id=$1 AND p.purpose='subscription' FOR UPDATE`, orderID).
+		FROM payments p WHERE p.provider='razorpay' AND p.provider_order_id=$1 AND p.provider_environment=$2 AND p.purpose='subscription' FOR UPDATE`, orderID, providerEnvironment).
 		Scan(&paymentID, &accountID, &transitionID, &currentStatus, &existingPaymentID, &amount, &currency); err != nil {
 		return err
 	}

@@ -118,6 +118,11 @@ services:
     environment:
       DATABASE_URL: postgres://billmesh_runtime:runtimepassword@postgres:5432/billmesh_e2e?sslmode=disable&search_path=billmesh
       WORKER_INTERVAL: 1s
+      BILLMESH_ENVIRONMENT: test
+      RAZORPAY_BASE_URL: https://mock-external:8090
+      RAZORPAY_KEY_ID: rzp_test_billmesh
+      RAZORPAY_KEY_SECRET: test-provider-secret
+      RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
       WEBHOOK_ALLOWED_PRIVATE_HOSTS: mock-external
       SSL_CERT_FILE: /certs/ca.crt
     volumes:

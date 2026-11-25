@@ -640,13 +640,22 @@ func (s *server) orderPayments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	behavior := s.razorpayBehavior
 	orderID := r.PathValue("id")
 	if _, exists := s.razorpayOrders[orderID]; !exists {
+		s.mu.Unlock()
 		http.Error(w, "order not found", http.StatusNotFound)
 		return
 	}
 	items := append([]fakeRazorpayPayment(nil), s.razorpayPayments[orderID]...)
+	s.mu.Unlock()
+	if behavior.DelayMS > 0 {
+		time.Sleep(time.Duration(behavior.DelayMS) * time.Millisecond)
+	}
+	if behavior.Status != 0 {
+		http.Error(w, "configured Razorpay failure", behavior.Status)
+		return
+	}
 	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
 }
 func (s *server) payment(w http.ResponseWriter, r *http.Request) {
