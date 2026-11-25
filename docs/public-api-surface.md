@@ -40,5 +40,12 @@ ID-addressed cancellation route. A consumer cannot submit a plan slug, price,
 billing model, environment, or payment-verification status. Those outcomes are
 derived and verified by Billmesh.
 
+Phase-one paid transitions create one-time Razorpay Orders only. The API does
+not create or represent a provider subscription, customer mandate, or automatic
+renewal. A paid subscription without another verified payment enters its
+snapshotted grace/expiration policy; clients must not present it as auto-renewing.
+The recurring design gate is documented in
+[`razorpay-recurring-design-gate.md`](razorpay-recurring-design-gate.md).
+
 Because Billmesh is a fresh application, this is the only v1 contract; there is
 no legacy compatibility surface.

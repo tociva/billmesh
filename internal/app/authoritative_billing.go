@@ -776,27 +776,27 @@ func (a *API) billingSnapshot(w http.ResponseWriter, r *http.Request) {
 	entitlements := map[string]any{}
 	var subID, planID uuid.UUID
 	var status, planFamilyID, planName, planDescription, model, currency, interval string
-	var start, end *time.Time
+	var start, end, graceEnd *time.Time
 	var cancelAtPeriodEnd bool
 	var price, credits, planVersion, subscriptionPolicyVersion, entitlementSchemaVersion int64
 	var rawEntitlements map[string]any
 	var snapshottedEntitlementSchema products.EntitlementSchema
 	var subscriptionPolicy products.BillingPolicy
-	err = tx.QueryRow(r.Context(), `SELECT id,plan_id,plan_family_id,status,current_period_start,current_period_end,cancel_at_period_end,plan_name,plan_description,
+	err = tx.QueryRow(r.Context(), `SELECT id,plan_id,plan_family_id,status,current_period_start,current_period_end,grace_period_end,cancel_at_period_end,plan_name,plan_description,
 		billing_model,price_minor,currency,billing_interval,included_credits,entitlements,entitlement_schema_version,entitlement_schema,plan_version,billing_policy,billing_policy_version
 		FROM subscriptions WHERE account_id=$1 AND product_id=$2 ORDER BY created_at DESC LIMIT 1`, accountID, productID).
-		Scan(&subID, &planID, &planFamilyID, &status, &start, &end, &cancelAtPeriodEnd, &planName, &planDescription, &model, &price, &currency,
+		Scan(&subID, &planID, &planFamilyID, &status, &start, &end, &graceEnd, &cancelAtPeriodEnd, &planName, &planDescription, &model, &price, &currency,
 			&interval, &credits, &rawEntitlements, &entitlementSchemaVersion, &snapshottedEntitlementSchema, &planVersion, &subscriptionPolicy, &subscriptionPolicyVersion)
 	if err == nil {
 		subscription = &billingSnapshotSubscription{
-			ID: subID, Status: status, CurrentPeriodStart: start, CurrentPeriodEnd: end,
+			ID: subID, Status: status, CurrentPeriodStart: start, CurrentPeriodEnd: end, GracePeriodEnd: graceEnd,
 			CancelAtPeriodEnd: cancelAtPeriodEnd,
 			BillingPolicy:     subscriptionPolicy, BillingPolicyVersion: subscriptionPolicyVersion,
 			EffectivePlan: billingSnapshotEffectivePlan{ID: planID, PlanFamilyID: planFamilyID, Version: planVersion, Name: planName, Description: planDescription,
 				BillingModel: model, PriceMinor: price, Currency: currency, BillingInterval: interval,
 				IncludedCredits: credits, EntitlementSchemaVersion: entitlementSchemaVersion, EntitlementSchema: snapshottedEntitlementSchema, Entitlements: rawEntitlements},
 		}
-		if status == "active" {
+		if status == "active" || (status == "past_due" && graceEnd != nil && graceEnd.After(time.Now().UTC())) {
 			entitlements = rawEntitlements
 		}
 	} else if errors.Is(err, pgx.ErrNoRows) {

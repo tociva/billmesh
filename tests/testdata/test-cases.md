@@ -3545,6 +3545,10 @@ These cases are exercised by the current test suites and were omitted from the c
 | SUB-026 | I | Prevent duplicate plan changes when a request is retried. |
 | SUB-027 | E | Preserve included and purchased credit treatment after a plan change. |
 | SUB-028 | E | Resolve out-of-order cancellation, payment, and renewal events correctly. |
+| SUB-029 | E | Prove a phase-one paid transition creates one Razorpay Order without a provider subscription or mandate. |
+| SUB-030 | E | Move an unpaid manual renewal through past-due grace and expiry without creating a payment or provider order. |
+| SUB-031 | E | Make scheduled period-end cancellation win without entering dunning or attempting renewal. |
+| SUB-032 | E | Preserve snapshotted entitlements during grace and remove them after expiry or cancellation. |
 | TEST-002 | E | Verify E2E tests use the actual API and worker rather than mocked application logic. |
 | TEST-004 | E | Prevent fixture and database state from leaking between independent scenarios. |
 | WAL-019 | I | Reserve credits across multiple grants when one grant cannot cover the requested amount. |

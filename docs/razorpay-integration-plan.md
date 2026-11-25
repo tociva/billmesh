@@ -459,10 +459,12 @@ acceptance evidence is available.
 
 ### Verification evidence
 
-- [ ] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
-  ./tests/testkit` — focused contract and application tests pass.
-- [ ] `make test-e2e` — failed-payment, late-capture, refund, entitlement-policy,
-  mismatch, atomicity, and rollback scenarios pass.
+- [x] `gotestsum --format testname -- -v ./internal/app ./tests/fakeserver
+  ./tests/testkit` — focused contract and application tests passed on
+  2026-11-25.
+- [x] `make test-e2e` — all 79 end-to-end tests passed on 2026-11-25,
+  including failed-payment, late-capture, refund, entitlement-policy, mismatch,
+  atomicity, and rollback scenarios.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
   ./...` — production build completed successfully on 2026-11-25; Go emitted
   only the known sandbox stat-cache warning.
@@ -471,32 +473,47 @@ acceptance evidence is available.
 
 ### Phase-one tests and behavior
 
-- [ ] Add a test documenting that phase-one paid transitions create one-time
+- [x] Add a test documenting that phase-one paid transitions create one-time
   Razorpay Orders, not Razorpay Subscriptions.
-- [ ] Add a test proving phase-one configuration cannot claim that a recurring
+- [x] Add a test proving phase-one configuration cannot claim that a recurring
   mandate was created.
-- [ ] Add a period-end test documenting the current paid-subscription behavior
+- [x] Add a period-end test documenting the current paid-subscription behavior
   when no renewal payment exists.
-- [ ] Add tests for grace-period, past-due, expiry, cancellation, and late capture.
-- [ ] Ensure customer-facing copy does not promise automatic renewal before the
+- [x] Add tests for grace-period, past-due, expiry, cancellation, and late capture.
+- [x] Ensure customer-facing copy does not promise automatic renewal before the
   recurring phase is complete.
 
 ### Recurring phase design gate
 
-- [ ] Decide whether Razorpay Subscriptions or another mandate flow owns recurring
-  collection.
-- [ ] Map Billmesh plan versions to provider plans without making the provider the
+- [x] Record that no recurring provider flow is approved and keep the design gate
+  closed until Razorpay Subscriptions, UPI AutoPay, and alternatives are reviewed.
+- [x] Define how Billmesh plan versions will map to provider plans without making the provider the
   catalogue source of truth.
-- [ ] Define provider customer, subscription, mandate, charge, invoice, and
+- [x] Define provider customer, subscription, mandate, charge, invoice, and
   payment identifiers in the Billmesh schema.
-- [ ] Define activation, authentication, pending, active, halted, cancelled,
+- [x] Define activation, authentication, pending, active, halted, cancelled,
   completed, and expired state transitions.
-- [ ] Define plan change, proration, pause/resume, cancellation, retry, dunning,
+- [x] Define plan change, proration, pause/resume, cancellation, retry, dunning,
   mandate expiry, and renewal reconciliation behavior.
-- [ ] Add failing unit, integration, E2E, security, and recovery tests for every
-  approved recurring state transition before implementing it.
-- [ ] Run a separate architecture and production-readiness review before enabling
-  any recurring policy flag.
+- [x] Define the mandatory failing unit, integration, E2E, security, and recovery
+  test gate for every future approved recurring state transition.
+- [x] Require a separate architecture and production-readiness review before
+  enabling any recurring policy flag.
+
+The closed-gate design, identifier model, state transitions, behavior matrix,
+test requirements, and production-readiness gate are recorded in
+[`razorpay-recurring-design-gate.md`](razorpay-recurring-design-gate.md).
+
+### Verification evidence
+
+- [ ] `gotestsum --format testname -- -v ./internal/products ./tests/unit/plans
+  ./internal/app ./tests/fakeserver ./tests/testkit` — focused policy and contract
+  tests pass.
+- [ ] `make test-e2e` — one-time-order boundary, manual renewal, grace, expiry,
+  cancellation, and late-capture scenarios pass.
+- [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
+  ./...` — production build completed successfully on 2026-11-25; Go emitted
+  only the known sandbox stat-cache warning.
 
 ## 11. Security and abuse resistance
 

@@ -1953,14 +1953,14 @@ components:
               items: { type: string, enum: [description, price, entitlements, availability, effective_dates] }
             trial_enabled: { type: boolean }
             trial_days: { type: integer, minimum: 0, maximum: 3650 }
-            trial_conversion: { type: string, enum: [expire, require_checkout, automatic_mandate] }
+            trial_conversion: { type: string, enum: [expire, require_checkout] }
         lifecycle:
           type: object
           additionalProperties: false
           required: [free_to_paid, paid_to_paid, downgrade, cancellation_default, allow_immediate_cancel, immediate_cancel_refund, allow_cancellation_withdraw, reactivation, over_limit, renewal, grace_period_days, dunning, expiration, refund_entitlements, chargeback_entitlements]
           properties:
             free_to_paid: { type: string, const: immediate_after_capture }
-            paid_to_paid: { type: string, enum: [checkout, mandate_proration, period_end] }
+            paid_to_paid: { type: string, enum: [checkout, period_end] }
             downgrade: { type: string, const: period_end }
             cancellation_default: { type: string, enum: [period_end, immediate] }
             allow_immediate_cancel: { type: boolean }
@@ -1968,7 +1968,7 @@ components:
             allow_cancellation_withdraw: { type: boolean }
             reactivation: { type: string, enum: [resume, new_transition] }
             over_limit: { type: string, enum: [block_new, grace_period, reject_transition] }
-            renewal: { type: string, enum: [provider_event, manual] }
+            renewal: { type: string, const: manual }
             grace_period_days: { type: integer, minimum: 0, maximum: 365 }
             dunning: { type: string, enum: [none, grace_period] }
             expiration: { type: string, enum: [cancel, downgrade_to_default] }
@@ -1998,7 +1998,7 @@ components:
               uniqueItems: true
               items: { type: string, format: uri }
             presentation: { type: string, enum: [inline, modal, provider_hosted] }
-            recurring_mandate: { type: boolean }
+            recurring_mandate: { type: boolean, const: false }
             confirmation: { type: string, enum: [webhook, poll_and_webhook] }
     BillingPolicyMetadata:
       type: object
@@ -2386,12 +2386,13 @@ components:
     BillingSnapshotSubscription:
       type: object
       additionalProperties: false
-      required: [id, status, current_period_start, current_period_end, cancel_at_period_end, billing_policy, billing_policy_version, effective_plan]
+      required: [id, status, current_period_start, current_period_end, grace_period_end, cancel_at_period_end, billing_policy, billing_policy_version, effective_plan]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         status: { type: string, enum: [pending, active, past_due, cancelled, expired] }
         current_period_start: { type: [string, "null"], format: date-time }
         current_period_end: { type: [string, "null"], format: date-time }
+        grace_period_end: { type: [string, "null"], format: date-time }
         cancel_at_period_end: { type: boolean }
         billing_policy: { $ref: "#/components/schemas/BillingPolicy" }
         billing_policy_version: { type: integer, format: int64, minimum: 1 }

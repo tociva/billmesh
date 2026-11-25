@@ -280,8 +280,8 @@ func (w *Worker) processSubscriptions(ctx context.Context) error {
 			var policy products.BillingPolicy
 			var policyVersion int64
 			if err := tx.QueryRow(ctx, `SELECT s.account_id,s.product_id,s.plan_id,s.status,s.price_minor,s.included_credits,s.billing_interval,
-				s.current_period_end,s.grace_period_end,s.cancel_at_period_end,p.billing_policy,p.billing_policy_version
-				FROM subscriptions s JOIN products p ON p.id=s.product_id WHERE s.id=$1 FOR UPDATE OF s`, id).
+				s.current_period_end,s.grace_period_end,s.cancel_at_period_end,s.billing_policy,s.billing_policy_version
+				FROM subscriptions s WHERE s.id=$1 FOR UPDATE`, id).
 				Scan(&accountID, &productID, &planID, &status, &price, &credits, &interval, &periodEnd, &graceEnd, &cancel, &policy, &policyVersion); err != nil {
 				return err
 			}

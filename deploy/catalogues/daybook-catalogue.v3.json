@@ -103,7 +103,7 @@
           "allow_cancellation_withdraw": false,
           "reactivation": "new_transition",
           "over_limit": "block_new",
-          "renewal": "provider_event",
+          "renewal": "manual",
           "grace_period_days": 3,
           "dunning": "grace_period",
           "expiration": "cancel",

@@ -16,6 +16,8 @@ func TestDefaultBillingPolicyIsValidAndStable(t *testing.T) {
 	require.Equal(t, 1, policy.Customer.FreeAllowance)
 	require.Equal(t, "explicit_transition", policy.Onboarding.InitialPlan)
 	require.Equal(t, "period_end", policy.Lifecycle.Downgrade)
+	require.Equal(t, "manual", policy.Lifecycle.Renewal)
+	require.False(t, policy.Checkout.RecurringMandate)
 	require.Equal(t, 300, policy.SnapshotMaxAgeSeconds())
 }
 
@@ -38,7 +40,10 @@ func TestBillingPolicyRejectsUnsafeOrIncompatibleConfiguration(t *testing.T) {
 			p.Lifecycle.Dunning = "grace_period"
 			p.Lifecycle.GracePeriodDays = 0
 		}, "grace_period_days"},
-		{"mandate mode without mandate", func(p *products.BillingPolicy) { p.Lifecycle.PaidToPaid = "mandate_proration" }, "requires recurring mandates"},
+		{"mandate mode in phase one", func(p *products.BillingPolicy) { p.Lifecycle.PaidToPaid = "mandate_proration" }, "lifecycle.paid_to_paid"},
+		{"automatic trial mandate in phase one", func(p *products.BillingPolicy) { p.Catalogue.TrialConversion = "automatic_mandate" }, "catalogue.trial_conversion"},
+		{"provider renewal in phase one", func(p *products.BillingPolicy) { p.Lifecycle.Renewal = "provider_event" }, "lifecycle.renewal"},
+		{"recurring mandate in phase one", func(p *products.BillingPolicy) { p.Checkout.RecurringMandate = true }, "not supported in phase one"},
 		{"short degraded age", func(p *products.BillingPolicy) { p.Projection.DegradedSeconds = 60 }, "degraded duration"},
 		{"duplicate presentation field", func(p *products.BillingPolicy) {
 			p.Catalogue.PresentationFields = []string{"price", "price"}

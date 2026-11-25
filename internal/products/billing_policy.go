@@ -102,7 +102,7 @@ func DefaultBillingPolicy() BillingPolicy {
 		Lifecycle: SubscriptionPolicy{
 			FreeToPaid: "immediate_after_capture", PaidToPaid: "checkout", Downgrade: "period_end",
 			CancellationDefault: "period_end", AllowImmediateCancel: true, ImmediateCancelRefund: "none",
-			Reactivation: "new_transition", OverLimit: "block_new", Renewal: "provider_event", GracePeriodDays: 3,
+			Reactivation: "new_transition", OverLimit: "block_new", Renewal: "manual", GracePeriodDays: 3,
 			Dunning: "grace_period", Expiration: "cancel", RefundEntitlements: "revoke",
 			ChargebackEntitlements: "revoke",
 		},
@@ -132,15 +132,15 @@ func BillingPolicyContract() BillingPolicyMetadata {
 			"onboarding.ineligible_action":      {"reject", "restricted", "require_paid_checkout"},
 			"onboarding.deletion_retention":     {"retain", "anonymize"},
 			"catalogue.access":                  {"public", "application_token"},
-			"catalogue.trial_conversion":        {"expire", "require_checkout", "automatic_mandate"},
+			"catalogue.trial_conversion":        {"expire", "require_checkout"},
 			"lifecycle.free_to_paid":            {"immediate_after_capture"},
-			"lifecycle.paid_to_paid":            {"checkout", "mandate_proration", "period_end"},
+			"lifecycle.paid_to_paid":            {"checkout", "period_end"},
 			"lifecycle.downgrade":               {"period_end"},
 			"lifecycle.cancellation_default":    {"period_end", "immediate"},
 			"lifecycle.immediate_cancel_refund": {"none", "prorated", "full"},
 			"lifecycle.reactivation":            {"resume", "new_transition"},
 			"lifecycle.over_limit":              {"block_new", "grace_period", "reject_transition"},
-			"lifecycle.renewal":                 {"provider_event", "manual"},
+			"lifecycle.renewal":                 {"manual"},
 			"lifecycle.dunning":                 {"none", "grace_period"},
 			"lifecycle.expiration":              {"cancel", "downgrade_to_default"},
 			"lifecycle.refund_entitlements":     {"retain", "revoke"},
@@ -209,6 +209,12 @@ func ValidateBillingPolicy(p BillingPolicy) error {
 	}
 	if p.Lifecycle.Dunning == "grace_period" && p.Lifecycle.GracePeriodDays == 0 {
 		return errors.New("billing policy lifecycle.grace_period_days is required for grace-period dunning")
+	}
+	if p.Lifecycle.Renewal != "manual" {
+		return errors.New("automatic provider renewal is not supported in phase one")
+	}
+	if p.Checkout.RecurringMandate {
+		return errors.New("recurring mandates are not supported in phase one")
 	}
 	if p.Lifecycle.CancellationDefault == "immediate" && !p.Lifecycle.AllowImmediateCancel {
 		return errors.New("billing policy cannot default to immediate cancellation when immediate cancellation is disabled")

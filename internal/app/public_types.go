@@ -109,6 +109,7 @@ type billingSnapshotSubscription struct {
 	Status               string                       `json:"status"`
 	CurrentPeriodStart   *time.Time                   `json:"current_period_start"`
 	CurrentPeriodEnd     *time.Time                   `json:"current_period_end"`
+	GracePeriodEnd       *time.Time                   `json:"grace_period_end"`
 	CancelAtPeriodEnd    bool                         `json:"cancel_at_period_end"`
 	BillingPolicy        products.BillingPolicy       `json:"billing_policy"`
 	BillingPolicyVersion int64                        `json:"billing_policy_version"`

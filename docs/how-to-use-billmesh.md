@@ -198,6 +198,12 @@ when no degraded window exists, fail closed for protected operations.
 
 ### 5. Request a subscription transition
 
+Phase-one paid transitions purchase one billing period through a one-time
+Razorpay Order. They do not create a Razorpay Subscription or payment mandate,
+and they do not promise automatic renewal. The authoritative billing policy
+therefore reports `lifecycle.renewal: manual` and
+`checkout.recurring_mandate: false`.
+
 Call `POST /v1/subscription-transitions` with:
 
 - the opaque `plan_id` selected from the current catalogue;
@@ -231,6 +237,13 @@ A provider redirect is only a user-experience signal. After redirect, webhook,
 or polling completion, conditionally fetch the billing snapshot. Grant paid
 access only when the snapshot has a newer applicable revision and reports the
 subscription and entitlements as effective.
+
+When a paid period ends without another verified payment, the snapshot moves to
+`past_due` and includes `grace_period_end`. Existing access remains effective
+only until that timestamp. It then expires according to the snapshotted policy.
+A scheduled period-end cancellation becomes `cancelled` instead of entering the
+grace period. Applications should describe this as manual continuation or
+another checkout, never as automatic renewal.
 
 ### 7. Cancel or withdraw cancellation
 
