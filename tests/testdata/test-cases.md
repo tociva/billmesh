@@ -3535,6 +3535,7 @@ These cases are exercised by the current test suites and were omitted from the c
 | PAY-044 | U | Require Basic Auth on every mocked Razorpay order, payment, and refund read API. |
 | PAY-045 | U | Preserve Razorpay collection envelopes and pagination for order inventory and payment refunds. |
 | PAY-046 | U | Inject throttling, server failures, delays, and malformed JSON consistently across every mocked Razorpay read API. |
+| PAY-047 | E | Complete an idempotent credit-pack checkout journey using only server-owned order values and expose purchased credits only after capture confirmation. |
 | PERF-013 | P | Benchmark reservation creation and settlement as one financial operation. |
 | PERF-014 | P | Benchmark concurrent Razorpay checkout-order creation against the fake provider. |
 | PERF-015 | P | Benchmark concurrent captured-payment webhook validation and fulfilment. |

@@ -15,7 +15,8 @@ makefile="$repository_root/Makefile"
 ci_workflow="$repository_root/.github/workflows/ci.yml"
 pr_template="$repository_root/.github/pull_request_template.md"
 consumer_package="$consumer_root/package.json"
-consumer_journey="$consumer_root/apps/console/src/app/billing/checkout-journey.e2e.spec.ts"
+consumer_subscription_journey="$consumer_root/apps/console/src/app/billing/checkout-journey.e2e.spec.ts"
+consumer_credit_pack_journey="$consumer_root/apps/console/src/app/billing/credit-pack-checkout-journey.e2e.spec.ts"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
@@ -73,15 +74,16 @@ require_text "$pr_template" '## Scenario IDs'
 require_text "$pr_template" '## TDD evidence'
 require_text "$pr_template" '## Test command'
 require_text "$pr_template" 'Failing test observed before implementation:'
-if [ -f "$consumer_package" ] && [ -f "$consumer_journey" ]; then
+if [ -f "$consumer_package" ] && [ -f "$consumer_subscription_journey" ] && [ -f "$consumer_credit_pack_journey" ]; then
   require_text "$consumer_package" '"quality:checkout"'
-  require_text "$consumer_journey" "describe('Razorpay checkout journey'"
+  require_text "$consumer_subscription_journey" "describe('Razorpay checkout journey'"
+  require_text "$consumer_credit_pack_journey" "describe('Razorpay credit-pack checkout journey'"
 elif [ "${REQUIRE_BILLMESH_WEB:-false}" = true ]; then
   fail "consumer quality assets are required but unavailable under $consumer_root"
 fi
 pass 'payment test, PR scenario/TDD evidence, and composed consumer journey policies are mandatory'
 
-for scenario in PERF-013 PERF-014 PERF-015 PAY-044 PAY-045 PAY-046; do
+for scenario in PERF-013 PERF-014 PERF-015 PAY-044 PAY-045 PAY-046 PAY-047; do
   require_text "$repository_root/tests/testdata/test-cases.md" "$scenario"
 done
 pass 'quality and mock-provider scenarios are named in the test manifest'

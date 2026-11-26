@@ -706,6 +706,13 @@ The checkboxes remain open until the operator supplies passing output.
 
 ## 15. Razorpay Test Mode staging acceptance
 
+Offline prerequisite: the console credit-pack flow and composed `PAY-047`
+journey cover server-owned pricing, idempotent order creation, duplicate-click
+protection, dismissal, provider failure, retry, and post-capture confirmation
+with mocked Razorpay Checkout. This does not complete any staging checkbox;
+each item below remains open until it is exercised with separately generated
+Test Mode credentials in the staging environment.
+
 - [ ] Create a credit-pack order and complete a successful Test Mode payment.
 - [ ] Verify the Razorpay order is paid and payment is captured.
 - [ ] Verify Billmesh records exactly one payment, grant, ledger mutation, invoice,

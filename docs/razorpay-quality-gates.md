@@ -18,7 +18,7 @@ Razorpay account, real API key, Dashboard webhook, or public endpoint.
 | Contracts | `tools/api/ci/run-razorpay-quality-gates.sh contracts` | OpenAPI, environment, Dashboard, quality, Helm, and deployment contracts pass |
 | Test policy | `tools/api/ci/run-razorpay-quality-gates.sh policy` | No skipped/focused Razorpay test exists; PRs must link named scenarios and TDD evidence |
 | Security scans | `tools/api/ci/run-razorpay-quality-gates.sh security` | Formatting, vet, govulncheck, Gitleaks, Trivy filesystem, and Trivy runtime-image scans pass |
-| Consumer | `tools/api/ci/run-razorpay-quality-gates.sh consumer` | Console formatting, lint, unit, component, accessibility, composed checkout journey, and production build pass |
+| Consumer | `tools/api/ci/run-razorpay-quality-gates.sh consumer` | Console formatting, lint, unit, component, accessibility, composed subscription and credit-pack checkout journeys, and production build pass |
 
 `tools/api/ci/run-razorpay-quality-gates.sh all` runs the complete matrix in
 release order. Run the individual gates while diagnosing failures; retain the
