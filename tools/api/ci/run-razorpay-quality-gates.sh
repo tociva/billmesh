@@ -57,6 +57,7 @@ case "$gate" in
     make openapi-check
     ./tools/api/ci/test-razorpay-environment-contracts.sh
     ./tools/api/ci/test-razorpay-dashboard-setup-contracts.sh
+    ./tools/api/ci/test-razorpay-production-go-live-contracts.sh
     ./tools/api/ci/test-razorpay-quality-gate-contracts.sh
     ./tools/api/ci/test-kubernetes-deployment-contracts.sh
     ;;

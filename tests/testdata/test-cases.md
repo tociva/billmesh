@@ -3558,6 +3558,7 @@ These cases are exercised by the current test suites and were omitted from the c
 | SUB-032 | E | Preserve snapshotted entitlements during grace and remove them after expiry or cancellation. |
 | TEST-002 | E | Verify E2E tests use the actual API and worker rather than mocked application logic. |
 | TEST-004 | E | Prevent fixture and database state from leaking between independent scenarios. |
+| TEST-005 | U | Reject a production Razorpay launch contract that lacks Live/Test isolation, operational approval, controlled payment/refund evidence, or rollback criteria. |
 | WAL-019 | I | Reserve credits across multiple grants when one grant cannot cover the requested amount. |
 | WAL-020 | I | Refund consumed purchased credits without silently creating an invalid negative balance. |
 | WAL-021 | I | Recalculate wallet balances from grants, ledger entries, and reservations and detect inconsistencies. |

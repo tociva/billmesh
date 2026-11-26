@@ -89,6 +89,17 @@ if [ "$payment_count" -eq 4 ]; then
     production:*) fail 'production requires an rzp_live_ Razorpay key' ;;
     *) fail 'non-production requires an rzp_test_ Razorpay key' ;;
   esac
+  [ "$(value_for RAZORPAY_KEY_SECRET)" != "$(value_for RAZORPAY_WEBHOOK_SECRET)" ] || fail 'RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET must be distinct'
+  if [ "$(value_for BILLMESH_ENVIRONMENT)" = production ]; then
+    [ "$(value_for RAZORPAY_BASE_URL)" = 'https://api.razorpay.com' ] || fail 'production RAZORPAY_BASE_URL must be https://api.razorpay.com'
+    key_present RAZORPAY_ACCOUNT_ID || fail 'production requires RAZORPAY_ACCOUNT_ID'
+    printf '%s\n' "$(value_for RAZORPAY_ACCOUNT_ID)" | grep -Eq '^acc_.+' || fail 'production RAZORPAY_ACCOUNT_ID must be a Razorpay account identifier'
+  fi
+fi
+if key_present RAZORPAY_PREVIOUS_WEBHOOK_SECRET; then
+  previous_secret=$(value_for RAZORPAY_PREVIOUS_WEBHOOK_SECRET)
+  [ "$previous_secret" != "$(value_for RAZORPAY_WEBHOOK_SECRET)" ] || fail 'RAZORPAY_PREVIOUS_WEBHOOK_SECRET must differ from RAZORPAY_WEBHOOK_SECRET'
+  [ "$previous_secret" != "$(value_for RAZORPAY_KEY_SECRET)" ] || fail 'RAZORPAY_PREVIOUS_WEBHOOK_SECRET must differ from RAZORPAY_KEY_SECRET'
 fi
 if key_present RAZORPAY_CHECKOUT_URL; then
   require_https RAZORPAY_CHECKOUT_URL

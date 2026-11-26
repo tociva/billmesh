@@ -744,6 +744,13 @@ Test Mode credentials in the staging environment.
 
 ## 16. Production go-live gate
 
+Offline prerequisite: the production runbook, safe evidence template,
+fail-closed Live/Test configuration checks, and executable `TEST-005` contract
+cover the complete go-live decision without generating credentials or touching
+Razorpay. This does not complete a production checkbox; the 13 items below
+remain open until Phase 15 is approved and authorized operators retain real
+production evidence.
+
 - [ ] Confirm Razorpay account activation/KYC and required payment methods are
   approved for Live Mode.
 - [ ] Generate Live Mode keys and store them separately from Test Mode.

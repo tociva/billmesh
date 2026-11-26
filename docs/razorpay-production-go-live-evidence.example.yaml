@@ -1,0 +1,93 @@
+# Copy to the approved restricted evidence system and populate there.
+# Never commit a populated copy. Never record API/webhook secrets, signatures,
+# raw payloads, card/bank data, tokens, or database credentials.
+schema_version: 1
+decision:
+  status: not_approved # not_approved, go, stop, rolled_back
+  launch_window_start: replace_with_utc_timestamp
+  rollback_decision_deadline: replace_with_utc_timestamp
+  approved_at: pending
+  release_version: replace_with_release_version
+  image_digest: sha256:replace_with_immutable_digest
+  launch_commander: replace_with_owner
+  independent_approver: replace_with_approver
+  incident_channel_reference: replace_with_restricted_reference
+
+merchant:
+  account_id: acc_replace_with_approved_account
+  activation_kyc_reference: replace_with_restricted_evidence
+  live_mode_reference: replace_with_restricted_evidence
+  approved_payment_methods_reference: replace_with_restricted_evidence
+  approved_currencies: [INR]
+
+configuration:
+  billmesh_environment: production
+  provider_mode: live
+  provider_base_url: https://api.razorpay.com
+  key_id_suffix: replace_with_last_8_characters_only
+  api_secret_manager_reference: replace_with_production_secret_reference
+  webhook_secret_manager_reference: replace_with_independent_production_secret_reference
+  environment_validation_reference: pending
+  capture_policy_reference: pending
+  catalogue_revision_reference: pending
+  billing_policy_revision_reference: pending
+  redirect_origin_review_reference: pending
+
+webhook:
+  webhook_id: replace_with_live_webhook_id
+  exact_url: https://replace-with-approved-production-host/v1/payments/webhook
+  alert_email_owner: replace_with_monitored_owner
+  enabled_events:
+    - payment.captured
+    - payment.failed
+    - order.paid
+    - refund.processed
+  route_probe_reference: pending
+  dashboard_verification_reference: pending
+
+operations:
+  backup_reference: pending
+  restore_drill_reference: pending
+  rollback_drill_reference: pending
+  migration_compatibility_reference: pending
+  incident_response_review_reference: pending
+  reconciliation_readiness_reference: pending
+  support_readiness_reference: pending
+  dashboard_alert_reference: pending
+  paging_drill_reference: pending
+  finance_daily_reconciliation_reference: pending
+  tax_invoice_approval_reference: pending
+  checkout_containment_reference: pending
+
+smoke_payment:
+  approved_internal_account_reference: pending
+  amount_minor: replace_with_minimum_non_zero_amount
+  currency: INR
+  billmesh_payment_id: pending
+  provider_order_id: pending
+  provider_payment_id: pending
+  captured_reference: pending
+  single_fulfilment_reference: pending
+  invoice_snapshot_reference: pending
+  webhook_reference: pending
+  reconciliation_reference: pending
+  sensitive_data_review_reference: pending
+
+smoke_refund:
+  provider_refund_id: pending
+  full_refund_reference: pending
+  entitlement_reversal_reference: pending
+  credit_note_ledger_reference: pending
+  webhook_reference: pending
+  reconciliation_reference: pending
+
+approvals:
+  engineering: pending
+  security: pending
+  finance: pending
+  product: pending
+  operations: pending
+  support: pending
+  tax_compliance: pending
+  residual_risks_reference: pending
+  final_decision_reference: pending

@@ -98,6 +98,79 @@ func TestLoadRazorpayRejectsEnvironmentKeyMismatch(t *testing.T) {
 	}
 }
 
+func TestLoadRazorpayRequiresProductionProviderIdentity(t *testing.T) {
+	t.Run("valid live configuration", func(t *testing.T) {
+		setRazorpayEnvironment(t, "production", "rzp_live_billmesh")
+
+		config, err := loadRazorpay()
+
+		require.NoError(t, err)
+		require.Equal(t, razorpayProductionBaseURL, config.BaseURL)
+		require.Equal(t, "acc_billmesh", config.AccountID)
+	})
+
+	t.Run("alternate provider endpoint", func(t *testing.T) {
+		setRazorpayEnvironment(t, "production", "rzp_live_billmesh")
+		t.Setenv("RAZORPAY_BASE_URL", "https://provider-proxy.example")
+
+		_, err := loadRazorpay()
+
+		require.ErrorContains(t, err, "production RAZORPAY_BASE_URL")
+	})
+
+	t.Run("missing merchant account", func(t *testing.T) {
+		setRazorpayEnvironment(t, "production", "rzp_live_billmesh")
+		t.Setenv("RAZORPAY_ACCOUNT_ID", "")
+
+		_, err := loadRazorpay()
+
+		require.ErrorContains(t, err, "RAZORPAY_ACCOUNT_ID")
+	})
+
+	t.Run("malformed merchant account", func(t *testing.T) {
+		setRazorpayEnvironment(t, "production", "rzp_live_billmesh")
+		t.Setenv("RAZORPAY_ACCOUNT_ID", "merchant_billmesh")
+
+		_, err := loadRazorpay()
+
+		require.ErrorContains(t, err, "RAZORPAY_ACCOUNT_ID")
+	})
+}
+
+func TestLoadRazorpayRejectsSharedSecrets(t *testing.T) {
+	t.Run("api and webhook", func(t *testing.T) {
+		setRazorpayEnvironment(t, "development", "rzp_test_billmesh")
+		t.Setenv("RAZORPAY_WEBHOOK_SECRET", "provider-secret-value")
+
+		_, err := loadRazorpay()
+
+		require.ErrorContains(t, err, "must be distinct")
+		require.NotContains(t, err.Error(), "provider-secret-value")
+	})
+
+	t.Run("previous and current webhook", func(t *testing.T) {
+		setRazorpayEnvironment(t, "development", "rzp_test_billmesh")
+		t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET", "webhook-secret-value")
+		t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT", "2099-01-02T03:04:05Z")
+
+		_, err := loadRazorpay()
+
+		require.ErrorContains(t, err, "must be distinct")
+		require.NotContains(t, err.Error(), "webhook-secret-value")
+	})
+
+	t.Run("previous webhook and API", func(t *testing.T) {
+		setRazorpayEnvironment(t, "development", "rzp_test_billmesh")
+		t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET", "provider-secret-value")
+		t.Setenv("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT", "2099-01-02T03:04:05Z")
+
+		_, err := loadRazorpay()
+
+		require.ErrorContains(t, err, "must be distinct")
+		require.NotContains(t, err.Error(), "provider-secret-value")
+	})
+}
+
 func TestLoadRazorpayRejectsUnknownRuntimeEnvironment(t *testing.T) {
 	setRazorpayEnvironment(t, "mystery", "rzp_test_billmesh")
 	_, err := loadRazorpay()
@@ -187,6 +260,9 @@ func setRazorpayEnvironment(t *testing.T, environment, keyID string) {
 	t.Setenv("RAZORPAY_KEY_ID", keyID)
 	t.Setenv("RAZORPAY_KEY_SECRET", "provider-secret-value")
 	t.Setenv("RAZORPAY_WEBHOOK_SECRET", "webhook-secret-value")
+	if environment == "production" {
+		t.Setenv("RAZORPAY_ACCOUNT_ID", "acc_billmesh")
+	}
 }
 
 func clearRazorpayEnvironment(t *testing.T) {

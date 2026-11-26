@@ -187,6 +187,10 @@ the production endpoint, a production alert owner, a production inventory
 record, and an independent route/delivery verification. Never promote Test Mode
 keys, secrets, webhook IDs, or provider resource IDs into production.
 
+The full operator sequence, evidence template, minimum-value smoke payment,
+refund, approval, containment, and rollback decision are defined in the
+[`Razorpay production go-live`](razorpay-production-go-live.md) runbook.
+
 ## Operator verification commands
 
 Run these after making the configuration changes and share only their pass/fail

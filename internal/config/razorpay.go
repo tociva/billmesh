@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const razorpayProductionBaseURL = "https://api.razorpay.com"
+
 type RazorpayConfig struct {
 	Enabled                        bool
 	Environment                    string
@@ -82,6 +84,9 @@ func loadRazorpay() (RazorpayConfig, error) {
 	if err := requireHTTPSURL(values["RAZORPAY_BASE_URL"], "RAZORPAY_BASE_URL"); err != nil {
 		return RazorpayConfig{}, err
 	}
+	if values["RAZORPAY_KEY_SECRET"] == values["RAZORPAY_WEBHOOK_SECRET"] {
+		return RazorpayConfig{}, fmt.Errorf("RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET must be distinct")
+	}
 	if checkoutURL != "" {
 		if err := requireHTTPSURL(checkoutURL, "RAZORPAY_CHECKOUT_URL"); err != nil {
 			return RazorpayConfig{}, err
@@ -97,6 +102,9 @@ func loadRazorpay() (RazorpayConfig, error) {
 			return RazorpayConfig{}, fmt.Errorf("RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT must use RFC3339")
 		}
 		previousWebhookSecretExpiresAt = &parsed
+		if previousWebhookSecret == values["RAZORPAY_WEBHOOK_SECRET"] || previousWebhookSecret == values["RAZORPAY_KEY_SECRET"] {
+			return RazorpayConfig{}, fmt.Errorf("RAZORPAY_PREVIOUS_WEBHOOK_SECRET must be distinct from active Razorpay secrets")
+		}
 	}
 	expectedPrefix := "rzp_test_"
 	if environment == "production" {
@@ -105,8 +113,17 @@ func loadRazorpay() (RazorpayConfig, error) {
 	if !strings.HasPrefix(values["RAZORPAY_KEY_ID"], expectedPrefix) {
 		return RazorpayConfig{}, fmt.Errorf("RAZORPAY_KEY_ID must start with %s in %s", expectedPrefix, environment)
 	}
+	baseURL := strings.TrimRight(values["RAZORPAY_BASE_URL"], "/")
+	if environment == "production" {
+		if baseURL != razorpayProductionBaseURL {
+			return RazorpayConfig{}, fmt.Errorf("production RAZORPAY_BASE_URL must be %s", razorpayProductionBaseURL)
+		}
+		if !strings.HasPrefix(accountID, "acc_") || len(accountID) <= len("acc_") {
+			return RazorpayConfig{}, fmt.Errorf("production RAZORPAY_ACCOUNT_ID must be a Razorpay account identifier")
+		}
+	}
 	return RazorpayConfig{
-		Enabled: true, Environment: environment, BaseURL: strings.TrimRight(values["RAZORPAY_BASE_URL"], "/"),
+		Enabled: true, Environment: environment, BaseURL: baseURL,
 		KeyID: values["RAZORPAY_KEY_ID"], KeySecret: values["RAZORPAY_KEY_SECRET"],
 		CheckoutURL: strings.TrimRight(checkoutURL, "/"), WebhookSecret: values["RAZORPAY_WEBHOOK_SECRET"],
 		AccountID: accountID, PreviousWebhookSecret: previousWebhookSecret,

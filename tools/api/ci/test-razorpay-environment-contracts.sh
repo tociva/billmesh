@@ -122,6 +122,45 @@ write_base_environment "$production_test" production
 append_razorpay "$production_test" https://api.razorpay.com rzp_test_billmesh
 expect_invalid "test key in production" "$production_test"
 
+production_live="$temporary_dir/production-live.env"
+write_base_environment "$production_live" production
+append_razorpay "$production_live" https://api.razorpay.com rzp_live_billmesh
+echo 'RAZORPAY_ACCOUNT_ID=acc_billmesh' >>"$production_live"
+expect_valid "live key and merchant identity in production" "$production_live"
+
+production_proxy="$temporary_dir/production-proxy.env"
+write_base_environment "$production_proxy" production
+append_razorpay "$production_proxy" https://provider-proxy.example rzp_live_billmesh
+echo 'RAZORPAY_ACCOUNT_ID=acc_billmesh' >>"$production_proxy"
+expect_invalid "alternate provider endpoint in production" "$production_proxy"
+
+production_missing_account="$temporary_dir/production-missing-account.env"
+write_base_environment "$production_missing_account" production
+append_razorpay "$production_missing_account" https://api.razorpay.com rzp_live_billmesh
+expect_invalid "missing merchant identity in production" "$production_missing_account"
+
+production_malformed_account="$temporary_dir/production-malformed-account.env"
+write_base_environment "$production_malformed_account" production
+append_razorpay "$production_malformed_account" https://api.razorpay.com rzp_live_billmesh
+echo 'RAZORPAY_ACCOUNT_ID=merchant_billmesh' >>"$production_malformed_account"
+expect_invalid "malformed merchant identity in production" "$production_malformed_account"
+
+shared_secrets="$temporary_dir/shared-secrets.env"
+write_base_environment "$shared_secrets" development
+append_razorpay "$shared_secrets" https://api.razorpay.com rzp_test_billmesh
+sed -i.bak 's/RAZORPAY_WEBHOOK_SECRET=webhook-secret/RAZORPAY_WEBHOOK_SECRET=provider-secret/' "$shared_secrets"
+rm -f "$shared_secrets.bak"
+expect_invalid "shared API and webhook secret" "$shared_secrets"
+
+shared_previous_secret="$temporary_dir/shared-previous-secret.env"
+write_base_environment "$shared_previous_secret" development
+append_razorpay "$shared_previous_secret" https://api.razorpay.com rzp_test_billmesh
+cat >>"$shared_previous_secret" <<EOF
+RAZORPAY_PREVIOUS_WEBHOOK_SECRET=webhook-secret
+RAZORPAY_PREVIOUS_WEBHOOK_SECRET_EXPIRES_AT=2099-01-02T03:04:05Z
+EOF
+expect_invalid "shared current and previous webhook secret" "$shared_previous_secret"
+
 checkout_only="$temporary_dir/checkout-only.env"
 write_base_environment "$checkout_only" development
 echo 'RAZORPAY_CHECKOUT_URL=https://checkout.razorpay.com' >>"$checkout_only"

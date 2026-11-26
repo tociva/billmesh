@@ -24,6 +24,8 @@ These helpers implement the Billmesh image and Kubernetes deployment contract.
   public HTTPS route reaches the application.
 - `test-razorpay-dashboard-setup-contracts.sh` verifies the fixed Dashboard
   runbook, secret-safe operational inventory, and route verifier contracts.
+- `test-razorpay-production-go-live-contracts.sh` verifies the Live/Test
+  isolation, production evidence, smoke-payment/refund, and rollback gates.
 - `run-razorpay-quality-gates.sh` is the release-order entry point for focused,
   PostgreSQL, E2E, race, failure, load, contract, policy, scan, and consumer
   checks.

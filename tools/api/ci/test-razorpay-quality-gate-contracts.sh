@@ -8,6 +8,7 @@ runner="$script_dir/run-razorpay-quality-gates.sh"
 policy="$script_dir/verify-razorpay-test-policy.sh"
 scanner="$script_dir/scan-razorpay-release.sh"
 image_verifier="$script_dir/build-and-verify-api-image.sh"
+production_contract="$script_dir/test-razorpay-production-go-live-contracts.sh"
 gitleaks_config="$repository_root/.gitleaks.toml"
 dockerfile="$repository_root/deploy/Dockerfile"
 plan="$repository_root/docs/razorpay-integration-plan.md"
@@ -26,7 +27,7 @@ require_text() {
   grep -Fq -- "$expected" "$file" || fail "$file does not contain: $expected"
 }
 
-for file in "$runner" "$policy" "$scanner" "$image_verifier" "$gitleaks_config" "$dockerfile" "$plan" "$makefile" "$ci_workflow" "$pr_template"; do
+for file in "$runner" "$policy" "$scanner" "$image_verifier" "$production_contract" "$gitleaks_config" "$dockerfile" "$plan" "$makefile" "$ci_workflow" "$pr_template"; do
   [ -f "$file" ] || fail "missing quality-gate asset: $file"
 done
 
@@ -38,6 +39,7 @@ pass 'quality runner exposes every required gate family'
 require_text "$makefile" 'razorpay-quality:'
 require_text "$makefile" 'razorpay-quality-contracts:'
 require_text "$makefile" 'razorpay-test-policy:'
+require_text "$makefile" 'razorpay-production-contracts:'
 pass 'Makefile exposes stable quality-gate entry points'
 
 require_text "$scanner" 'govulncheck@v1.7.0'
@@ -74,6 +76,7 @@ require_text "$pr_template" '## Scenario IDs'
 require_text "$pr_template" '## TDD evidence'
 require_text "$pr_template" '## Test command'
 require_text "$pr_template" 'Failing test observed before implementation:'
+require_text "$runner" './tools/api/ci/test-razorpay-production-go-live-contracts.sh'
 if [ -f "$consumer_package" ] && [ -f "$consumer_subscription_journey" ] && [ -f "$consumer_credit_pack_journey" ]; then
   require_text "$consumer_package" '"quality:checkout"'
   require_text "$consumer_subscription_journey" "describe('Razorpay checkout journey'"

@@ -1,4 +1,4 @@
-.PHONY: build run-api run-worker migrate db-bootstrap openapi-check test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc razorpay-quality razorpay-quality-contracts razorpay-test-policy razorpay-security-scan
+.PHONY: build run-api run-worker migrate db-bootstrap openapi-check test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc razorpay-quality razorpay-quality-contracts razorpay-production-contracts razorpay-test-policy razorpay-security-scan
 
 INTEGRATION_DB_PORT ?= 5434
 export INTEGRATION_DB_PORT
@@ -69,6 +69,9 @@ razorpay-quality:
 
 razorpay-quality-contracts:
 	./tools/api/ci/test-razorpay-quality-gate-contracts.sh
+
+razorpay-production-contracts:
+	./tools/api/ci/test-razorpay-production-go-live-contracts.sh
 
 razorpay-test-policy:
 	./tools/api/ci/verify-razorpay-test-policy.sh
