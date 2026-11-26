@@ -658,8 +658,17 @@ with the secret-free inventory template in
 
 ## 14. Automated quality gates
 
-- [ ] Run all new unit tests and retain the passing result.
-- [ ] Run all payment and invoice integration tests against real PostgreSQL.
+The reproducible command and evidence matrix is documented in
+[`razorpay-quality-gates.md`](razorpay-quality-gates.md). The gate runner keeps
+all provider traffic local and exposes focused, integration, E2E, race,
+failure/recovery, load, contract, test-policy, security, and consumer groups.
+The checkboxes remain open until the operator supplies passing output.
+
+- [x] Run all new unit tests and retain the passing result. Focused backend
+  suites and repaired OpenAPI/test-manifest contracts passed on 2026-11-26.
+- [x] Run all payment and invoice integration tests against real PostgreSQL.
+  All 17 payment and invoice integration tests passed with the race detector on
+  2026-11-26.
 - [ ] Run all Razorpay E2E tests against the realistic fake provider.
 - [ ] Run the complete backend unit, integration, E2E, security, and reliability
   suites.

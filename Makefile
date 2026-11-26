@@ -1,4 +1,4 @@
-.PHONY: build run-api run-worker migrate db-bootstrap openapi-check test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc
+.PHONY: build run-api run-worker migrate db-bootstrap openapi-check test test-unit test-integration test-integration-clean test-e2e test-performance test-clean fmt sqlc razorpay-quality razorpay-quality-contracts razorpay-test-policy razorpay-security-scan
 
 INTEGRATION_DB_PORT ?= 5434
 export INTEGRATION_DB_PORT
@@ -58,11 +58,23 @@ test-performance:
 	cleanup() { $(PERFORMANCE_COMPOSE) down -v --remove-orphans; }; \
 	trap cleanup EXIT INT TERM; \
 	$(PERFORMANCE_COMPOSE) down -v --remove-orphans; \
-	$(PERFORMANCE_COMPOSE) up --build performance
+	$(PERFORMANCE_COMPOSE) up --build --abort-on-container-exit --exit-code-from performance performance
 
 test-clean:
 	$(E2E_COMPOSE) down -v --remove-orphans
 	$(PERFORMANCE_COMPOSE) down -v --remove-orphans
+
+razorpay-quality:
+	./tools/api/ci/run-razorpay-quality-gates.sh all
+
+razorpay-quality-contracts:
+	./tools/api/ci/test-razorpay-quality-gate-contracts.sh
+
+razorpay-test-policy:
+	./tools/api/ci/verify-razorpay-test-policy.sh
+
+razorpay-security-scan:
+	./tools/api/ci/scan-razorpay-release.sh
 
 fmt:
 	gofmt -w $$(find . -name '*.go' -not -path './vendor/*')

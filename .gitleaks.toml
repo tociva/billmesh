@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public TLS fixtures for the disposable IdNest E2E server"
+paths = ['''(^|/)deploy/test-certs/''']

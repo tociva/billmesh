@@ -21,11 +21,11 @@ import (
 )
 
 type fixture struct {
-	base, mock, database, token, account string
-	client                               *http.Client
-	wallets                              []string
-	tokens                               []string
-	sequence                             atomic.Uint64
+	base, mock, database, token, account, creditPack string
+	client                                           *http.Client
+	wallets                                          []string
+	tokens                                           []string
+	sequence                                         atomic.Uint64
 }
 
 func BenchmarkPerformancePlan(b *testing.B) {
@@ -55,6 +55,10 @@ func BenchmarkPerformancePlan(b *testing.B) {
 				benchmarkLedgerReconciliation(b, f)
 			case "PERF-013":
 				benchmarkReservationAndSettlement(b, f)
+			case "PERF-014":
+				benchmarkRazorpayOrders(b, f)
+			case "PERF-015":
+				benchmarkRazorpayCapturedWebhooks(b, f)
 			case "LIVE-017":
 				benchmarkSSEConnections(b, f, true)
 			default:
@@ -78,6 +82,7 @@ func newFixture(b *testing.B) *fixture {
 	f.token = f.issueToken(b, "performance-0")
 	f.account = f.create(b, http.MethodPost, "/v1/accounts", map[string]any{"name": "Performance Account", "external_ref": f.unique("account")})
 	product := f.productID(b, "daybook")
+	f.creditPack = f.creditPackID(b, "daybook")
 	for i := range 8 {
 		account := f.account
 		if i > 0 {
@@ -245,6 +250,72 @@ func benchmarkReservationAndSettlement(b *testing.B, f *fixture) {
 	})
 }
 
+type razorpayBenchmarkOrder struct {
+	PaymentID string `json:"payment_id"`
+	Checkout  struct {
+		ClientConfig struct {
+			OrderID     string `json:"order_id"`
+			AmountMinor int64  `json:"amount_minor"`
+			Currency    string `json:"currency"`
+		} `json:"client_config"`
+	} `json:"checkout"`
+}
+
+func benchmarkRazorpayOrders(b *testing.B, f *fixture) {
+	benchmarkRequests(b, true, func() error {
+		status, raw, err := f.requestWithTokenAndHeaders(f.token, http.MethodPost, "/v1/payments/orders",
+			map[string]any{"credit_pack_id": f.creditPack}, http.Header{"Idempotency-Key": []string{f.unique("checkout")}})
+		if err != nil {
+			return err
+		}
+		if status != http.StatusCreated {
+			return fmt.Errorf("create Razorpay order status %d: %s", status, raw)
+		}
+		var order razorpayBenchmarkOrder
+		if err := json.Unmarshal(raw, &order); err != nil {
+			return fmt.Errorf("decode Razorpay order: %w", err)
+		}
+		if order.PaymentID == "" || order.Checkout.ClientConfig.OrderID == "" {
+			return fmt.Errorf("Razorpay order omitted identifiers: %s", raw)
+		}
+		return nil
+	})
+}
+
+func benchmarkRazorpayCapturedWebhooks(b *testing.B, f *fixture) {
+	b.StopTimer()
+	fixtures := make([]testkit.RazorpayWebhookFixture, b.N)
+	for index := range b.N {
+		status, raw, err := f.requestWithTokenAndHeaders(f.token, http.MethodPost, "/v1/payments/orders",
+			map[string]any{"credit_pack_id": f.creditPack}, http.Header{"Idempotency-Key": []string{f.unique("webhook-order")}})
+		if err != nil || status != http.StatusCreated {
+			b.Fatalf("prepare Razorpay order: status=%d err=%v body=%s", status, err, raw)
+		}
+		var order razorpayBenchmarkOrder
+		if err := json.Unmarshal(raw, &order); err != nil {
+			b.Fatal(err)
+		}
+		if order.PaymentID == "" || order.Checkout.ClientConfig.OrderID == "" ||
+			order.Checkout.ClientConfig.AmountMinor <= 0 || order.Checkout.ClientConfig.Currency == "" {
+			b.Fatalf("prepared Razorpay order is incomplete: %s", raw)
+		}
+		paymentID := f.unique("provider-payment")
+		f.requireMock(b, http.StatusNoContent, "/test/razorpay/payments", map[string]any{
+			"id": paymentID, "order_id": order.Checkout.ClientConfig.OrderID, "status": "captured",
+			"amount": order.Checkout.ClientConfig.AmountMinor, "currency": order.Checkout.ClientConfig.Currency,
+		})
+		fixtures[index] = testkit.RazorpayPaymentCaptured(
+			f.unique("provider-event"), order.Checkout.ClientConfig.OrderID, paymentID,
+			order.Checkout.ClientConfig.AmountMinor, order.Checkout.ClientConfig.Currency,
+		)
+	}
+	var next atomic.Uint64
+	benchmarkRequests(b, true, func() error {
+		index := int(next.Add(1) - 1)
+		return f.postRazorpayWebhook(fixtures[index])
+	})
+}
+
 func benchmarkRequests(b *testing.B, parallel bool, operation func() error) {
 	b.Helper()
 	var failures atomic.Int64
@@ -320,6 +391,22 @@ func (f *fixture) productID(b *testing.B, slug string) string {
 		b.Fatalf("product %s not found in catalogue: %s", slug, raw)
 	}
 	return catalogue.Product.ID
+}
+
+func (f *fixture) creditPackID(b *testing.B, product string) string {
+	status, raw, err := f.request(http.MethodGet, "/v1/catalog?product="+product, nil)
+	if err != nil || status != http.StatusOK {
+		b.Fatalf("get credit pack catalogue: status=%d err=%v body=%s", status, err, raw)
+	}
+	var catalogue struct {
+		CreditPacks []struct {
+			ID string `json:"id"`
+		} `json:"credit_packs"`
+	}
+	if err := json.Unmarshal(raw, &catalogue); err != nil || len(catalogue.CreditPacks) == 0 || catalogue.CreditPacks[0].ID == "" {
+		b.Fatalf("credit pack not found for %s: %s", product, raw)
+	}
+	return catalogue.CreditPacks[0].ID
 }
 
 func (f *fixture) create(b *testing.B, method, path string, body any) string {
@@ -411,6 +498,10 @@ func (f *fixture) expectMock(want int, path string, body any) error {
 }
 
 func (f *fixture) requestWithToken(token, method, path string, body any) (int, []byte, error) {
+	return f.requestWithTokenAndHeaders(token, method, path, body, nil)
+}
+
+func (f *fixture) requestWithTokenAndHeaders(token, method, path string, body any, headers http.Header) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -427,6 +518,11 @@ func (f *fixture) requestWithToken(token, method, path string, body any) (int, [
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -434,6 +530,29 @@ func (f *fixture) requestWithToken(token, method, path string, body any) (int, [
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	return resp.StatusCode, raw, err
+}
+
+func (f *fixture) postRazorpayWebhook(fixture testkit.RazorpayWebhookFixture) error {
+	req, err := http.NewRequest(http.MethodPost, f.base+"/v1/payments/webhook", bytes.NewReader(fixture.Raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Razorpay-Event-Id", fixture.EventID)
+	req.Header.Set("X-Razorpay-Signature", testkit.RazorpayWebhookSignature(fixture.Raw, "test-webhook-secret"))
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("Razorpay webhook: want 204, got %d: %s", resp.StatusCode, raw)
+	}
+	return nil
 }
 
 func (f *fixture) unique(prefix string) string {

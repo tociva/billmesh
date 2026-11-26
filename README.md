@@ -25,6 +25,7 @@ Billmesh is a modular Go billing service for Daybook and Taskmesh. PostgreSQL is
 | [Development deployment runbook](docs/deployment.md) | Release engineers and operators | AWS/ECR setup, Kubernetes access, GitHub environments, build, deployment, and rollback |
 | [Razorpay operations](docs/razorpay-operations.md) | Payment and operations engineers | Environment isolation, credential handling, rotation, readiness, and reconciliation |
 | [Razorpay Dashboard setup](docs/runbooks/razorpay-dashboard-setup.md) | Payment and release operators | Test Mode keys, capture policy, webhook registration, route verification, and secured inventory |
+| [Razorpay quality gates](docs/razorpay-quality-gates.md) | Contributors and release engineers | Offline unit, integration, E2E, load, consumer, policy, and security gates |
 | [Deployment helper reference](tools/api/ci/README.md) | Release engineers | Purpose of the environment, scan, smoke-test, and Helm validation scripts |
 | [Backend test-case manifest](tests/testdata/test-cases.md) | Contributors and reviewers | Unit, integration, E2E, performance, and business-journey coverage |
 

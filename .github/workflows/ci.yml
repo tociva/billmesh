@@ -1,22 +1,47 @@
 name: Billmesh CI
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+      - name: Verify PR scenario evidence
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "${PR_BODY}" >"${RUNNER_TEMP}/pr-body.md"
+          ./tools/api/ci/verify-razorpay-test-policy.sh "${BASE_SHA}" "${RUNNER_TEMP}/pr-body.md"
       - name: Static validation
         run: |
           go vet ./...
           test -z "$(gofmt -l .)"
-          make openapi-check
+          find tools/api -type f -name '*.sh' ! -name 'smoke-test-api-image.sh' -exec sh -n {} \;
+          bash -n tools/api/ci/smoke-test-api-image.sh
+          ./tools/api/ci/run-razorpay-quality-gates.sh contracts
+          ./tools/api/ci/run-razorpay-quality-gates.sh policy
       - name: Unit tests
-        run: TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./internal/... ./tests/unit/...
+        run: TEST_SUITE_NAME='Unit tests' ./scripts/test-output.sh go test -v -race -coverprofile=coverage.out ./api ./internal/... ./tests/unit/... ./tests/fakeserver ./tests/testkit
       - name: Integration and E2E
         run: docker compose -f deploy/compose.test.yml -p billmesh-ci up --build --exit-code-from e2e e2e
       - name: Show logs on failure
@@ -25,3 +50,27 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker compose -f deploy/compose.test.yml -p billmesh-ci down -v --remove-orphans
+
+  performance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Razorpay checkout and webhook load gates
+        run: make test-performance
+
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Dependency, secret, filesystem, and image scans
+        run: ./tools/api/ci/scan-razorpay-release.sh

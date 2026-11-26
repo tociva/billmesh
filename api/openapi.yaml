@@ -1231,6 +1231,39 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ReconciliationIssue" }
         default: { $ref: "#/components/responses/Error" }
+  /v1/admin/payments/lookup:
+    get:
+      operationId: lookupPaymentSupport
+      tags: [Administration, Payments]
+      summary: Correlate safe payment and provider references for support
+      description: >-
+        Requires exactly one lookup parameter. Returns the matching Billmesh
+        payment, related Razorpay events, and reconciliation issues, and records
+        every successful lookup in the audit log.
+      x-required-client-profile: admin
+      parameters:
+        - name: payment_id
+          in: query
+          schema: { $ref: "#/components/schemas/UUID" }
+        - name: provider_order_id
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 255, pattern: "^[A-Za-z0-9._:-]+$" }
+        - name: provider_payment_id
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 255, pattern: "^[A-Za-z0-9._:-]+$" }
+        - name: event_id
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }
+        - name: request_id
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]+$" }
+      responses:
+        "200":
+          description: Correlated payment support record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentSupportLookup" }
+        default: { $ref: "#/components/responses/Error" }
   /v1/events:
     get:
       operationId: streamEvents
@@ -2600,6 +2633,50 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Payment" }
         next_cursor: { type: [string, "null"] }
+    PaymentSupportRecord:
+      type: object
+      additionalProperties: false
+      required: [id, account_id, purpose, status, amount_minor, currency, provider_environment, provider_order_id, provider_payment_id, request_id, created_at, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/UUID" }
+        account_id: { $ref: "#/components/schemas/UUID" }
+        purpose: { type: string }
+        status: { type: string }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        provider_environment: { type: string }
+        provider_order_id: { type: [string, "null"] }
+        provider_payment_id: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PaymentSupportProviderEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, event_type, provider_order_id, provider_payment_id, provider_refund_id, request_id, processed_at, created_at]
+      properties:
+        event_id: { type: string }
+        event_type: { type: string }
+        provider_order_id: { type: [string, "null"] }
+        provider_payment_id: { type: [string, "null"] }
+        provider_refund_id: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
+        processed_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+    PaymentSupportLookup:
+      type: object
+      additionalProperties: false
+      required: [provider_events, reconciliation_issues]
+      properties:
+        payment: { $ref: "#/components/schemas/PaymentSupportRecord" }
+        provider_events:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PaymentSupportProviderEvent" }
+        reconciliation_issues:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/ReconciliationIssue" }
     Invoice:
       type: object
       required: [id, invoice_number, status, currency, total_minor, created_at]
