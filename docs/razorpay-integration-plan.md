@@ -671,22 +671,38 @@ The checkboxes remain open until the operator supplies passing output.
   2026-11-26.
 - [x] Run all Razorpay E2E tests against the realistic fake provider. The
   complete Docker E2E gate passed on 2026-11-26.
-- [ ] Run the complete backend unit, integration, E2E, security, and reliability
-  suites.
-- [ ] Run consumer checkout unit, component, accessibility, and E2E suites.
-- [ ] Run race/concurrency tests for webhook, fulfilment, order creation,
-  reconciliation, and refund paths.
-- [ ] Run provider-failure and restart recovery tests.
-- [ ] Run load tests for expected checkout and webhook peaks.
-- [ ] Run OpenAPI validation and route-coverage checks.
+- [x] Run the complete backend unit, integration, E2E, security, and reliability
+  suites. Focused unit, PostgreSQL integration, Docker E2E, race, provider
+  failure/recovery, and release-security gates passed on 2026-11-26.
+- [x] Run consumer checkout unit, component, accessibility, and E2E suites.
+  Formatting and linting passed; all 27 console checkout tests across 7 files,
+  including the composed checkout journey, passed; and the production console
+  build completed successfully on 2026-11-26.
+- [x] Run race/concurrency tests for webhook, fulfilment, order creation,
+  reconciliation, and refund paths. All 231 focused application, database,
+  fake-provider, and fixture tests passed with the race detector on 2026-11-26.
+- [x] Run provider-failure and restart recovery tests. All 113 focused provider
+  failure/recovery tests passed on 2026-11-26; the complete E2E suite also
+  passed the persisted reconciliation restart-convergence scenario.
+- [x] Run load tests for expected checkout and webhook peaks. The Docker-backed
+  performance gate passed 11 benchmarks with zero failures on 2026-11-26,
+  including financial-operation `PERF-013`, concurrent checkout-order
+  `PERF-014`, and captured-webhook `PERF-015`.
+- [x] Run OpenAPI validation and route-coverage checks. The complete contracts
+  gate passed on 2026-11-26, covering OpenAPI references and registered routes,
+  Razorpay environment isolation, Dashboard setup, quality-gate, Helm, and
+  Kubernetes deployment contracts.
 - [x] Run static analysis, dependency vulnerability scanning, secret scanning,
   and container scanning. Formatting, vet, govulncheck, Gitleaks, Trivy
   filesystem/misconfiguration, and Trivy runtime-image scans passed on
   2026-11-26 with zero high or critical findings.
-- [ ] Confirm every new production branch has a named test scenario and every
-  scenario is linked to its implementation PR.
-- [ ] Confirm no skipped, quarantined, or flaky payment test remains without an
-  approved owner and resolution date.
+- [x] Confirm every new production branch has a named test scenario and every
+  scenario is linked to its implementation PR. The quality contract passed on
+  2026-11-26 and confirms CI requires a changed automated test, known scenario
+  IDs, TDD evidence, and exact test commands for production payment changes.
+- [x] Confirm no skipped, quarantined, or flaky payment test remains without an
+  approved owner and resolution date. The skipped/focused test policy passed on
+  2026-11-26 across backend payment paths and the consumer checkout suite.
 
 ## 15. Razorpay Test Mode staging acceptance
 

@@ -12,6 +12,8 @@ gitleaks_config="$repository_root/.gitleaks.toml"
 dockerfile="$repository_root/deploy/Dockerfile"
 plan="$repository_root/docs/razorpay-integration-plan.md"
 makefile="$repository_root/Makefile"
+ci_workflow="$repository_root/.github/workflows/ci.yml"
+pr_template="$repository_root/.github/pull_request_template.md"
 consumer_package="$consumer_root/package.json"
 consumer_journey="$consumer_root/apps/console/src/app/billing/checkout-journey.e2e.spec.ts"
 
@@ -23,7 +25,7 @@ require_text() {
   grep -Fq -- "$expected" "$file" || fail "$file does not contain: $expected"
 }
 
-for file in "$runner" "$policy" "$scanner" "$image_verifier" "$gitleaks_config" "$dockerfile" "$plan" "$makefile"; do
+for file in "$runner" "$policy" "$scanner" "$image_verifier" "$gitleaks_config" "$dockerfile" "$plan" "$makefile" "$ci_workflow" "$pr_template"; do
   [ -f "$file" ] || fail "missing quality-gate asset: $file"
 done
 
@@ -59,13 +61,25 @@ pass 'release scan covers Go dependencies, secrets, filesystem, and runtime imag
 require_text "$policy" 'tests/e2e/payments'
 require_text "$policy" 'tests/e2e/subscriptions'
 require_text "$policy" 'Scenario IDs'
+require_text "$policy" "git -C \"\$repository_root\" diff --name-only \"\$base_ref...HEAD\""
+require_text "$policy" 'production changes require a changed automated test'
+require_text "$policy" 'unknown Scenario ID in PR body'
+require_text "$policy" 'PR body must contain an exact executable test command'
+require_text "$ci_workflow" 'Verify PR scenario evidence'
+require_text "$ci_workflow" 'github.event.pull_request.base.sha'
+require_text "$ci_workflow" 'github.event.pull_request.body'
+require_text "$ci_workflow" 'verify-razorpay-test-policy.sh "${BASE_SHA}" "${RUNNER_TEMP}/pr-body.md"'
+require_text "$pr_template" '## Scenario IDs'
+require_text "$pr_template" '## TDD evidence'
+require_text "$pr_template" '## Test command'
+require_text "$pr_template" 'Failing test observed before implementation:'
 if [ -f "$consumer_package" ] && [ -f "$consumer_journey" ]; then
   require_text "$consumer_package" '"quality:checkout"'
   require_text "$consumer_journey" "describe('Razorpay checkout journey'"
 elif [ "${REQUIRE_BILLMESH_WEB:-false}" = true ]; then
   fail "consumer quality assets are required but unavailable under $consumer_root"
 fi
-pass 'payment test policy and composed consumer journey are mandatory'
+pass 'payment test, PR scenario/TDD evidence, and composed consumer journey policies are mandatory'
 
 for scenario in PERF-013 PERF-014 PERF-015 PAY-044 PAY-045 PAY-046; do
   require_text "$repository_root/tests/testdata/test-cases.md" "$scenario"
