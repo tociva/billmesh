@@ -12,8 +12,8 @@ These helpers implement the Billmesh image and Kubernetes deployment contract.
   configuration, splits variables from secrets, and optionally uploads them.
 - `generate-development-github-environments.sh` performs generation only.
 - `build-and-verify-api-image.sh` builds the local ARM64 runtime image, checks
-  its platform, non-root user, and patched zlib floor, then runs migrations and
-  the API smoke test against a disposable PostgreSQL database.
+  its platform, non-root user, and patched OpenSSL and zlib floors, then runs
+  migrations and the API smoke test against a disposable PostgreSQL database.
 - `gate-ecr-image-scan.sh` blocks images with HIGH or CRITICAL ECR findings.
 - `smoke-test-api-image.sh` migrates a disposable database and verifies the
   published image's readiness and liveness endpoints.

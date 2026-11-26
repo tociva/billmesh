@@ -48,7 +48,20 @@ misconfiguration, then builds the runtime stage and scans the resulting image
 for high or critical findings. The release image retains the independent ECR
 scan gate during publication. Gitleaks extends its default rules and exempts
 only `deploy/test-certs/`, whose intentionally committed key is documented as a
-public fixture for the disposable IdNest E2E server.
+public fixture for the disposable IdNest E2E server. Failed secret scans print
+redacted rule, file, and line evidence so false positives can be reviewed
+without exposing candidate values. The scan reads Git-tracked history, rejects
+tracked `.env` or `tmp/` credential files, and therefore neither reads nor
+allowlists ignored developer-local credentials. Rule-specific exceptions
+require both an exact deterministic test-secret pattern and an executable test
+path; the Docker `api:8080` false positive is similarly bound to its exact test
+line and file.
+
+Trivy renders the Helm chart with the development values and deterministic
+non-secret image placeholders, so schema validation cannot silently skip the
+chart. Development routing Services are administrator-owned bootstrap
+resources; the application deployer can read them but cannot mutate Services
+or NetworkPolicies.
 
 ## Evidence handling
 

@@ -679,8 +679,10 @@ The checkboxes remain open until the operator supplies passing output.
 - [ ] Run provider-failure and restart recovery tests.
 - [ ] Run load tests for expected checkout and webhook peaks.
 - [ ] Run OpenAPI validation and route-coverage checks.
-- [ ] Run static analysis, dependency vulnerability scanning, secret scanning,
-  and container scanning.
+- [x] Run static analysis, dependency vulnerability scanning, secret scanning,
+  and container scanning. Formatting, vet, govulncheck, Gitleaks, Trivy
+  filesystem/misconfiguration, and Trivy runtime-image scans passed on
+  2026-11-26 with zero high or critical findings.
 - [ ] Confirm every new production branch has a named test scenario and every
   scenario is linked to its implementation PR.
 - [ ] Confirm no skipped, quarantined, or flaky payment test remains without an

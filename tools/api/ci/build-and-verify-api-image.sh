@@ -53,6 +53,12 @@ docker run --rm --platform "$platform" --entrypoint apk "$image_ref" \
     exit 1
   }
 
+docker run --rm --platform "$platform" --entrypoint apk "$image_ref" \
+  info --installed 'libcrypto3>=3.5.9-r2' 'libssl3>=3.5.9-r2' >/dev/null || {
+    echo 'Local image verification failed: OpenSSL 3.5.9-r2 or newer is required' >&2
+    exit 1
+  }
+
 API_IMAGE_SMOKE_PLATFORM="$platform" \
   "$script_dir/smoke-test-api-image.sh" "$image_ref"
 

@@ -4,3 +4,19 @@ useDefault = true
 [[allowlists]]
 description = "Public TLS fixtures for the disposable IdNest E2E server"
 paths = ['''(^|/)deploy/test-certs/''']
+
+[[allowlists]]
+description = "Deterministic webhook secrets used only by executable test fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^(temporary|initial|rotated|environment|ssrf-test|current|replacement|test)-secret-[0-9a-f]+$''']
+paths = ['''(^|/)tests/(e2e|testkit)/.*\.go$''']
+
+[[allowlists]]
+description = "Docker E2E API service URL mistaken for an API credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''http://api:8080/api/v1/catalog''']
+paths = ['''(^|/)tests/e2e/security/bff_test\.go$''']

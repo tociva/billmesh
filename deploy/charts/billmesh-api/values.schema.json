@@ -50,8 +50,9 @@
     },
     "service": {
       "type": "object",
-      "required": ["port", "targetPort"],
+      "required": ["create", "port", "targetPort"],
       "properties": {
+        "create": {"type": "boolean"},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
         "targetPort": {"type": "integer", "minimum": 1, "maximum": 65535}
       },

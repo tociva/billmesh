@@ -7,7 +7,9 @@ consumer_root=${BILLMESH_WEB_ROOT:-"$repository_root/../billmesh-web"}
 runner="$script_dir/run-razorpay-quality-gates.sh"
 policy="$script_dir/verify-razorpay-test-policy.sh"
 scanner="$script_dir/scan-razorpay-release.sh"
+image_verifier="$script_dir/build-and-verify-api-image.sh"
 gitleaks_config="$repository_root/.gitleaks.toml"
+dockerfile="$repository_root/deploy/Dockerfile"
 plan="$repository_root/docs/razorpay-integration-plan.md"
 makefile="$repository_root/Makefile"
 consumer_package="$consumer_root/package.json"
@@ -21,7 +23,7 @@ require_text() {
   grep -Fq -- "$expected" "$file" || fail "$file does not contain: $expected"
 }
 
-for file in "$runner" "$policy" "$scanner" "$gitleaks_config" "$plan" "$makefile"; do
+for file in "$runner" "$policy" "$scanner" "$image_verifier" "$gitleaks_config" "$dockerfile" "$plan" "$makefile"; do
   [ -f "$file" ] || fail "missing quality-gate asset: $file"
 done
 
@@ -37,11 +39,21 @@ pass 'Makefile exposes stable quality-gate entry points'
 
 require_text "$scanner" 'govulncheck@v1.7.0'
 require_text "$scanner" 'gitleaks/gitleaks:v8.30.1'
+require_text "$scanner" "git ls-files -- .env tmp"
+require_text "$scanner" 'git /repo'
 require_text "$scanner" '--config /repo/.gitleaks.toml'
+require_text "$scanner" '--redact --no-banner --verbose'
 require_text "$scanner" 'aquasecurity/trivy:0.76.2'
+require_text "$scanner" '--helm-values /work/deploy/environments/development/api.values.yaml'
+require_text "$scanner" '--helm-set-string image.repository=registry.invalid/billmesh/api'
 require_text "$scanner" 'docker build'
+require_text "$dockerfile" "'libcrypto3>=3.5.9-r2'"
+require_text "$dockerfile" "'libssl3>=3.5.9-r2'"
+require_text "$image_verifier" "info --installed 'libcrypto3>=3.5.9-r2' 'libssl3>=3.5.9-r2'"
 require_text "$gitleaks_config" 'useDefault = true'
 require_text "$gitleaks_config" 'deploy/test-certs/'
+require_text "$gitleaks_config" 'targetRules = ["generic-api-key"]'
+require_text "$gitleaks_config" 'tests/(e2e|testkit)'
 pass 'release scan covers Go dependencies, secrets, filesystem, and runtime image'
 
 require_text "$policy" 'tests/e2e/payments'

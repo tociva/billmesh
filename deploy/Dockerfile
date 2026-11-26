@@ -1,4 +1,4 @@
-ARG GO_IMAGE=golang:1.24.7-alpine3.22@sha256:fc2cff6625f3c1c92e6c85938ac5bd09034ad0d4bc2dfb08278020b68540dbb5
+ARG GO_IMAGE=golang:1.26.11-alpine3.23@sha256:23f198931d4bd83b4f5a613bd75656257ae8bf832dcbc2db80e1050b5219ca2a
 ARG RUNTIME_IMAGE=alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
 
 FROM ${GO_IMAGE} AS builder
@@ -25,6 +25,8 @@ LABEL org.opencontainers.image.title="Billmesh API" \
       org.opencontainers.image.source="${APP_SOURCE}"
 RUN apk add --no-cache \
       ca-certificates \
+      'libcrypto3>=3.5.9-r2' \
+      'libssl3>=3.5.9-r2' \
       'zlib>=1.4-r0' \
     && addgroup -S -g 10001 billmesh \
     && adduser -S -D -H -u 10001 -G billmesh billmesh

@@ -232,8 +232,16 @@ the namespace-scoped deployment identity:
 ```sh
 kubectl create namespace billmesh-development \
   --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f deploy/environments/development/routing-services.yaml
 kubectl apply -f deploy/environments/development/deployer-rbac.yaml
 ```
+
+The API and worker-metrics `ClusterIP` Services are stable routing resources
+owned by the cluster administrator. The Helm release has `service.create=false`
+in development, and its restricted deployer can read these Services but cannot
+create, patch, or delete Services or NetworkPolicies. Apply routing changes with
+an administrator kubeconfig after review; application deployments must not
+change the network routing boundary.
 
 Interactive administrators can continue using the existing administrator
 kubeconfig. The following one-time step creates the least-privilege credential
@@ -350,10 +358,10 @@ from the repository root:
 ```
 
 The script builds `billmesh-api:local-verify`, verifies the Linux ARM64
-platform, non-root runtime user, and minimum patched zlib version, applies
-Billmesh migrations to a disposable PostgreSQL database, and checks the API's
-readiness and liveness endpoints. To use another local tag, pass it as the only
-argument:
+platform, non-root runtime user, and minimum patched OpenSSL and zlib versions,
+applies Billmesh migrations to a disposable PostgreSQL database, and checks the
+API's readiness and liveness endpoints. To use another local tag, pass it as the
+only argument:
 
 ```sh
 ./tools/api/ci/build-and-verify-api-image.sh billmesh-api:pre-release

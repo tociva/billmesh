@@ -154,7 +154,7 @@ jobs:
           export KUBECONFIG="${kubeconfig}"
           echo "KUBECONFIG=${kubeconfig}" >>"${GITHUB_ENV}"
           kubectl version --request-timeout=20s >/dev/null
-          for permission in 'create deployments.apps' 'patch deployments.apps' 'create jobs.batch' 'delete jobs.batch' 'create services' 'patch services' 'create serviceaccounts' 'patch serviceaccounts' 'get secrets' 'create secrets' 'patch secrets'; do
+          for permission in 'create deployments.apps' 'patch deployments.apps' 'create jobs.batch' 'delete jobs.batch' 'get services' 'create serviceaccounts' 'patch serviceaccounts' 'get secrets' 'create secrets' 'patch secrets'; do
             set -- ${permission}
             [[ "$(kubectl auth can-i "$1" "$2" --namespace "${KUBE_NAMESPACE}")" == yes ]]
           done

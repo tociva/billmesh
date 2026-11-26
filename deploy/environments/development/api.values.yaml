@@ -5,3 +5,6 @@ imagePullSecrets:
 
 secrets:
   runtimeSecretName: billmesh-api-runtime
+
+service:
+  create: false

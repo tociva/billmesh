@@ -78,6 +78,7 @@ migration:
       memory: 256Mi
 
 service:
+  create: true
   port: 80
   targetPort: 8080
 
