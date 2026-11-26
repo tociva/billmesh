@@ -38,7 +38,7 @@ var reviewOtherIDs = map[string]struct{}{
 	"SUB-029": {}, "SUB-030": {}, "SUB-031": {}, "SUB-032": {},
 	"WH-019": {}, "ACC-010": {}, "INV-009": {}, "INV-010": {}, "LIM-011": {},
 	"WRK-011": {}, "WRK-012": {}, "FND-011": {}, "FND-012": {},
-	"TEST-001": {}, "TEST-003": {}, "TEST-005": {}, "PERF-013": {}, "LIVE-017": {},
+	"TEST-001": {}, "TEST-003": {}, "TEST-005": {}, "TEST-006": {}, "PERF-013": {}, "LIVE-017": {},
 }
 
 func IsReviewE2ECase(id string) bool {

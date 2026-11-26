@@ -26,6 +26,11 @@ These helpers implement the Billmesh image and Kubernetes deployment contract.
   runbook, secret-safe operational inventory, and route verifier contracts.
 - `test-razorpay-production-go-live-contracts.sh` verifies the Live/Test
   isolation, production evidence, smoke-payment/refund, and rollback gates.
+- `test-razorpay-release-completion-contracts.sh` uses mock evidence to verify
+  the final checklist, future-scope, configuration, defect, and sign-off gate.
+- `verify-razorpay-release-completion.sh` validates the reviewed plan,
+  secret-free completion evidence, and exact production environment without
+  printing either environment file.
 - `run-razorpay-quality-gates.sh` is the release-order entry point for focused,
   PostgreSQL, E2E, race, failure, load, contract, policy, scan, and consumer
   checks.

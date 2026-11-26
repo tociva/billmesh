@@ -9,6 +9,7 @@ policy="$script_dir/verify-razorpay-test-policy.sh"
 scanner="$script_dir/scan-razorpay-release.sh"
 image_verifier="$script_dir/build-and-verify-api-image.sh"
 production_contract="$script_dir/test-razorpay-production-go-live-contracts.sh"
+completion_contract="$script_dir/test-razorpay-release-completion-contracts.sh"
 gitleaks_config="$repository_root/.gitleaks.toml"
 dockerfile="$repository_root/deploy/Dockerfile"
 plan="$repository_root/docs/razorpay-integration-plan.md"
@@ -27,7 +28,7 @@ require_text() {
   grep -Fq -- "$expected" "$file" || fail "$file does not contain: $expected"
 }
 
-for file in "$runner" "$policy" "$scanner" "$image_verifier" "$production_contract" "$gitleaks_config" "$dockerfile" "$plan" "$makefile" "$ci_workflow" "$pr_template"; do
+for file in "$runner" "$policy" "$scanner" "$image_verifier" "$production_contract" "$completion_contract" "$gitleaks_config" "$dockerfile" "$plan" "$makefile" "$ci_workflow" "$pr_template"; do
   [ -f "$file" ] || fail "missing quality-gate asset: $file"
 done
 
@@ -40,6 +41,7 @@ require_text "$makefile" 'razorpay-quality:'
 require_text "$makefile" 'razorpay-quality-contracts:'
 require_text "$makefile" 'razorpay-test-policy:'
 require_text "$makefile" 'razorpay-production-contracts:'
+require_text "$makefile" 'razorpay-completion-contracts:'
 pass 'Makefile exposes stable quality-gate entry points'
 
 require_text "$scanner" 'govulncheck@v1.7.0'
@@ -77,6 +79,7 @@ require_text "$pr_template" '## TDD evidence'
 require_text "$pr_template" '## Test command'
 require_text "$pr_template" 'Failing test observed before implementation:'
 require_text "$runner" './tools/api/ci/test-razorpay-production-go-live-contracts.sh'
+require_text "$runner" './tools/api/ci/test-razorpay-release-completion-contracts.sh'
 if [ -f "$consumer_package" ] && [ -f "$consumer_subscription_journey" ] && [ -f "$consumer_credit_pack_journey" ]; then
   require_text "$consumer_package" '"quality:checkout"'
   require_text "$consumer_subscription_journey" "describe('Razorpay checkout journey'"
@@ -86,7 +89,7 @@ elif [ "${REQUIRE_BILLMESH_WEB:-false}" = true ]; then
 fi
 pass 'payment test, PR scenario/TDD evidence, and composed consumer journey policies are mandatory'
 
-for scenario in PERF-013 PERF-014 PERF-015 PAY-044 PAY-045 PAY-046 PAY-047; do
+for scenario in PERF-013 PERF-014 PERF-015 PAY-044 PAY-045 PAY-046 PAY-047 TEST-006; do
   require_text "$repository_root/tests/testdata/test-cases.md" "$scenario"
 done
 pass 'quality and mock-provider scenarios are named in the test manifest'

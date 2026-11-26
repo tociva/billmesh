@@ -15,7 +15,7 @@ Razorpay account, real API key, Dashboard webhook, or public endpoint.
 | Race/concurrency | `tools/api/ci/run-razorpay-quality-gates.sh race` | Webhook, fulfilment, order, reconciliation, refund, database, and fixture race checks pass |
 | Provider failure/recovery | `tools/api/ci/run-razorpay-quality-gates.sh failure` | Provider failure classification and recovery-focused tests pass |
 | Load | `tools/api/ci/run-razorpay-quality-gates.sh performance` | Checkout-order and captured-webhook peak benchmarks pass with the existing performance plan |
-| Contracts | `tools/api/ci/run-razorpay-quality-gates.sh contracts` | OpenAPI, environment, Dashboard, production go-live, quality, Helm, and deployment contracts pass |
+| Contracts | `tools/api/ci/run-razorpay-quality-gates.sh contracts` | OpenAPI, environment, Dashboard, production go-live, release-completion, quality, Helm, and deployment contracts pass |
 | Test policy | `tools/api/ci/run-razorpay-quality-gates.sh policy` | No skipped/focused Razorpay test exists; PRs must link named scenarios and TDD evidence |
 | Security scans | `tools/api/ci/run-razorpay-quality-gates.sh security` | Formatting, vet, govulncheck, Gitleaks, Trivy filesystem, and Trivy runtime-image scans pass |
 | Consumer | `tools/api/ci/run-razorpay-quality-gates.sh consumer` | Console formatting, lint, unit, component, accessibility, composed subscription and credit-pack checkout journeys, and production build pass |

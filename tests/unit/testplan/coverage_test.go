@@ -15,7 +15,7 @@ func TestEveryChecklistCaseIsDiscovered(t *testing.T) {
 			counts[tc.Kind]++
 		}
 	}
-	require.Equal(t, 20, counts["U"])
+	require.Equal(t, 21, counts["U"])
 	require.Equal(t, 81, counts["I"])
 	require.Equal(t, 207, counts["E"])
 	require.Equal(t, 15, counts["P"])

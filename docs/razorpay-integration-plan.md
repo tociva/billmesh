@@ -6,28 +6,35 @@ acceptance evidence is available.
 
 ## Working agreement
 
-- [ ] Keep the first production scope limited to Razorpay Orders plus Standard
+- [x] Keep the first production scope limited to Razorpay Orders plus Standard
   Checkout for one-time credit-pack purchases and paid-plan transitions.
-- [ ] Treat Razorpay Subscriptions, mandates, UPI AutoPay, and automatic renewal
+- [x] Treat Razorpay Subscriptions, mandates, UPI AutoPay, and automatic renewal
   as a separate phase with a separately approved design.
 - [ ] Follow red-green-refactor for every behavior change: add a failing test,
   implement the smallest change that passes, then refactor without changing the
   behavior.
 - [ ] Do not accept an implementation PR unless its new test failed for the
   expected reason before the implementation was added.
-- [ ] Use unit tests for pure validation and mapping, real PostgreSQL for
+- [x] Use unit tests for pure validation and mapping, real PostgreSQL for
   integration tests, and the fake Razorpay HTTP service for automated E2E tests.
-- [ ] Keep recorded webhook fixtures structurally identical to Razorpay payloads;
+- [x] Keep recorded webhook fixtures structurally identical to Razorpay payloads;
   do not invent a Billmesh-only provider envelope.
-- [ ] Use Razorpay Test Mode only for staging acceptance; never put live
+- [x] Use Razorpay Test Mode only for staging acceptance; never put live
   credentials or real customer data in automated tests.
 - [ ] Record the test command, result, and relevant evidence against each
   completed milestone.
 - [x] Keep development fully offline from Razorpay until every implementation
   and automated-quality phase is complete; use only deterministic fake keys,
   the fake provider, and signed local fixtures until the final external gate.
-- [ ] Preserve the rule that only a verified captured payment can change
+- [x] Preserve the rule that only a verified captured payment can change
   entitlements, credits, subscriptions, invoices, or ledger balances.
+
+The 2026-11-26 pre-credential audit reconciled these six technical controls
+against the implemented Orders/Standard Checkout boundary, closed recurring
+design gate, fake-provider/PostgreSQL test architecture, recorded wire-format
+fixtures, environment isolation, and capture-only fulfilment suites. The three
+remaining process controls above require retained PR/TDD evidence review and
+are not inferred from passing tests alone.
 
 ## 1. Scope and architecture decisions
 
@@ -775,6 +782,13 @@ production evidence.
 
 ## 17. Completion criteria
 
+Offline prerequisite: the final audit runbook, secret-free evidence template,
+and executable `TEST-006` contract prove that unresolved applicable work,
+unapproved future scope, Test Mode production configuration, placeholders, open
+P0/P1 defects, or missing owner sign-offs cannot pass. This does not complete
+the six release criteria below; the real audit requires approved Phase 15 and
+Phase 16 evidence plus the exact production environment.
+
 - [ ] Every applicable checkbox in this document is complete or explicitly moved
   to a separately approved future-scope document.
 - [ ] All automated and staging acceptance tests pass with retained evidence.
@@ -786,4 +800,33 @@ production evidence.
   open.
 - [ ] Engineering, security, finance, product, operations, and support owners have
   signed off.
+
+## Pre-credential audit status
+
+The offline implementation and automated contract work is complete. No real
+Razorpay credential has been generated, requested, or placed in the repository.
+The ignored `tmp/development.env` currently fails the deployment environment
+contract and contains none of `BILLMESH_ENVIRONMENT`, `RAZORPAY_BASE_URL`,
+`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, or
+`RAZORPAY_ACCOUNT_ID`; this is a safe pre-credential state, not a deployable
+configuration.
+
+After reconciling the six evidenced working-agreement controls, 52 checkboxes
+remain open:
+
+- three process controls requiring retained red/green and command evidence;
+- two Phase 1 human decisions for tax/invoice responsibility and named owners;
+- one Phase 3 real environment configuration action;
+- ten Phase 13 merchant, Test Mode Dashboard, webhook, route, and inventory
+  actions;
+- seventeen Phase 15 Test Mode acceptance journeys;
+- thirteen Phase 16 production go-live actions; and
+- six Phase 17 completion and sign-off criteria.
+
+Before any Test Mode key is generated, an authorized operator must supply or
+confirm the target staging/development environment, Razorpay merchant account
+owner and activation state, approved secret-manager destination, exact public
+HTTPS webhook URL, monitored alert owner, and the people responsible for
+engineering, finance/reconciliation, security, product, operations, and
+support approval. Do not paste any secret into this document or chat.
 
