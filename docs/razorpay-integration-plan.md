@@ -669,7 +669,8 @@ The checkboxes remain open until the operator supplies passing output.
 - [x] Run all payment and invoice integration tests against real PostgreSQL.
   All 17 payment and invoice integration tests passed with the race detector on
   2026-11-26.
-- [ ] Run all Razorpay E2E tests against the realistic fake provider.
+- [x] Run all Razorpay E2E tests against the realistic fake provider. The
+  complete Docker E2E gate passed on 2026-11-26.
 - [ ] Run the complete backend unit, integration, E2E, security, and reliability
   suites.
 - [ ] Run consumer checkout unit, component, accessibility, and E2E suites.
