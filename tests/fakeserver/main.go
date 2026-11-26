@@ -663,11 +663,7 @@ func (s *server) orderPayments(w http.ResponseWriter, r *http.Request) {
 	}
 	items := append([]fakeRazorpayPayment(nil), s.razorpayPayments[orderID]...)
 	s.mu.Unlock()
-	if behavior.DelayMS > 0 {
-		time.Sleep(time.Duration(behavior.DelayMS) * time.Millisecond)
-	}
-	if behavior.Status != 0 {
-		http.Error(w, "configured Razorpay failure", behavior.Status)
+	if writeRazorpayReadBehavior(w, behavior) {
 		return
 	}
 	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
@@ -678,14 +674,28 @@ func (s *server) payment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	behavior := s.razorpayBehavior
+	var found fakeRazorpayPayment
+	exists := false
 	for _, payments := range s.razorpayPayments {
 		for _, payment := range payments {
 			if payment.ID == r.PathValue("id") {
-				write(w, payment)
-				return
+				found = payment
+				exists = true
+				break
 			}
 		}
+		if exists {
+			break
+		}
+	}
+	s.mu.Unlock()
+	if writeRazorpayReadBehavior(w, behavior) {
+		return
+	}
+	if exists {
+		write(w, found)
+		return
 	}
 	http.Error(w, "payment not found", http.StatusNotFound)
 }
@@ -699,11 +709,7 @@ func (s *server) paymentRefunds(w http.ResponseWriter, r *http.Request) {
 	behavior := s.razorpayBehavior
 	items := append([]fakeRazorpayRefund(nil), s.razorpayRefunds[r.PathValue("id")]...)
 	s.mu.Unlock()
-	if behavior.DelayMS > 0 {
-		time.Sleep(time.Duration(behavior.DelayMS) * time.Millisecond)
-	}
-	if behavior.Status != 0 {
-		http.Error(w, "configured Razorpay failure", behavior.Status)
+	if writeRazorpayReadBehavior(w, behavior) {
 		return
 	}
 	skip := int(parseInt64(r.URL.Query().Get("skip")))
@@ -731,7 +737,7 @@ func (s *server) listRazorpayOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	behavior := s.razorpayBehavior
 	items := make([]fakeRazorpayOrder, 0, len(s.razorpayOrders))
 	if receipt := r.URL.Query().Get("receipt"); receipt != "" {
 		if orderID := s.razorpayOrderReceipt[receipt]; orderID != "" {
@@ -747,6 +753,12 @@ func (s *server) listRazorpayOrders(w http.ResponseWriter, r *http.Request) {
 			}
 			items = append(items, order)
 		}
+	}
+	s.mu.Unlock()
+	// The /test control route is an observation surface for E2E assertions and
+	// must remain available while the provider-facing route is fault-injected.
+	if r.URL.Path == "/v1/orders" && writeRazorpayReadBehavior(w, behavior) {
+		return
 	}
 	sort.Slice(items, func(left, right int) bool {
 		if items[left].CreatedAt == items[right].CreatedAt {
@@ -771,6 +783,22 @@ func (s *server) listRazorpayOrders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	write(w, map[string]any{"entity": "collection", "count": len(items), "items": items})
+}
+
+func writeRazorpayReadBehavior(w http.ResponseWriter, behavior fakeRazorpayBehavior) bool {
+	if behavior.DelayMS > 0 {
+		time.Sleep(time.Duration(behavior.DelayMS) * time.Millisecond)
+	}
+	if behavior.Status != 0 {
+		http.Error(w, "configured Razorpay failure", behavior.Status)
+		return true
+	}
+	if behavior.MalformedJSON {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"entity":`)
+		return true
+	}
+	return false
 }
 
 func parseInt64(value string) int64 {

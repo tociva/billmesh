@@ -19,6 +19,11 @@ These helpers implement the Billmesh image and Kubernetes deployment contract.
   published image's readiness and liveness endpoints.
 - `test-kubernetes-deployment-contracts.sh` lints and renders the Helm chart and
   checks digest pinning, workload separation, and pod hardening.
+- `verify-razorpay-webhook-route.sh` sends a secret-free invalid-signature probe
+  and accepts only the expected Billmesh webhook response, proving that the
+  public HTTPS route reaches the application.
+- `test-razorpay-dashboard-setup-contracts.sh` verifies the fixed Dashboard
+  runbook, secret-safe operational inventory, and route verifier contracts.
 
 See the [development deployment runbook](../../../docs/deployment.md) for the
 complete operator procedure.

@@ -3532,6 +3532,9 @@ These cases are exercised by the current test suites and were omitted from the c
 | PAY-041 | E | Apply paid-subscription refund entitlement revocation or retention from the immutable policy snapshot. |
 | PAY-042 | I | Atomically commit or roll back refund, grant, wallet, ledger, credit-note, revision, provider-event, and outbox state. |
 | PAY-043 | E | Surface refund identity, amount, currency, payment-state, and cumulative-total conflicts for audited operator remediation. |
+| PAY-044 | U | Require Basic Auth on every mocked Razorpay order, payment, and refund read API. |
+| PAY-045 | U | Preserve Razorpay collection envelopes and pagination for order inventory and payment refunds. |
+| PAY-046 | U | Inject throttling, server failures, delays, and malformed JSON consistently across every mocked Razorpay read API. |
 | RES-022 | I | Return the original reservation for an identical idempotent retry without reserving credits twice. |
 | RES-023 | I | Prevent concurrent settlement and release from producing contradictory ledger movements. |
 | RES-024 | E | Reject settlement above the reserved amount unless an authorized extension succeeds. |

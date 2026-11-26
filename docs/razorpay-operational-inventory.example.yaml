@@ -1,0 +1,47 @@
+# Copy this template into the approved secured operational inventory.
+# Do not commit a populated copy. Never put API key secrets, webhook secrets,
+# checkout signatures, or raw webhook payloads in this record.
+schema_version: 1
+provider: razorpay
+merchant_account_id: acc_replace_with_merchant_account_id
+mode: test # test or live
+billmesh_environment: development # development, staging, or production
+
+api:
+  base_url: https://api.razorpay.com
+  key_id_suffix: replace_with_last_8_characters_only
+  key_secret_manager_reference: github-environment://billmesh-development-api/RAZORPAY_KEY_SECRET
+
+capture:
+  policy: automatic
+  authorized_within: 3_days
+  automatic_refund: true
+  refund_speed: normal
+
+webhook:
+  webhook_id: replace_with_dashboard_webhook_id
+  webhook_url: https://api-dev.billme.sh/v1/payments/webhook
+  enabled: true
+  enabled_events:
+    - payment.captured
+    - payment.failed
+    - order.paid
+    - refund.processed
+  webhook_secret_manager_reference: github-environment://billmesh-development-api/RAZORPAY_WEBHOOK_SECRET
+
+operations:
+  owner: replace_with_team_or_person
+  alert_email: replace_with_monitored_distribution_address
+  created_at: 2026-11-26T00:00:00Z
+  verified_at: 2026-11-26T00:00:00Z
+  api_key_rotation_due_at: 2027-02-26T00:00:00Z
+  webhook_secret_rotation_due_at: 2027-02-26T00:00:00Z
+  staging_acceptance_reference: pending
+  approved_by: replace_with_approver
+
+evidence:
+  account_status_reference: replace_with_restricted_evidence_link
+  api_key_reference: replace_with_restricted_evidence_link
+  capture_settings_reference: replace_with_restricted_evidence_link
+  webhook_settings_reference: replace_with_restricted_evidence_link
+  route_verification_reference: replace_with_restricted_evidence_link

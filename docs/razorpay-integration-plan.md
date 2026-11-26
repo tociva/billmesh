@@ -23,6 +23,9 @@ acceptance evidence is available.
   credentials or real customer data in automated tests.
 - [ ] Record the test command, result, and relevant evidence against each
   completed milestone.
+- [x] Keep development fully offline from Razorpay until every implementation
+  and automated-quality phase is complete; use only deterministic fake keys,
+  the fake provider, and signed local fixtures until the final external gate.
 - [ ] Preserve the rule that only a verified captured payment can change
   entitlements, credits, subscriptions, invoices, or ledger balances.
 
@@ -591,7 +594,9 @@ retention/access rules are in
   ./internal/database ./cmd/billmesh ./tests/fakeserver ./tests/testkit` — focused
   metrics, operational assets, configuration, database, provider, and fixture
   tests passed on 2026-11-25.
-- [ ] `make test-e2e`
+- [x] `make test-e2e` — the complete end-to-end suite passed on 2026-11-26,
+  including concurrent refund delivery, audited support lookup, and raw-payload
+  retention scenarios.
 - [x] `GOCACHE=/private/tmp/billmesh-go-cache GOFLAGS=-mod=readonly go build
   ./...` — production build completed successfully on 2026-11-25; Go emitted
   only the known sandbox stat-cache warning.
@@ -599,7 +604,36 @@ retention/access rules are in
   deploy/charts/billmesh-api` — dashboard JSON and Helm chart validation passed
   on 2026-11-25.
 
-## 13. Razorpay Dashboard setup
+## 13. Offline Razorpay and Dashboard contract
+
+This phase proves the complete integration contract without a Razorpay account
+or network call. Real Test/Live keys and Dashboard changes are intentionally
+deferred until all implementation phases and automated quality gates are green.
+
+- [x] Document the offline-only development rule and keep real provider
+  activation outside the current development loop.
+- [x] Use deterministic fake API-key and webhook-secret values that cannot be
+  mistaken for deployable credentials.
+- [x] Mock `POST /v1/orders`, including Basic Auth, validation, persistence,
+  duplicate receipt, timeout, malformed response, and lost response.
+- [x] Mock paginated `GET /v1/orders` recovery and inventory queries.
+- [x] Mock `GET /v1/orders/{id}/payments` with multiple payment attempts.
+- [x] Mock `GET /v1/payments/{id}` for checkout confirmation and reconciliation.
+- [x] Mock paginated `GET /v1/payments/{id}/refunds` for refund reconciliation.
+- [x] Generate authentic signed fixtures for `payment.captured`,
+  `payment.failed`, `order.paid`, and `refund.processed` without parsing or
+  reserializing the signed bytes.
+- [x] Apply deterministic delay, malformed JSON, `400`, `401`, `409`, `429`, and
+  `5xx` controls across the provider surface used by Billmesh.
+- [x] Run the focused fake-provider, fixture, and provider-client tests and retain
+  the passing output — `gotestsum --format testname -- -v ./tests/fakeserver
+  ./tests/testkit ./internal/app` and
+  `tools/api/ci/test-razorpay-dashboard-setup-contracts.sh` passed on 2026-11-26.
+
+### Deferred final real-environment execution
+
+These actions do not block Phase 13 offline completion and must remain deferred
+until all development phases are complete:
 
 - [ ] Activate and verify the Razorpay merchant account required for the target
   environment.
@@ -608,14 +642,19 @@ retention/access rules are in
 - [ ] Configure automatic payment capture for the intended phase-one flow.
 - [ ] Create the Test Mode webhook with the exact public HTTPS Billmesh endpoint.
 - [ ] Configure a webhook secret that is distinct from the API key secret.
-- [ ] Enable the approved events: `payment.captured`, `payment.failed`,
-  `order.paid`, and `refund.processed`.
-- [ ] Configure an alert email monitored by the assigned operational owner.
-- [ ] Verify Cloudflare, ingress, firewall, and application routing allow Razorpay
-  to reach the webhook endpoint.
-- [ ] Record the webhook ID, enabled events, owner, environment, creation date,
-  and rotation date in the secured operational inventory.
-- [ ] Repeat the setup independently for Live Mode only after staging acceptance.
+- [ ] Enable `payment.captured`, `payment.failed`, `order.paid`, and
+  `refund.processed`.
+- [ ] Configure a monitored alert email and operational owner.
+- [ ] Verify Cloudflare, ingress, firewall, and application routing from the real
+  Razorpay service.
+- [ ] Store webhook identity, events, owner, environment, creation date, and
+  rotation date in the secured operational inventory.
+- [ ] Repeat independently for Live Mode only after Test Mode acceptance.
+
+The future operator procedure is documented in
+[`runbooks/razorpay-dashboard-setup.md`](runbooks/razorpay-dashboard-setup.md),
+with the secret-free inventory template in
+[`razorpay-operational-inventory.example.yaml`](razorpay-operational-inventory.example.yaml).
 
 ## 14. Automated quality gates
 

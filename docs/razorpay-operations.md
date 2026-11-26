@@ -5,6 +5,11 @@ and worker load the same validated provider configuration. Checkout is disabled
 when all four core values are omitted and application startup fails when only a
 subset is supplied.
 
+The operator procedure for merchant-account verification, Test Mode keys,
+capture settings, webhook creation, route verification, and the secured
+inventory is in the
+[`Razorpay Dashboard setup`](runbooks/razorpay-dashboard-setup.md) runbook.
+
 ## Environment configuration
 
 Configure these four values together:

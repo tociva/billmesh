@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -204,6 +205,147 @@ func TestRazorpayPaymentRefundsUseProviderCollectionContract(t *testing.T) {
 	if collection.Entity != "collection" || collection.Count != 1 || collection.Items[0].Entity != "refund" ||
 		collection.Items[0].ID != "rfnd_processed" || collection.Items[0].CreatedAt == 0 {
 		t.Fatalf("unexpected refund collection: %+v", collection)
+	}
+}
+
+func TestRazorpayReadAPIsRequireBasicAuth(t *testing.T) {
+	server := httptest.NewServer(newHandler(newFakeServerState()))
+	defer server.Close()
+
+	for _, path := range []string{
+		"/v1/orders",
+		"/v1/orders/order_missing/payments",
+		"/v1/payments/pay_missing",
+		"/v1/payments/pay_missing/refunds",
+	} {
+		t.Run(path, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodGet, server.URL+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("want 401, got %d: %s", response.StatusCode, readBody(t, response))
+			}
+		})
+	}
+}
+
+func TestRazorpayReadAPIsUseProviderWireContractsAndPagination(t *testing.T) {
+	server := httptest.NewServer(newHandler(newFakeServerState()))
+	defer server.Close()
+
+	var orders []fakeRazorpayOrder
+	for index, receipt := range []string{"inventory-first", "inventory-second"} {
+		response := postRazorpayOrder(t, server.URL, testRazorpayKeyID, testRazorpayKeySecret,
+			map[string]any{"amount": int64(2500 + index), "currency": "INR", "receipt": receipt}, "application/json")
+		var order fakeRazorpayOrder
+		decodeResponse(t, response, &order)
+		orders = append(orders, order)
+	}
+	order := orders[0]
+	addRazorpayPayment(t, server.URL, fakeRazorpayPayment{
+		ID: "pay_provider_fetch", OrderID: order.ID, Status: "captured", Amount: order.Amount, Currency: order.Currency,
+	})
+	for index := 1; index <= 2; index++ {
+		postTestControl(t, server.URL+"/test/razorpay/refunds", fakeRazorpayRefund{
+			ID: "rfnd_provider_" + strconv.Itoa(index), PaymentID: "pay_provider_fetch", Status: "processed",
+			Amount: int64(index * 100), Currency: "INR", CreatedAt: int64(index),
+		})
+	}
+
+	response := getRequest(t, server.URL+"/v1/orders?count=1&skip=1", testRazorpayKeyID, testRazorpayKeySecret)
+	var orderPage struct {
+		Entity string              `json:"entity"`
+		Count  int                 `json:"count"`
+		Items  []fakeRazorpayOrder `json:"items"`
+	}
+	decodeResponse(t, response, &orderPage)
+	if orderPage.Entity != "collection" || orderPage.Count != 1 || len(orderPage.Items) != 1 {
+		t.Fatalf("unexpected order page: %+v", orderPage)
+	}
+
+	response = getRequest(t, server.URL+"/v1/payments/pay_provider_fetch", testRazorpayKeyID, testRazorpayKeySecret)
+	var payment fakeRazorpayPayment
+	decodeResponse(t, response, &payment)
+	if payment.Entity != "payment" || payment.ID != "pay_provider_fetch" || payment.OrderID != order.ID || payment.Status != "captured" {
+		t.Fatalf("unexpected payment response: %+v", payment)
+	}
+
+	response = getRequest(t, server.URL+"/v1/payments/pay_provider_fetch/refunds?count=1&skip=1", testRazorpayKeyID, testRazorpayKeySecret)
+	var refundPage struct {
+		Entity string               `json:"entity"`
+		Count  int                  `json:"count"`
+		Items  []fakeRazorpayRefund `json:"items"`
+	}
+	decodeResponse(t, response, &refundPage)
+	if refundPage.Entity != "collection" || refundPage.Count != 1 || len(refundPage.Items) != 1 || refundPage.Items[0].ID != "rfnd_provider_2" {
+		t.Fatalf("unexpected refund page: %+v", refundPage)
+	}
+}
+
+func TestRazorpayReadAPIsHonorProviderFailureControls(t *testing.T) {
+	server := httptest.NewServer(newHandler(newFakeServerState()))
+	defer server.Close()
+	response := postRazorpayOrder(t, server.URL, testRazorpayKeyID, testRazorpayKeySecret,
+		map[string]any{"amount": 2500, "currency": "INR", "receipt": "read-failures"}, "application/json")
+	var order fakeRazorpayOrder
+	decodeResponse(t, response, &order)
+	addRazorpayPayment(t, server.URL, fakeRazorpayPayment{
+		ID: "pay_read_failures", OrderID: order.ID, Status: "captured", Amount: order.Amount, Currency: order.Currency,
+	})
+	paths := []string{
+		"/v1/orders",
+		"/v1/orders/" + order.ID + "/payments",
+		"/v1/payments/pay_read_failures",
+		"/v1/payments/pay_read_failures/refunds",
+	}
+
+	for _, status := range []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusConflict,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+	} {
+		setRazorpayBehavior(t, server.URL, map[string]any{"status": status})
+		for _, path := range paths {
+			t.Run(http.StatusText(status)+path, func(t *testing.T) {
+				response := getRequest(t, server.URL+path, testRazorpayKeyID, testRazorpayKeySecret)
+				if response.StatusCode != status {
+					t.Fatalf("want %d, got %d: %s", status, response.StatusCode, readBody(t, response))
+				}
+				response.Body.Close()
+			})
+		}
+	}
+
+	setRazorpayBehavior(t, server.URL, map[string]any{"malformed_json": true})
+	for _, path := range paths {
+		t.Run("malformed"+path, func(t *testing.T) {
+			response := getRequest(t, server.URL+path, testRazorpayKeyID, testRazorpayKeySecret)
+			raw := readBody(t, response)
+			if response.StatusCode != http.StatusOK || json.Valid(raw) {
+				t.Fatalf("want malformed 200 JSON, got status=%d body=%q", response.StatusCode, raw)
+			}
+		})
+	}
+
+	setRazorpayBehavior(t, server.URL, map[string]any{"delay_ms": 25})
+	for _, path := range paths {
+		t.Run("delay"+path, func(t *testing.T) {
+			started := time.Now()
+			response := getRequest(t, server.URL+path, testRazorpayKeyID, testRazorpayKeySecret)
+			response.Body.Close()
+			if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+				t.Fatalf("configured delay was not applied: %s", elapsed)
+			}
+		})
 	}
 }
 
